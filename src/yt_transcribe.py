@@ -9,6 +9,7 @@ YT_DLP_PATH = "yt-dlp"  # Ensure yt-dlp is installed and in PATH
 FFMPEG_PATH = "ffmpeg"  # Ensure ffmpeg is installed and in PATH
 WHISPER_CPP_PATH = "/Users/ostaps/Code/whisper.cpp/build/bin/whisper-cli"  # Adjust to your whisper.cpp binary path
 WHISPER_MODEL = "/Users/ostaps/Code/whisper.cpp/models/ggml-base.en.bin"
+OBSIDIAN_PATH = "/Users/ostaps/Library/Mobile Documents/iCloud~md~obsidian/Documents/Obsidian Vault/03 - RESOURCES/Podcasts"
 
 # Function to sanitize filenames
 def sanitize_filename(filename):
@@ -71,13 +72,14 @@ def transcribe_audio(audio_file):
     print("[INFO] Transcribing audio with Whisper...")
 
     whisper_cmd = [
-        "/Users/ostaps/Code/whisper.cpp/build/bin/whisper-cli",
-        "-m", "/Users/ostaps/Code/whisper.cpp/models/ggml-base.en.bin",
-        "-f", audio_file
+        WHISPER_CPP_PATH,
+        "-m", WHISPER_MODEL,
+        "-f", audio_file,
+        "-t", "8"
     ]
-
+    
     result = subprocess.run(whisper_cmd, capture_output=True, text=True)
-
+    
     if result.returncode != 0:
         print("[ERROR] Whisper transcription failed:", result.stderr)
         return None
@@ -88,8 +90,9 @@ def transcribe_audio(audio_file):
         print("[ERROR] Whisper did not generate any output.")
         return None
 
-    # Save transcript to a Markdown file
-    transcript_file = audio_file.replace(".wav", "-transcript.md")
+    # Save transcript to a Markdown file in OBSIDIAN_PATH
+    base_name = os.path.splitext(audio_file)[0]
+    transcript_file = os.path.join(OBSIDIAN_PATH, f"{base_name}-transcript.md")
     with open(transcript_file, "w", encoding="utf-8") as f:
         f.write(transcript_text)
 
