@@ -7,12 +7,18 @@ import re
 # Configuration
 YT_DLP_PATH = "yt-dlp"  # Ensure yt-dlp is installed and in PATH
 FFMPEG_PATH = "ffmpeg"  # Ensure ffmpeg is installed and in PATH
-WHISPER_CPP_PATH = "/Users/ostaps/Code/whisper.cpp/build/bin"  # Adjust to your whisper.cpp binary path
-WHISPER_MODEL = "ggml-base.en.bin"  # Change if using another model
+WHISPER_CPP_PATH = "/Users/ostaps/Code/whisper.cpp/build/bin/whisper-cli"  # Adjust to your whisper.cpp binary path
+WHISPER_MODEL = "/Users/ostaps/Code/whisper.cpp/models/ggml-base.en.bin"
 
 # Function to sanitize filenames
 def sanitize_filename(filename):
-    return re.sub(r"[^\w\-_\. ]", "_", filename)
+    # Convert to lowercase
+    filename = filename.lower()
+    # Replace non-alphanumeric characters with a space
+    filename = re.sub(r"[^\w\s-]", "", filename)
+    # Replace spaces and underscores with hyphens
+    filename = re.sub(r"[\s_]+", "-", filename)
+    return filename.strip("-")
 
 # Function to get current date as YYYY-MM-DD
 def get_date():
@@ -63,27 +69,34 @@ def rename_file(original_filename):
 # Function to transcribe audio using whisper.cpp
 def transcribe_audio(audio_file):
     print("[INFO] Transcribing audio with Whisper...")
-    
-    transcript_file = audio_file.replace(".wav", "-TRANSCRIPT.md")
-    
+
     whisper_cmd = [
-        WHISPER_CPP_PATH,
-        "-m", WHISPER_MODEL,
-        "-f", audio_file,
-        "--output-file", transcript_file,
-        "--output-format", "txt"
+        "/Users/ostaps/Code/whisper.cpp/build/bin/whisper-cli",
+        "-m", "/Users/ostaps/Code/whisper.cpp/models/ggml-base.en.bin",
+        "-f", audio_file
     ]
-    
+
     result = subprocess.run(whisper_cmd, capture_output=True, text=True)
-    
+
     if result.returncode != 0:
         print("[ERROR] Whisper transcription failed:", result.stderr)
-        sys.exit(1)
-    
+        return None
+
+    transcript_text = result.stdout  # Capture Whisper's printed output
+
+    if not transcript_text.strip():
+        print("[ERROR] Whisper did not generate any output.")
+        return None
+
+    # Save transcript to a Markdown file
+    transcript_file = audio_file.replace(".wav", "-transcript.md")
+    with open(transcript_file, "w", encoding="utf-8") as f:
+        f.write(transcript_text)
+
     print(f"[INFO] Transcript saved as {transcript_file}")
     return transcript_file
 
-# Main function
+# main function
 def main():
     if len(sys.argv) < 2:
         print("Usage: python yt_transcribe.py <YouTube-URL>")
