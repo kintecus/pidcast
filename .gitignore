@@ -1,5 +1,5 @@
-# Created by https://www.toptal.com/developers/gitignore/api/python,web
-# Edit at https://www.toptal.com/developers/gitignore?templates=python,web
+### APP ###
+data/
 
 ### Python ###
 # Byte-compiled / optimized / DLL files
