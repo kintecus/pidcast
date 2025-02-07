@@ -3,6 +3,8 @@ import subprocess
 import sys
 import datetime
 import re
+import time
+import json
 
 # Configuration
 YT_DLP_PATH = "yt-dlp"  # Ensure yt-dlp is installed and in PATH
@@ -67,10 +69,51 @@ def rename_file(original_filename):
     print(f"[INFO] Renamed to {new_filename}")
     return new_filename
 
+def get_audio_duration(audio_file):
+    """Get duration of audio file in seconds using ffprobe."""
+    cmd = [
+        'ffprobe',
+        '-v', 'quiet',
+        '-print_format', 'json',
+        '-show_format',
+        '-show_streams',
+        audio_file
+    ]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print("[ERROR] Failed to get audio duration")
+        return None
+        
+    data = json.loads(result.stdout)
+    duration = float(data['format']['duration'])
+    return duration
+
+def count_words(text):
+    """Count words in text."""
+    return len(text.split())
+
+def print_summary(audio_file, duration, transcription_time, word_count):
+    """Print processing summary."""
+    ratio = duration / transcription_time
+    print("\n=== Processing Summary ===")
+    print(f"Audio duration: {duration:.2f} seconds")
+    print(f"Transcription time: {transcription_time:.2f} seconds")
+    print(f"Processing ratio: {ratio:.2f}x realtime")
+    print(f"Word count: {word_count}")
+    print(f"Words per minute: {(word_count / (duration/60)):.1f}")
+    print("=======================\n")
+
 # Function to transcribe audio using whisper.cpp
 def transcribe_audio(audio_file):
     print("[INFO] Transcribing audio with Whisper...")
 
+    # Get audio duration before transcription
+    audio_duration = get_audio_duration(audio_file)
+    
+    # Time the transcription process
+    start_time = time.time()
+    
     whisper_cmd = [
         WHISPER_CPP_PATH,
         "-m", WHISPER_MODEL,
@@ -80,11 +123,13 @@ def transcribe_audio(audio_file):
     
     result = subprocess.run(whisper_cmd, capture_output=True, text=True)
     
+    transcription_time = time.time() - start_time
+    
     if result.returncode != 0:
         print("[ERROR] Whisper transcription failed:", result.stderr)
         return None
 
-    transcript_text = result.stdout  # Capture Whisper's printed output
+    transcript_text = result.stdout
 
     if not transcript_text.strip():
         print("[ERROR] Whisper did not generate any output.")
@@ -95,6 +140,10 @@ def transcribe_audio(audio_file):
     transcript_file = os.path.join(OBSIDIAN_PATH, f"{base_name}-transcript.md")
     with open(transcript_file, "w", encoding="utf-8") as f:
         f.write(transcript_text)
+
+    # Generate and print summary
+    word_count = count_words(transcript_text)
+    print_summary(audio_file, audio_duration, transcription_time, word_count)
 
     print(f"[INFO] Transcript saved as {transcript_file}")
     return transcript_file
