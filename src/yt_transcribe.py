@@ -31,7 +31,10 @@ def get_date():
 def download_audio(url):
     print("[INFO] Downloading and extracting audio...")
     
-    # yt-dlp command
+    # Create a temporary file for progress output
+    progress_file = 'download_progress.txt'
+    
+    # yt-dlp command with progress output
     yt_dlp_cmd = [
         YT_DLP_PATH,
         "-f", "bestaudio",
@@ -39,25 +42,45 @@ def download_audio(url):
         "--audio-format", "wav",
         "--postprocessor-args", "-ar 16000 -ac 1 -c:a pcm_s16le",
         "-o", "%(title)s.%(ext)s",
+        "--newline",  # Ensure new lines in progress output
+        "--progress-template", "%(progress._percent_str)s",
         url
     ]
     
-    result = subprocess.run(yt_dlp_cmd, capture_output=True, text=True)
+    process = subprocess.Popen(
+        yt_dlp_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True
+    )
     
-    if result.returncode != 0:
-        print("[ERROR] yt-dlp failed:", result.stderr)
+    # Print progress while downloading
+    while True:
+        output = process.stdout.readline()
+        if output == '' and process.poll() is not None:
+            break
+        if output:
+            # Clear line and print progress
+            sys.stdout.write('\r' + ' ' * 50 + '\r')  # Clear previous line
+            sys.stdout.write(f"Downloading: {output.strip()}")
+            sys.stdout.flush()
+    
+    # Get final output
+    _, stderr = process.communicate()
+    
+    if process.returncode != 0:
+        print("\n[ERROR] yt-dlp failed:", stderr)
         sys.exit(1)
 
-    # Extract filename from output
-    output = result.stdout + result.stderr
-    match = re.search(r"Destination: (.+\.wav)", output)
+    # Extract filename from stderr
+    match = re.search(r"Destination: (.+\.wav)", stderr)
     
     if match:
         filename = match.group(1)
-        print(f"[INFO] Audio saved as {filename}")
+        print(f"\n[INFO] Audio saved as {filename}")
         return filename
     else:
-        print("[ERROR] Could not determine output filename.")
+        print("\n[ERROR] Could not determine output filename.")
         sys.exit(1)
 
 # Function to rename file with clean format
