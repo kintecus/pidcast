@@ -1,10 +1,12 @@
+import argparse
 import os
-import subprocess
-import sys
-import datetime
-import re
-import time
 import json
+import time
+import datetime
+import uuid
+import re
+import yt_dlp
+import subprocess
 
 # Configuration
 YT_DLP_PATH = "yt-dlp"  # Ensure yt-dlp is installed and in PATH
@@ -13,174 +15,161 @@ WHISPER_CPP_PATH = "/Users/ostaps/Code/whisper.cpp/build/bin/whisper-cli"  # Adj
 WHISPER_MODEL = "/Users/ostaps/Code/whisper.cpp/models/ggml-base.en.bin"
 OBSIDIAN_PATH = "/Users/ostaps/Library/Mobile Documents/iCloud~md~obsidian/Documents/Obsidian Vault/03 - RESOURCES/Podcasts"
 
-# Function to sanitize filenames
 def sanitize_filename(filename):
-    # Convert to lowercase
-    filename = filename.lower()
-    # Replace non-alphanumeric characters with a space
-    filename = re.sub(r"[^\w\s-]", "", filename)
-    # Replace spaces and underscores with hyphens
-    filename = re.sub(r"[\s_]+", "-", filename)
-    return filename.strip("-")
+    """Sanitize filename to remove invalid characters."""
+    return re.sub(r'[^\w\s-]', '', filename).strip()
 
-# Function to get current date as YYYY-MM-DD
-def get_date():
-    return datetime.datetime.now().strftime("%Y-%m-%d")
+def ensure_wav_file(input_file):
+    """Ensure the audio file exists and is in WAV format."""
+    if not os.path.exists(input_file):
+        # Check if we have a webm file instead
+        webm_file = input_file.replace('.wav', '.webm')
+        if os.path.exists(webm_file):
+            # Convert webm to wav
+            command = [
+                FFMPEG_PATH,
+                '-i', webm_file,
+                '-ar', '16000',
+                '-ac', '1',
+                '-c:a', 'pcm_s16le',
+                input_file
+            ]
+            subprocess.run(command, check=True)
+            os.remove(webm_file)  # Clean up the webm file
+    return os.path.exists(input_file)
 
-# Function to download and extract audio
-def download_audio(url):
-    print("[INFO] Downloading and extracting audio...")
-    
-    # Create a temporary file for progress output
-    progress_file = 'download_progress.txt'
-    
-    # yt-dlp command with progress output
-    yt_dlp_cmd = [
-        YT_DLP_PATH,
-        "-f", "bestaudio",
-        "--extract-audio",
-        "--audio-format", "wav",
-        "--postprocessor-args", "-ar 16000 -ac 1 -c:a pcm_s16le",
-        "-o", "%(title)s.%(ext)s",
-        "--newline",  # Ensure new lines in progress output
-        "--progress-template", "%(progress._percent_str)s",
-        url
-    ]
-    
-    process = subprocess.Popen(
-        yt_dlp_cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        universal_newlines=True
-    )
-    
-    # Print progress while downloading
-    while True:
-        output = process.stdout.readline()
-        if output == '' and process.poll() is not None:
-            break
-        if output:
-            # Clear line and print progress
-            sys.stdout.write('\r' + ' ' * 50 + '\r')  # Clear previous line
-            sys.stdout.write(f"Downloading: {output.strip()}")
-            sys.stdout.flush()
-    
-    # Get final output
-    _, stderr = process.communicate()
-    
-    if process.returncode != 0:
-        print("\n[ERROR] yt-dlp failed:", stderr)
-        sys.exit(1)
-
-    # Extract filename from stderr
-    match = re.search(r"Destination: (.+\.wav)", stderr)
-    
-    if match:
-        filename = match.group(1)
-        print(f"\n[INFO] Audio saved as {filename}")
-        return filename
-    else:
-        print("\n[ERROR] Could not determine output filename.")
-        sys.exit(1)
-
-# Function to rename file with clean format
-def rename_file(original_filename):
-    base_name = os.path.splitext(original_filename)[0]
-    sanitized_title = sanitize_filename(base_name)
-    new_filename = f"{get_date()}-{sanitized_title}.wav"
-    os.rename(original_filename, new_filename)
-    print(f"[INFO] Renamed to {new_filename}")
-    return new_filename
-
-def get_audio_duration(audio_file):
-    """Get duration of audio file in seconds using ffprobe."""
-    cmd = [
-        'ffprobe',
-        '-v', 'quiet',
-        '-print_format', 'json',
-        '-show_format',
-        '-show_streams',
-        audio_file
-    ]
-    
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print("[ERROR] Failed to get audio duration")
-        return None
-        
-    data = json.loads(result.stdout)
-    duration = float(data['format']['duration'])
-    return duration
-
-def count_words(text):
-    """Count words in text."""
-    return len(text.split())
-
-def print_summary(audio_file, duration, transcription_time, word_count):
-    """Print processing summary."""
-    ratio = duration / transcription_time
-    print("\n=== Processing Summary ===")
-    print(f"Audio duration: {duration:.2f} seconds")
-    print(f"Transcription time: {transcription_time:.2f} seconds")
-    print(f"Processing ratio: {ratio:.2f}x realtime")
-    print(f"Word count: {word_count}")
-    print(f"Words per minute: {(word_count / (duration/60)):.1f}")
-    print("=======================\n")
-
-# Function to transcribe audio using whisper.cpp
-def transcribe_audio(audio_file):
-    print("[INFO] Transcribing audio with Whisper...")
-
-    # Get audio duration before transcription
-    audio_duration = get_audio_duration(audio_file)
-    
-    # Time the transcription process
-    start_time = time.time()
-    
-    whisper_cmd = [
+def run_whisper_transcription(audio_file, whisper_model, output_format, output_file):
+    """Runs whisper transcription."""
+    # Build base command
+    command = [
         WHISPER_CPP_PATH,
-        "-m", WHISPER_MODEL,
         "-f", audio_file,
+        "-m", whisper_model,
         "-t", "8"
     ]
     
-    result = subprocess.run(whisper_cmd, capture_output=True, text=True)
+    # Add output format flag
+    if output_format == "txt" or output_format == "otxt":
+        command.append("--output-txt")
+    elif output_format == "vtt":
+        command.append("--output-vtt")
+    elif output_format == "srt":
+        command.append("--output-srt")
+    elif output_format == "json":
+        command.append("--output-json")
     
-    transcription_time = time.time() - start_time
+    # Add output file path
+    if output_file:
+        command.extend(["-of", output_file])
     
-    if result.returncode != 0:
-        print("[ERROR] Whisper transcription failed:", result.stderr)
-        return None
+    print("Running command:", " ".join(command))
+    subprocess.run(command, check=True)
 
-    transcript_text = result.stdout
-
-    if not transcript_text.strip():
-        print("[ERROR] Whisper did not generate any output.")
-        return None
-
-    # Save transcript to a Markdown file in OBSIDIAN_PATH
-    base_name = os.path.splitext(audio_file)[0]
-    transcript_file = os.path.join(OBSIDIAN_PATH, f"{base_name}-transcript.md")
-    with open(transcript_file, "w", encoding="utf-8") as f:
-        f.write(transcript_text)
-
-    # Generate and print summary
-    word_count = count_words(transcript_text)
-    print_summary(audio_file, audio_duration, transcription_time, word_count)
-
-    print(f"[INFO] Transcript saved as {transcript_file}")
-    return transcript_file
-
-# main function
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python yt_transcribe.py <YouTube-URL>")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Automate YouTube video transcription with Whisper.")
+    parser.add_argument("video_url", help="YouTube video URL")
+    parser.add_argument("--output_dir", default=".", help="Output directory for Markdown files")
+    parser.add_argument("--whisper_model", default=WHISPER_MODEL, help="Whisper model size (tiny, base, small, medium, large)")
+    parser.add_argument("--output_format", default="otxt", help="Whisper output format(txt, vtt, srt, tsv, json, all)")
+    parser.add_argument("--front_matter", default="{}", help="JSON string for Markdown front matter")
+    parser.add_argument("--stats_file", default="transcription_stats.json", help="File to store statistics")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
 
-    url = sys.argv[1]
-    audio_file = download_audio(url)
-    renamed_audio = rename_file(audio_file)
-    transcribe_audio(renamed_audio)
+    args = parser.parse_args()
+
+    run_uid = str(uuid.uuid4())
+    run_timestamp = datetime.datetime.now().isoformat()
+    start_time = time.time()
+
+    if args.verbose:
+        print(f"Starting transcription for: {args.video_url}")
+
+    # Download video and extract audio using yt_dlp library
+    try:
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': 'temp_audio.%(ext)s',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'wav',
+                'preferredquality': '192',
+            }],
+            'postprocessor_args': [
+                '-ar', '16000',
+                '-ac', '1',
+                '-c:a', 'pcm_s16le',
+            ],
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info_dict = ydl.extract_info(args.video_url, download=True)
+            video_title = info_dict.get('title', None)
+            sanitized_title = sanitize_filename(video_title)
+            audio_file = "temp_audio.wav"
+
+        if args.verbose:
+            print("Video downloaded and audio extracted.")
+
+        # Verify audio file exists
+        if not ensure_wav_file(audio_file):
+            raise FileNotFoundError(f"Could not create or find audio file: {audio_file}")
+
+        # Run Whisper transcription
+        whisper_output_file = os.path.join(args.output_dir, sanitized_title)
+        output_format = args.output_format.replace("o", "")  # Convert "otxt" to "txt"
+        run_whisper_transcription(audio_file, args.whisper_model, output_format, whisper_output_file)
+
+        if args.verbose:
+            print("Transcription completed.")
+
+        # Create Markdown file
+        markdown_file = os.path.join(args.output_dir, f"{sanitized_title}.md")
+        transcript_file = f"{whisper_output_file}.txt"
+        if os.path.exists(transcript_file):
+            with open(transcript_file, "r") as f:
+                transcript = f.read()
+
+        front_matter = json.loads(args.front_matter)
+        front_matter_str = "---\n" + json.dumps(front_matter, indent=2) + "\n---\n"
+
+        with open(markdown_file, "w") as f:
+            f.write(front_matter_str)
+            f.write(transcript)
+
+        if args.verbose:
+            print(f"Markdown file created: {markdown_file}")
+
+        # Store statistics
+        end_time = time.time()
+        duration = end_time - start_time
+        stats = {
+            "run_uid": run_uid,
+            "run_timestamp": run_timestamp,
+            "video_title": sanitized_title,
+            "video_url": args.video_url,
+            "run_duration": duration
+        }
+
+        try:
+            with open(args.stats_file, "r") as f:
+                existing_stats = json.load(f)
+        except FileNotFoundError:
+            existing_stats = []
+
+        existing_stats.append(stats)
+
+        with open(args.stats_file, "w") as f:
+            json.dump(existing_stats, f, indent=2)
+
+        if args.verbose:
+            print("Statistics stored.")
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+    finally:
+        # Clean up temporary audio file
+        if os.path.exists(audio_file):
+            os.remove(audio_file)
 
 if __name__ == "__main__":
     main()
