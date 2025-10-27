@@ -7,25 +7,36 @@ import uuid
 import re
 import yt_dlp
 import subprocess
+from typing import Optional, Dict, Any
 
 # Configuration
 YT_DLP_PATH = "yt-dlp"  # Ensure yt-dlp is installed and in PATH
 FFMPEG_PATH = "ffmpeg"  # Ensure ffmpeg is installed and in PATH
-WHISPER_CPP_PATH = "/Users/ostaps/Code/whisper.cpp/build/bin/whisper-cli"  # Adjust to your whisper.cpp binary path
+WHISPER_CPP_PATH = "/Users/ostaps/Code/whisper.cpp/build/bin/whisper-cli"
 WHISPER_MODEL = "/Users/ostaps/Code/whisper.cpp/models/ggml-base.en.bin"
 OBSIDIAN_PATH = "/Users/ostaps/Library/Mobile Documents/iCloud~md~obsidian/Documents/Obsidian Vault/03 - RESOURCES/Podcasts"
 
-def sanitize_filename(filename):
+# Retry configuration
+MAX_DOWNLOAD_RETRIES = 3
+RETRY_SLEEP_SECONDS = 10
+
+
+def sanitize_filename(filename: str) -> str:
     """Sanitize filename to remove invalid characters."""
     return re.sub(r'[^\w\s-]', '', filename).strip()
 
-def ensure_wav_file(input_file):
+
+def ensure_wav_file(input_file: str, verbose: bool = False) -> bool:
     """Ensure the audio file exists and is in WAV format."""
-    if not os.path.exists(input_file):
-        # Check if we have a webm file instead
-        webm_file = input_file.replace('.wav', '.webm')
-        if os.path.exists(webm_file):
-            # Convert webm to wav
+    if os.path.exists(input_file):
+        return True
+    
+    # Check if we have a webm file instead
+    webm_file = input_file.replace('.wav', '.webm')
+    if os.path.exists(webm_file):
+        if verbose:
+            print(f"Converting {webm_file} to WAV format...")
+        try:
             command = [
                 FFMPEG_PATH,
                 '-i', webm_file,
@@ -34,110 +45,443 @@ def ensure_wav_file(input_file):
                 '-c:a', 'pcm_s16le',
                 input_file
             ]
-            subprocess.run(command, check=True)
+            subprocess.run(command, check=True, capture_output=True)
             os.remove(webm_file)  # Clean up the webm file
-    return os.path.exists(input_file)
+            if verbose:
+                print("Conversion successful.")
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"Error converting audio: {e}")
+            return False
+    
+    return False
 
-def run_whisper_transcription(audio_file, whisper_model, output_format, output_file):
-    """Runs whisper transcription."""
-    # Build base command
-    command = [
-        WHISPER_CPP_PATH,
-        "-f", audio_file,
-        "-m", whisper_model,
-        "-t", "8"
+
+def download_audio_with_retry(video_url: str, output_template: str, verbose: bool = False, po_token: Optional[str] = None) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """
+    Download audio from YouTube with retry logic and multiple fallback strategies.
+    
+    Args:
+        video_url: YouTube video URL
+        output_template: Output file template
+        verbose: Enable verbose output
+        po_token: Optional PO Token for bypassing restrictions (format: "client.type+TOKEN")
+    
+    Returns:
+        tuple: (audio_file_path, video_info_dict) or (None, None) on failure
+    """
+    
+    # Strategy 1: Android client (most reliable without PO token)
+    # Strategy 2: Web client with aggressive settings
+    # Strategy 3: iOS client (requires PO token for some videos)
+    strategies = [
+        {
+            'name': 'Android client (recommended)',
+            'opts': {
+                'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
+                'outtmpl': output_template,
+                'extractor_args': {'youtube': {'player_client': ['android']}},
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'wav',
+                    'preferredquality': '192',
+                }],
+                'postprocessor_args': [
+                    '-ar', '16000',
+                    '-ac', '1',
+                    '-c:a', 'pcm_s16le',
+                ],
+                'socket_timeout': 45,
+                'retries': 15,
+                'fragment_retries': 15,
+                'http_chunk_size': 10485760,  # 10MB chunks
+                'quiet': not verbose,
+                'no_warnings': not verbose,
+            }
+        },
+        {
+            'name': 'Web client with retry',
+            'opts': {
+                'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/worst',
+                'outtmpl': output_template,
+                'extractor_args': {'youtube': {'player_client': ['web']}},
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'wav',
+                    'preferredquality': '192',
+                }],
+                'postprocessor_args': [
+                    '-ar', '16000',
+                    '-ac', '1',
+                    '-c:a', 'pcm_s16le',
+                ],
+                'socket_timeout': 60,
+                'retries': 20,
+                'fragment_retries': 20,
+                'http_chunk_size': 5242880,  # 5MB chunks
+                'quiet': not verbose,
+                'no_warnings': not verbose,
+            }
+        },
+        {
+            'name': 'Mixed clients (Android + Web)',
+            'opts': {
+                'format': 'bestaudio/best',
+                'outtmpl': output_template,
+                'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'wav',
+                    'preferredquality': '192',
+                }],
+                'postprocessor_args': [
+                    '-ar', '16000',
+                    '-ac', '1',
+                    '-c:a', 'pcm_s16le',
+                ],
+                'socket_timeout': 60,
+                'retries': 20,
+                'fragment_retries': 20,
+                'quiet': not verbose,
+                'no_warnings': not verbose,
+            }
+        }
     ]
     
-    # Add output format flag
-    if output_format == "txt" or output_format == "otxt":
-        command.append("--output-txt")
-    elif output_format == "vtt":
-        command.append("--output-vtt")
-    elif output_format == "srt":
-        command.append("--output-srt")
-    elif output_format == "json":
-        command.append("--output-json")
+    # Add iOS strategy if PO token is provided
+    if po_token:
+        ios_strategy = {
+            'name': 'iOS client with PO Token',
+            'opts': {
+                'format': 'bestaudio[ext=m4a]/bestaudio/best',
+                'outtmpl': output_template,
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['ios'],
+                        'po_token': po_token
+                    }
+                },
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'wav',
+                    'preferredquality': '192',
+                }],
+                'postprocessor_args': [
+                    '-ar', '16000',
+                    '-ac', '1',
+                    '-c:a', 'pcm_s16le',
+                ],
+                'socket_timeout': 30,
+                'retries': 10,
+                'fragment_retries': 10,
+                'http_chunk_size': 10485760,
+                'quiet': not verbose,
+                'no_warnings': not verbose,
+            }
+        }
+        # Insert iOS as first strategy if we have a token
+        strategies.insert(0, ios_strategy)
     
-    # Add output file path
-    if output_file:
-        command.extend(["-of", output_file])
+    for strategy_idx, strategy in enumerate(strategies, 1):
+        if verbose:
+            print(f"\n=== Attempting Strategy {strategy_idx}/{len(strategies)}: {strategy['name']} ===")
+        
+        for attempt in range(1, MAX_DOWNLOAD_RETRIES + 1):
+            try:
+                if verbose:
+                    print(f"Attempt {attempt}/{MAX_DOWNLOAD_RETRIES}...")
+                
+                with yt_dlp.YoutubeDL(strategy['opts']) as ydl:
+                    info_dict = ydl.extract_info(video_url, download=True)
+                    
+                    # Check if audio file was created
+                    audio_file = "temp_audio.wav"
+                    if ensure_wav_file(audio_file, verbose):
+                        if verbose:
+                            print(f"✓ Download successful with {strategy['name']}!")
+                        return audio_file, info_dict
+                    else:
+                        if verbose:
+                            print("Audio file not found after download, retrying...")
+                        
+            except yt_dlp.utils.DownloadError as e:
+                error_msg = str(e)
+                if verbose:
+                    print(f"✗ Download error: {error_msg}")
+                
+                # Check for specific errors that indicate we should try next strategy
+                if "Operation timed out" in error_msg or "SABR" in error_msg:
+                    if attempt < MAX_DOWNLOAD_RETRIES:
+                        if verbose:
+                            print(f"Retrying in {RETRY_SLEEP_SECONDS} seconds...")
+                        time.sleep(RETRY_SLEEP_SECONDS)
+                        continue
+                    else:
+                        if verbose:
+                            print(f"Max retries reached for {strategy['name']}, trying next strategy...")
+                        break
+                else:
+                    # For other errors, try next strategy immediately
+                    if verbose:
+                        print("Trying next strategy...")
+                    break
+                    
+            except Exception as e:
+                if verbose:
+                    print(f"✗ Unexpected error: {type(e).__name__}: {e}")
+                
+                if attempt < MAX_DOWNLOAD_RETRIES:
+                    if verbose:
+                        print(f"Retrying in {RETRY_SLEEP_SECONDS} seconds...")
+                    time.sleep(RETRY_SLEEP_SECONDS)
+                else:
+                    break
     
-    print("Running command:", " ".join(command))
-    subprocess.run(command, check=True)
+    # All strategies failed
+    return None, None
+
+
+def run_whisper_transcription(audio_file: str, whisper_model: str, output_format: str, 
+                              output_file: str, verbose: bool = False) -> bool:
+    """
+    Runs whisper transcription.
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Build base command
+        command = [
+            WHISPER_CPP_PATH,
+            "-f", audio_file,
+            "-m", whisper_model,
+            "-t", "8"
+        ]
+        
+        # Add output format flag
+        if output_format == "txt":
+            command.append("--output-txt")
+        elif output_format == "vtt":
+            command.append("--output-vtt")
+        elif output_format == "srt":
+            command.append("--output-srt")
+        elif output_format == "json":
+            command.append("--output-json")
+        
+        # Add output file path
+        if output_file:
+            command.extend(["-of", output_file])
+        
+        if verbose:
+            print("Running Whisper command:", " ".join(command))
+        
+        # Don't use capture_output to avoid buffer truncation on long transcriptions
+        # Let output go directly to stdout/stderr or suppress entirely
+        if verbose:
+            # Show all output in verbose mode
+            result = subprocess.run(command, check=True)
+        else:
+            # Suppress output in non-verbose mode but don't capture (avoids truncation)
+            result = subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        
+        if verbose:
+            print("✓ Transcription completed successfully.")
+        
+        return True
+        
+    except subprocess.CalledProcessError as e:
+        print(f"✗ Whisper transcription failed with exit code {e.returncode}")
+        if hasattr(e, 'stderr') and e.stderr:
+            print(f"Error output: {e.stderr.decode()}")
+        return False
+    except FileNotFoundError:
+        print(f"✗ Whisper binary not found at: {WHISPER_CPP_PATH}")
+        print("Please check the WHISPER_CPP_PATH configuration.")
+        return False
+
+
+def create_markdown_file(markdown_file: str, transcript_file: str, front_matter: Dict[str, Any], 
+                        verbose: bool = False) -> bool:
+    """
+    Create a Markdown file with front matter and transcript.
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        if not os.path.exists(transcript_file):
+            print(f"✗ Transcript file not found: {transcript_file}")
+            return False
+        
+        with open(transcript_file, "r", encoding='utf-8') as f:
+            transcript = f.read()
+        
+        front_matter_str = "---\n" + json.dumps(front_matter, indent=2) + "\n---\n\n"
+        
+        with open(markdown_file, "w", encoding='utf-8') as f:
+            f.write(front_matter_str)
+            f.write(transcript)
+        
+        if verbose:
+            print(f"✓ Markdown file created: {markdown_file}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"✗ Error creating Markdown file: {e}")
+        return False
+
+
+def save_statistics(stats_file: str, stats: Dict[str, Any], verbose: bool = False) -> bool:
+    """
+    Save transcription statistics to a JSON file.
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Load existing stats
+        try:
+            with open(stats_file, "r", encoding='utf-8') as f:
+                existing_stats = json.load(f)
+        except FileNotFoundError:
+            existing_stats = []
+        
+        existing_stats.append(stats)
+        
+        with open(stats_file, "w", encoding='utf-8') as f:
+            json.dump(existing_stats, f, indent=2)
+        
+        if verbose:
+            print(f"✓ Statistics saved to: {stats_file}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"✗ Error saving statistics: {e}")
+        return False
+
+
+def cleanup_temp_files(audio_file: str, verbose: bool = False):
+    """Clean up temporary audio files."""
+    for ext in ['.wav', '.webm', '.m4a', '.mp3']:
+        temp_file = audio_file.replace('.wav', ext)
+        if os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+                if verbose:
+                    print(f"Cleaned up: {temp_file}")
+            except Exception as e:
+                if verbose:
+                    print(f"Warning: Could not remove {temp_file}: {e}")
+
 
 def main():
-    parser = argparse.ArgumentParser(description="Automate YouTube video transcription with Whisper.")
+    parser = argparse.ArgumentParser(
+        description="Automate YouTube video transcription with Whisper.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s "https://www.youtube.com/watch?v=VIDEO_ID"
+  %(prog)s "https://www.youtube.com/watch?v=VIDEO_ID" --output_dir ./transcripts --verbose
+  %(prog)s "https://www.youtube.com/watch?v=VIDEO_ID" --front_matter '{"tags": ["podcast"], "date": "2024-01-01"}'
+        """
+    )
     parser.add_argument("video_url", help="YouTube video URL")
     parser.add_argument("--output_dir", default=".", help="Output directory for Markdown files")
-    parser.add_argument("--whisper_model", default=WHISPER_MODEL, help="Whisper model size (tiny, base, small, medium, large)")
-    parser.add_argument("--output_format", default="otxt", help="Whisper output format(txt, vtt, srt, tsv, json, all)")
+    parser.add_argument("--whisper_model", default=WHISPER_MODEL, help="Path to Whisper model file")
+    parser.add_argument("--output_format", default="otxt", 
+                       help="Whisper output format (txt, vtt, srt, json). Prefix with 'o' for original filename.")
     parser.add_argument("--front_matter", default="{}", help="JSON string for Markdown front matter")
-    parser.add_argument("--stats_file", default="transcription_stats.json", help="File to store statistics")
+    parser.add_argument("--stats_file", default="transcription_stats.json", 
+                       help="File to store statistics")
+    parser.add_argument("--po_token", default=None, 
+                       help="PO Token for bypassing YouTube restrictions (format: 'client.type+TOKEN'). See https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
 
     args = parser.parse_args()
 
+    # Initialize tracking variables
     run_uid = str(uuid.uuid4())
     run_timestamp = datetime.datetime.now().isoformat()
     start_time = time.time()
+    audio_file = None
+    success = False
 
     if args.verbose:
-        print(f"Starting transcription for: {args.video_url}")
+        print(f"\n{'='*60}")
+        print(f"YouTube Transcription Tool")
+        print(f"{'='*60}")
+        print(f"Video URL: {args.video_url}")
+        print(f"Run ID: {run_uid}")
+        print(f"Timestamp: {run_timestamp}")
+        print(f"{'='*60}\n")
 
-    # Download video and extract audio using yt_dlp library
     try:
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': 'temp_audio.%(ext)s',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'wav',
-                'preferredquality': '192',
-            }],
-            'postprocessor_args': [
-                '-ar', '16000',
-                '-ac', '1',
-                '-c:a', 'pcm_s16le',
-            ],
-        }
+        # Create output directory if it doesn't exist
+        os.makedirs(args.output_dir, exist_ok=True)
+        
+        # Download audio with retry logic
+        print("Downloading audio from YouTube...")
+        audio_file, info_dict = download_audio_with_retry(
+            args.video_url, 
+            'temp_audio.%(ext)s',
+            args.verbose,
+            args.po_token
+        )
+        
+        if audio_file is None or info_dict is None:
+            print("\n✗ Failed to download audio after all retry attempts.")
+            print("Possible solutions:")
+            print("  1. Check your internet connection")
+            print("  2. Verify the YouTube URL is correct and the video is available")
+            print("  3. Try running with --verbose to see detailed error messages")
+            print("  4. Update yt-dlp: pip install --upgrade yt-dlp")
+            return
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info_dict = ydl.extract_info(args.video_url, download=True)
-            video_title = info_dict.get('title', None)
-            sanitized_title = sanitize_filename(video_title)
-            audio_file = "temp_audio.wav"
-
-        if args.verbose:
-            print("Video downloaded and audio extracted.")
+        video_title = info_dict.get('title', 'unknown_video')
+        sanitized_title = sanitize_filename(video_title)
+        
+        print(f"\n✓ Audio downloaded successfully!")
+        print(f"Video title: {video_title}")
 
         # Verify audio file exists
-        if not ensure_wav_file(audio_file):
-            raise FileNotFoundError(f"Could not create or find audio file: {audio_file}")
+        if not os.path.exists(audio_file):
+            raise FileNotFoundError(f"Audio file not found: {audio_file}")
 
         # Run Whisper transcription
+        print("\nTranscribing audio with Whisper...")
         whisper_output_file = os.path.join(args.output_dir, sanitized_title)
         output_format = args.output_format.replace("o", "")  # Convert "otxt" to "txt"
-        run_whisper_transcription(audio_file, args.whisper_model, output_format, whisper_output_file)
-
-        if args.verbose:
-            print("Transcription completed.")
+        
+        if not run_whisper_transcription(audio_file, args.whisper_model, output_format, 
+                                        whisper_output_file, args.verbose):
+            print("\n✗ Transcription failed.")
+            return
 
         # Create Markdown file
+        print("\nCreating Markdown file...")
         markdown_file = os.path.join(args.output_dir, f"{sanitized_title}.md")
         transcript_file = f"{whisper_output_file}.txt"
-        if os.path.exists(transcript_file):
-            with open(transcript_file, "r") as f:
-                transcript = f.read()
-
-        front_matter = json.loads(args.front_matter)
-        front_matter_str = "---\n" + json.dumps(front_matter, indent=2) + "\n---\n"
-
-        with open(markdown_file, "w") as f:
-            f.write(front_matter_str)
-            f.write(transcript)
-
-        if args.verbose:
-            print(f"Markdown file created: {markdown_file}")
+        
+        try:
+            front_matter = json.loads(args.front_matter)
+        except json.JSONDecodeError as e:
+            print(f"Warning: Invalid JSON in front_matter, using empty dict: {e}")
+            front_matter = {}
+        
+        # Add video metadata to front matter
+        front_matter.update({
+            'video_title': video_title,
+            'video_url': args.video_url,
+            'tags': front_matter.get('tags', []) + ['transcription', 'youtube', 'podcast', 'whisper'],
+            'transcription_date': run_timestamp,
+            'run_uid': run_uid
+        })
+        
+        if not create_markdown_file(markdown_file, transcript_file, front_matter, args.verbose):
+            print("\n✗ Failed to create Markdown file.")
+            return
 
         # Store statistics
         end_time = time.time()
@@ -147,29 +491,47 @@ def main():
             "run_timestamp": run_timestamp,
             "video_title": sanitized_title,
             "video_url": args.video_url,
-            "run_duration": duration
+            "run_duration": duration,
+            "success": True
         }
 
-        try:
-            with open(args.stats_file, "r") as f:
-                existing_stats = json.load(f)
-        except FileNotFoundError:
-            existing_stats = []
+        save_statistics(args.stats_file, stats, args.verbose)
+        
+        success = True
+        print(f"\n{'='*60}")
+        print(f"✓ Transcription completed successfully!")
+        print(f"{'='*60}")
+        print(f"Markdown file: {markdown_file}")
+        print(f"Duration: {duration:.2f} seconds")
+        print(f"{'='*60}\n")
 
-        existing_stats.append(stats)
-
-        with open(args.stats_file, "w") as f:
-            json.dump(existing_stats, f, indent=2)
-
-        if args.verbose:
-            print("Statistics stored.")
-
+    except KeyboardInterrupt:
+        print("\n\n✗ Process interrupted by user.")
+        
     except Exception as e:
-        print(f"An error occurred: {e}")
+        print(f"\n✗ An unexpected error occurred: {type(e).__name__}: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        
     finally:
-        # Clean up temporary audio file
-        if os.path.exists(audio_file):
-            os.remove(audio_file)
+        # Clean up temporary audio files
+        if audio_file:
+            cleanup_temp_files(audio_file, args.verbose)
+        
+        # Save failure statistics if needed
+        if not success:
+            end_time = time.time()
+            duration = end_time - start_time
+            stats = {
+                "run_uid": run_uid,
+                "run_timestamp": run_timestamp,
+                "video_url": args.video_url,
+                "run_duration": duration,
+                "success": False
+            }
+            save_statistics(args.stats_file, stats, False)
+
 
 if __name__ == "__main__":
     main()
