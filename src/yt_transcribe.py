@@ -26,6 +26,84 @@ def sanitize_filename(filename: str) -> str:
     return re.sub(r'[^\w\s-]', '', filename).strip()
 
 
+def create_smart_filename(title: str, max_length: int = 60, include_date: bool = True) -> str:
+    """Create a smart, shortened filename from video title."""
+    filler_patterns = [
+        r'^Episode\s+\d+[:\s-]*',
+        r'^EP\.?\s*\d+[:\s-]*',
+        r'^\d+[:\s-]+',
+        r'\s*[-–—]\s*Keynote Speakers?\s*',
+        r'\s*[-–—]\s*Interview\s*',
+        r'\s*\|\s*',
+        r'\s*[-–—]\s*Part\s+\d+',
+    ]
+    
+    cleaned_title = title
+    for pattern in filler_patterns:
+        cleaned_title = re.sub(pattern, '', cleaned_title, flags=re.IGNORECASE)
+    
+    cleaned_title = re.sub(r'\s+', ' ', cleaned_title).strip()
+    words = cleaned_title.split()
+    
+    important_words = []
+    regular_words = []
+    low_priority = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 
+                    'of', 'with', 'how', 'what', 'why', 'when', 'where', 'this', 'that',
+                    'these', 'those', 'is', 'are', 'was', 'were', 'be', 'been', 'being'}
+    
+    for word in words:
+        word_lower = word.lower()
+        if word[0].isupper() or word.isupper() or word_lower not in low_priority:
+            important_words.append(word)
+        else:
+            regular_words.append(word)
+    
+    result_words = []
+    current_length = 0
+    
+    for word in important_words:
+        word_len = len(word) + 1
+        if current_length + word_len <= max_length:
+            result_words.append(word)
+            current_length += word_len
+        else:
+            break
+    
+    for word in regular_words:
+        word_len = len(word) + 1
+        if current_length + word_len <= max_length:
+            result_words.append(word)
+            current_length += word_len
+        else:
+            break
+    
+    filename = '_'.join(result_words)
+    filename = re.sub(r'[^\w\s-]', '', filename)
+    filename = re.sub(r'[-\s]+', '_', filename)
+    
+    if include_date:
+        date_prefix = datetime.datetime.now().strftime('%Y-%m-%d')
+        filename = f"{date_prefix}_{filename}"
+    
+    return filename
+
+
+def get_unique_filename(directory: str, base_filename: str, extension: str = '.md') -> str:
+    """Get a unique filename by adding version suffix if file exists."""
+    filepath = os.path.join(directory, f"{base_filename}{extension}")
+    
+    if not os.path.exists(filepath):
+        return filepath
+    
+    version = 2
+    while True:
+        versioned_filename = f"{base_filename}_v{version}{extension}"
+        filepath = os.path.join(directory, versioned_filename)
+        if not os.path.exists(filepath):
+            return filepath
+        version += 1
+
+
 def ensure_wav_file(input_file: str, verbose: bool = False) -> bool:
     """Ensure the audio file exists and is in WAV format."""
     if os.path.exists(input_file):
@@ -300,14 +378,9 @@ def run_whisper_transcription(audio_file: str, whisper_model: str, output_format
         return False
 
 
-def create_markdown_file(markdown_file: str, transcript_file: str, front_matter: Dict[str, Any], 
-                        verbose: bool = False) -> bool:
-    """
-    Create a Markdown file with front matter and transcript.
-    
-    Returns:
-        bool: True if successful, False otherwise
-    """
+def create_markdown_file(markdown_file: str, transcript_file: str, video_info: Dict[str, Any],
+                        front_matter: Dict[str, Any], verbose: bool = False) -> bool:
+    """Create a Markdown file with front matter and transcript."""
     try:
         if not os.path.exists(transcript_file):
             print(f"✗ Transcript file not found: {transcript_file}")
@@ -316,14 +389,45 @@ def create_markdown_file(markdown_file: str, transcript_file: str, front_matter:
         with open(transcript_file, "r", encoding='utf-8') as f:
             transcript = f.read()
         
-        front_matter_str = "---\n" + json.dumps(front_matter, indent=2) + "\n---\n\n"
+        obsidian_front_matter = {
+            'title': video_info.get('title', 'Untitled'),
+            'date': datetime.datetime.now().strftime('%Y-%m-%d'),
+            'transcribed': datetime.datetime.now().isoformat(),
+            'url': video_info.get('webpage_url', video_info.get('url', '')),
+            'duration': video_info.get('duration_string', ''),
+            'channel': video_info.get('channel', video_info.get('uploader', '')),
+            'tags': ['podcast', 'youtube', 'transcription'],
+        }
+        
+        obsidian_front_matter.update(front_matter)
+        
+        front_matter_lines = ['---']
+        for key, value in obsidian_front_matter.items():
+            if isinstance(value, list):
+                front_matter_lines.append(f"{key}: [{', '.join(repr(v) for v in value)}]")
+            elif isinstance(value, str):
+                if ':' in value or '#' in value or value.startswith(('*', '-', '[')):
+                    front_matter_lines.append(f'{key}: "{value}"')
+                else:
+                    front_matter_lines.append(f'{key}: {value}')
+            else:
+                front_matter_lines.append(f'{key}: {value}')
+        front_matter_lines.append('---\n')
+        
+        front_matter_str = '\n'.join(front_matter_lines)
         
         with open(markdown_file, "w", encoding='utf-8') as f:
             f.write(front_matter_str)
+            f.write('\n')
             f.write(transcript)
         
         if verbose:
             print(f"✓ Markdown file created: {markdown_file}")
+        
+        if os.path.exists(transcript_file):
+            os.remove(transcript_file)
+            if verbose:
+                print(f"✓ Cleaned up temporary transcript file: {transcript_file}")
         
         return True
         
@@ -332,15 +436,45 @@ def create_markdown_file(markdown_file: str, transcript_file: str, front_matter:
         return False
 
 
-def save_statistics(stats_file: str, stats: Dict[str, Any], verbose: bool = False) -> bool:
-    """
-    Save transcription statistics to a JSON file.
-    
-    Returns:
-        bool: True if successful, False otherwise
-    """
+def estimate_transcription_time(stats_file: str, audio_duration: float) -> Optional[float]:
+    """Estimate transcription time based on historical data."""
     try:
-        # Load existing stats
+        if not os.path.exists(stats_file):
+            return None
+        
+        with open(stats_file, "r", encoding='utf-8') as f:
+            existing_stats = json.load(f)
+        
+        successful_runs = [
+            s for s in existing_stats 
+            if s.get('success') and 'transcription_duration' in s and 'audio_duration' in s
+        ]
+        
+        if not successful_runs:
+            return None
+        
+        ratios = []
+        for run in successful_runs:
+            trans_duration = run['transcription_duration']
+            audio_dur = run['audio_duration']
+            if audio_dur > 0:
+                ratios.append(trans_duration / audio_dur)
+        
+        if not ratios:
+            return None
+        
+        avg_ratio = sum(ratios) / len(ratios)
+        estimated_time = audio_duration * avg_ratio
+        
+        return estimated_time
+        
+    except Exception:
+        return None
+
+
+def save_statistics(stats_file: str, stats: Dict[str, Any], verbose: bool = False) -> bool:
+    """Save transcription statistics to a JSON file."""
+    try:
         try:
             with open(stats_file, "r", encoding='utf-8') as f:
                 existing_stats = json.load(f)
@@ -381,14 +515,16 @@ def main():
         description="Automate YouTube video transcription with Whisper.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-  %(prog)s "https://www.youtube.com/watch?v=VIDEO_ID"
-  %(prog)s "https://www.youtube.com/watch?v=VIDEO_ID" --output_dir ./transcripts --verbose
-  %(prog)s "https://www.youtube.com/watch?v=VIDEO_ID" --front_matter '{"tags": ["podcast"], "date": "2024-01-01"}'
+        Examples:
+        %(prog)s "https://www.youtube.com/watch?v=VIDEO_ID"
+        %(prog)s "https://www.youtube.com/watch?v=VIDEO_ID" --output_dir ./transcripts --verbose
+        %(prog)s "https://www.youtube.com/watch?v=VIDEO_ID" --front_matter '{"tags": ["podcast"], "date": "2024-01-01"}'
         """
     )
     parser.add_argument("video_url", help="YouTube video URL")
     parser.add_argument("--output_dir", default=".", help="Output directory for Markdown files")
+    parser.add_argument("--save_to_obsidian", action="store_true", 
+                       help=f"Save to Obsidian vault at: {OBSIDIAN_PATH}")
     parser.add_argument("--whisper_model", default=WHISPER_MODEL, help="Path to Whisper model file")
     parser.add_argument("--output_format", default="otxt", 
                        help="Whisper output format (txt, vtt, srt, json). Prefix with 'o' for original filename.")
@@ -418,8 +554,14 @@ Examples:
         print(f"{'='*60}\n")
 
     try:
-        # Create output directory if it doesn't exist
-        os.makedirs(args.output_dir, exist_ok=True)
+        if args.save_to_obsidian:
+            output_dir = OBSIDIAN_PATH
+            if args.verbose:
+                print(f"Saving to Obsidian vault: {output_dir}")
+        else:
+            output_dir = args.output_dir
+        
+        os.makedirs(output_dir, exist_ok=True)
         
         # Download audio with retry logic
         print("Downloading audio from YouTube...")
@@ -440,29 +582,46 @@ Examples:
             return
 
         video_title = info_dict.get('title', 'unknown_video')
-        sanitized_title = sanitize_filename(video_title)
+        smart_filename = create_smart_filename(video_title, max_length=60, include_date=True)
         
         print(f"\n✓ Audio downloaded successfully!")
         print(f"Video title: {video_title}")
+        if args.verbose:
+            print(f"Smart filename: {smart_filename}")
 
         # Verify audio file exists
         if not os.path.exists(audio_file):
             raise FileNotFoundError(f"Audio file not found: {audio_file}")
 
+        # Estimate transcription time
+        audio_duration = info_dict.get('duration', 0)
+        estimated_time = estimate_transcription_time(args.stats_file, audio_duration)
+        
         # Run Whisper transcription
         print("\nTranscribing audio with Whisper...")
-        whisper_output_file = os.path.join(args.output_dir, sanitized_title)
-        output_format = args.output_format.replace("o", "")  # Convert "otxt" to "txt"
+        if estimated_time:
+            minutes = int(estimated_time // 60)
+            seconds = int(estimated_time % 60)
+            print(f"Estimated transcription time: ~{minutes}m {seconds}s (based on historical data)")
+        else:
+            if audio_duration > 0:
+                print(f"Audio duration: {int(audio_duration // 60)}m {int(audio_duration % 60)}s")
+        
+        transcription_start = time.time()
+        temp_whisper_output = os.path.join(output_dir, f"temp_transcript_{uuid.uuid4().hex[:8]}")
+        output_format = args.output_format.replace("o", "")
         
         if not run_whisper_transcription(audio_file, args.whisper_model, output_format, 
-                                        whisper_output_file, args.verbose):
+                                        temp_whisper_output, args.verbose):
             print("\n✗ Transcription failed.")
             return
+        
+        transcription_duration = time.time() - transcription_start
 
         # Create Markdown file
         print("\nCreating Markdown file...")
-        markdown_file = os.path.join(args.output_dir, f"{sanitized_title}.md")
-        transcript_file = f"{whisper_output_file}.txt"
+        markdown_file = get_unique_filename(output_dir, smart_filename, '.md')
+        transcript_file = f"{temp_whisper_output}.txt"
         
         try:
             front_matter = json.loads(args.front_matter)
@@ -470,16 +629,7 @@ Examples:
             print(f"Warning: Invalid JSON in front_matter, using empty dict: {e}")
             front_matter = {}
         
-        # Add video metadata to front matter
-        front_matter.update({
-            'video_title': video_title,
-            'video_url': args.video_url,
-            'tags': front_matter.get('tags', []) + ['transcription', 'youtube', 'podcast', 'whisper'],
-            'transcription_date': run_timestamp,
-            'run_uid': run_uid
-        })
-        
-        if not create_markdown_file(markdown_file, transcript_file, front_matter, args.verbose):
+        if not create_markdown_file(markdown_file, transcript_file, info_dict, front_matter, args.verbose):
             print("\n✗ Failed to create Markdown file.")
             return
 
@@ -489,10 +639,14 @@ Examples:
         stats = {
             "run_uid": run_uid,
             "run_timestamp": run_timestamp,
-            "video_title": sanitized_title,
+            "video_title": video_title,
+            "smart_filename": os.path.basename(markdown_file),
             "video_url": args.video_url,
             "run_duration": duration,
-            "success": True
+            "transcription_duration": transcription_duration,
+            "audio_duration": audio_duration,
+            "success": True,
+            "saved_to_obsidian": args.save_to_obsidian
         }
 
         save_statistics(args.stats_file, stats, args.verbose)
@@ -502,7 +656,10 @@ Examples:
         print(f"✓ Transcription completed successfully!")
         print(f"{'='*60}")
         print(f"Markdown file: {markdown_file}")
-        print(f"Duration: {duration:.2f} seconds")
+        print(f"Total duration: {duration:.2f} seconds")
+        print(f"Transcription duration: {transcription_duration:.2f} seconds")
+        if args.save_to_obsidian:
+            print(f"✓ Saved to Obsidian vault")
         print(f"{'='*60}\n")
 
     except KeyboardInterrupt:
