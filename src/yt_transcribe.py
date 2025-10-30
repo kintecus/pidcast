@@ -16,6 +16,11 @@ WHISPER_CPP_PATH = "/Users/ostaps/Code/whisper.cpp/build/bin/whisper-cli"
 WHISPER_MODEL = "/Users/ostaps/Code/whisper.cpp/models/ggml-base.en.bin"
 OBSIDIAN_PATH = "/Users/ostaps/Library/Mobile Documents/iCloud~md~obsidian/Documents/Obsidian Vault/03 - RESOURCES/Podcasts"
 
+# Default paths (relative to script directory)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_TRANSCRIPTS_DIR = os.path.join(SCRIPT_DIR, "transcripts")
+DEFAULT_STATS_FILE = os.path.join(DEFAULT_TRANSCRIPTS_DIR, "transcription_stats.json")
+
 # Retry configuration
 MAX_DOWNLOAD_RETRIES = 3
 RETRY_SLEEP_SECONDS = 10
@@ -424,11 +429,6 @@ def create_markdown_file(markdown_file: str, transcript_file: str, video_info: D
         if verbose:
             print(f"✓ Markdown file created: {markdown_file}")
         
-        if os.path.exists(transcript_file):
-            os.remove(transcript_file)
-            if verbose:
-                print(f"✓ Cleaned up temporary transcript file: {transcript_file}")
-        
         return True
         
     except Exception as e:
@@ -522,20 +522,29 @@ def main():
         """
     )
     parser.add_argument("video_url", help="YouTube video URL")
-    parser.add_argument("--output_dir", default=".", help="Output directory for Markdown files")
+    parser.add_argument("--output_dir", default=None, 
+                       help=f"Output directory for Markdown files (default: {DEFAULT_TRANSCRIPTS_DIR})")
     parser.add_argument("--save_to_obsidian", action="store_true", 
                        help=f"Save to Obsidian vault at: {OBSIDIAN_PATH}")
     parser.add_argument("--whisper_model", default=WHISPER_MODEL, help="Path to Whisper model file")
     parser.add_argument("--output_format", default="otxt", 
                        help="Whisper output format (txt, vtt, srt, json). Prefix with 'o' for original filename.")
     parser.add_argument("--front_matter", default="{}", help="JSON string for Markdown front matter")
-    parser.add_argument("--stats_file", default="transcription_stats.json", 
-                       help="File to store statistics")
+    parser.add_argument("--stats_file", default=None, 
+                       help=f"File to store statistics (default: {DEFAULT_STATS_FILE})")
+    parser.add_argument("--keep_transcript", action="store_true",
+                       help="Keep the .txt transcript file alongside the .md file")
     parser.add_argument("--po_token", default=None, 
                        help="PO Token for bypassing YouTube restrictions (format: 'client.type+TOKEN'). See https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
 
     args = parser.parse_args()
+
+    # Set defaults for output_dir and stats_file
+    if args.output_dir is None:
+        args.output_dir = DEFAULT_TRANSCRIPTS_DIR
+    if args.stats_file is None:
+        args.stats_file = DEFAULT_STATS_FILE
 
     # Initialize tracking variables
     run_uid = str(uuid.uuid4())
@@ -632,6 +641,15 @@ def main():
         if not create_markdown_file(markdown_file, transcript_file, info_dict, front_matter, args.verbose):
             print("\n✗ Failed to create Markdown file.")
             return
+        
+        # Optionally keep transcript file
+        if not args.keep_transcript and os.path.exists(transcript_file):
+            os.remove(transcript_file)
+            if args.verbose:
+                print(f"✓ Cleaned up temporary transcript file: {transcript_file}")
+        elif args.keep_transcript and os.path.exists(transcript_file):
+            if args.verbose:
+                print(f"✓ Kept transcript file: {transcript_file}")
 
         # Store statistics
         end_time = time.time()
