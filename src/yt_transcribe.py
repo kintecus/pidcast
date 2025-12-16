@@ -140,6 +140,16 @@ def ensure_wav_file(input_file: str, verbose: bool = False) -> bool:
     return False
 
 
+def format_duration(seconds: float) -> str:
+    """Format duration in seconds to a readable string."""
+    if seconds < 60:
+        return f"{seconds:.2f} seconds"
+    
+    minutes = int(seconds // 60)
+    rem_seconds = int(seconds % 60)
+    return f"{minutes}m {rem_seconds}s"
+
+
 def download_audio_with_retry(video_url: str, output_template: str, verbose: bool = False, po_token: Optional[str] = None) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
     """
     Download audio from YouTube with retry logic and multiple fallback strategies.
@@ -436,7 +446,7 @@ def create_markdown_file(markdown_file: str, transcript_file: str, video_info: D
         return False
 
 
-def estimate_transcription_time(stats_file: str, audio_duration: float) -> Optional[float]:
+def estimate_transcription_time(stats_file: str, audio_duration: float, max_records: int = 100) -> Optional[float]:
     """Estimate transcription time based on historical data."""
     try:
         if not os.path.exists(stats_file):
@@ -453,8 +463,10 @@ def estimate_transcription_time(stats_file: str, audio_duration: float) -> Optio
         if not successful_runs:
             return None
         
+        recent_runs = successful_runs[-max_records:]
+        
         ratios = []
-        for run in successful_runs:
+        for run in recent_runs:
             trans_duration = run['transcription_duration']
             audio_dur = run['audio_duration']
             if audio_dur > 0:
@@ -510,18 +522,96 @@ def cleanup_temp_files(audio_file: str, verbose: bool = False):
                     print(f"Warning: Could not remove {temp_file}: {e}")
 
 
+def process_local_file(input_file: str, output_dir: str, verbose: bool = False) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """
+    Process a local audio file for transcription.
+    
+    Args:
+        input_file: Path to local audio file
+        output_dir: Directory to store processed files
+        verbose: Enable verbose output
+        
+    Returns:
+        tuple: (audio_file_path, info_dict) or (None, None) on failure
+    """
+    if not os.path.exists(input_file):
+        print(f"✗ File not found: {input_file}")
+        return None, None
+        
+    filename = os.path.basename(input_file)
+    name, ext = os.path.splitext(filename)
+    
+    # Create info dict similar to yt-dlp output
+    info_dict = {
+        'title': name.replace('_', ' '),
+        'webpage_url': f"file://{os.path.abspath(input_file)}",
+        'channel': 'Local File',
+        'uploader': 'User',
+        'duration': 0,  # Will try to get actual duration
+        'duration_string': 'Unknown',
+        'view_count': 0,
+        'upload_date': datetime.datetime.fromtimestamp(os.path.getmtime(input_file)).strftime('%Y%m%d')
+    }
+    
+    # Try to get duration using ffprobe
+    try:
+        cmd = [
+            'ffprobe', 
+            '-v', 'error', 
+            '-show_entries', 'format=duration', 
+            '-of', 'default=noprint_wrappers=1:nokey=1', 
+            input_file
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            duration = float(result.stdout.strip())
+            info_dict['duration'] = duration
+            info_dict['duration_string'] = format_duration(duration)
+    except Exception as e:
+        if verbose:
+            print(f"Warning: Could not determine duration: {e}")
+            
+    # Convert to 16kHz mono WAV if needed
+    output_wav = os.path.join(output_dir, f"{name}_16k.wav")
+    
+    if verbose:
+        print(f"Converting {filename} to 16kHz mono WAV...")
+        
+    try:
+        command = [
+            FFMPEG_PATH,
+            '-y',  # Overwrite output file
+            '-i', input_file,
+            '-ar', '16000',
+            '-ac', '1',
+            '-c:a', 'pcm_s16le',
+            output_wav
+        ]
+        
+        if verbose:
+            subprocess.run(command, check=True)
+        else:
+            subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            
+        return output_wav, info_dict
+        
+    except subprocess.CalledProcessError as e:
+        print(f"✗ Error converting audio: {e}")
+        return None, None
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Automate YouTube video transcription with Whisper.",
+        description="Automate audio transcription with Whisper (YouTube URL or local file).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
         Examples:
         %(prog)s "https://www.youtube.com/watch?v=VIDEO_ID"
+        %(prog)s "/path/to/audio/file.mp3"
         %(prog)s "https://www.youtube.com/watch?v=VIDEO_ID" --output_dir ./transcripts --verbose
-        %(prog)s "https://www.youtube.com/watch?v=VIDEO_ID" --front_matter '{"tags": ["podcast"], "date": "2024-01-01"}'
         """
     )
-    parser.add_argument("video_url", help="YouTube video URL")
+    parser.add_argument("input_source", help="YouTube video URL or path to local audio file")
     parser.add_argument("--output_dir", default=None, 
                        help=f"Output directory for Markdown files (default: {DEFAULT_TRANSCRIPTS_DIR})")
     parser.add_argument("--save_to_obsidian", action="store_true", 
@@ -552,12 +642,14 @@ def main():
     start_time = time.time()
     audio_file = None
     success = False
+    is_local_file = os.path.exists(args.input_source)
 
     if args.verbose:
         print(f"\n{'='*60}")
-        print(f"YouTube Transcription Tool")
+        print(f"Transcription Tool")
         print(f"{'='*60}")
-        print(f"Video URL: {args.video_url}")
+        print(f"Input: {args.input_source}")
+        print(f"Type: {'Local File' if is_local_file else 'YouTube URL'}")
         print(f"Run ID: {run_uid}")
         print(f"Timestamp: {run_timestamp}")
         print(f"{'='*60}\n")
@@ -572,29 +664,36 @@ def main():
         
         os.makedirs(output_dir, exist_ok=True)
         
-        # Download audio with retry logic
-        print("Downloading audio from YouTube...")
-        audio_file, info_dict = download_audio_with_retry(
-            args.video_url, 
-            'temp_audio.%(ext)s',
-            args.verbose,
-            args.po_token
-        )
+        if is_local_file:
+            print("Processing local file...")
+            audio_file, info_dict = process_local_file(
+                args.input_source,
+                output_dir, # Use output_dir for temporary converted file
+                args.verbose
+            )
+        else:
+            # Download audio with retry logic
+            print("Downloading audio from YouTube...")
+            audio_file, info_dict = download_audio_with_retry(
+                args.input_source, 
+                'temp_audio.%(ext)s',
+                args.verbose,
+                args.po_token
+            )
         
         if audio_file is None or info_dict is None:
-            print("\n✗ Failed to download audio after all retry attempts.")
-            print("Possible solutions:")
-            print("  1. Check your internet connection")
-            print("  2. Verify the YouTube URL is correct and the video is available")
-            print("  3. Try running with --verbose to see detailed error messages")
-            print("  4. Update yt-dlp: pip install --upgrade yt-dlp")
+            print("\n✗ Failed to process input.")
             return
 
         video_title = info_dict.get('title', 'unknown_video')
         smart_filename = create_smart_filename(video_title, max_length=60, include_date=True)
         
-        print(f"\n✓ Audio downloaded successfully!")
-        print(f"Video title: {video_title}")
+        if not is_local_file:
+            print(f"\n✓ Audio downloaded successfully!")
+        else:
+            print(f"\n✓ Local file processed successfully!")
+            
+        print(f"Title: {video_title}")
         if args.verbose:
             print(f"Smart filename: {smart_filename}")
 
@@ -609,12 +708,10 @@ def main():
         # Run Whisper transcription
         print("\nTranscribing audio with Whisper...")
         if estimated_time:
-            minutes = int(estimated_time // 60)
-            seconds = int(estimated_time % 60)
-            print(f"Estimated transcription time: ~{minutes}m {seconds}s (based on historical data)")
+            print(f"Estimated transcription time: ~{format_duration(estimated_time)} (based on historical data)")
         else:
             if audio_duration > 0:
-                print(f"Audio duration: {int(audio_duration // 60)}m {int(audio_duration % 60)}s")
+                print(f"Audio duration: {format_duration(audio_duration)}")
         
         transcription_start = time.time()
         temp_whisper_output = os.path.join(output_dir, f"temp_transcript_{uuid.uuid4().hex[:8]}")
@@ -659,12 +756,13 @@ def main():
             "run_timestamp": run_timestamp,
             "video_title": video_title,
             "smart_filename": os.path.basename(markdown_file),
-            "video_url": args.video_url,
+            "video_url": args.input_source,
             "run_duration": duration,
             "transcription_duration": transcription_duration,
             "audio_duration": audio_duration,
             "success": True,
-            "saved_to_obsidian": args.save_to_obsidian
+            "saved_to_obsidian": args.save_to_obsidian,
+            "is_local_file": is_local_file
         }
 
         save_statistics(args.stats_file, stats, args.verbose)
@@ -674,8 +772,14 @@ def main():
         print(f"✓ Transcription completed successfully!")
         print(f"{'='*60}")
         print(f"Markdown file: {markdown_file}")
-        print(f"Total duration: {duration:.2f} seconds")
-        print(f"Transcription duration: {transcription_duration:.2f} seconds")
+        print(f"Total duration: {format_duration(duration)}")
+        print(f"Transcription duration: {format_duration(transcription_duration)}")
+        
+        if estimated_time:
+            diff = transcription_duration - estimated_time
+            diff_abs = abs(diff)
+            direction = "slower" if diff > 0 else "faster"
+            print(f"Estimation accuracy: {format_duration(diff_abs)} {direction} than estimated")
         if args.save_to_obsidian:
             print(f"✓ Saved to Obsidian vault")
         print(f"{'='*60}\n")
@@ -692,7 +796,19 @@ def main():
     finally:
         # Clean up temporary audio files
         if audio_file:
-            cleanup_temp_files(audio_file, args.verbose)
+            # For local files, we created a temporary 16k wav that needs cleanup
+            # For YouTube, we have the downloaded file
+            if is_local_file:
+                if os.path.exists(audio_file) and "_16k.wav" in audio_file:
+                    try:
+                        os.remove(audio_file)
+                        if args.verbose:
+                            print(f"Cleaned up temporary file: {audio_file}")
+                    except Exception as e:
+                        if args.verbose:
+                            print(f"Warning: Could not remove {audio_file}: {e}")
+            else:
+                cleanup_temp_files(audio_file, args.verbose)
         
         # Save failure statistics if needed
         if not success:
@@ -701,9 +817,10 @@ def main():
             stats = {
                 "run_uid": run_uid,
                 "run_timestamp": run_timestamp,
-                "video_url": args.video_url,
+                "video_url": args.input_source,
                 "run_duration": duration,
-                "success": False
+                "success": False,
+                "is_local_file": is_local_file
             }
             save_statistics(args.stats_file, stats, False)
 
