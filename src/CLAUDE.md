@@ -174,6 +174,16 @@ Generated Markdown files include:
 - Full transcript text from Whisper
 - Automatic versioning (_v2, _v3) if filename exists
 
+### Transcription Progress Indicator
+
+During transcription, a real-time progress indicator is displayed:
+- **With estimated time:** Shows a progress bar, percentage, elapsed time, and estimated time remaining
+- **Without estimated time:** Shows a spinner with elapsed time
+- Progress is disabled in verbose mode to avoid interfering with Whisper output
+- Uses threading to update the display while transcription runs in the background
+
+The estimated time is calculated from historical transcription data (see Statistics Tracking below).
+
 ### Statistics Tracking
 
 Transcription statistics are saved to `transcripts/transcription_stats.json`:
