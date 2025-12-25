@@ -1,0 +1,268 @@
+"""Configuration constants and loading for pidcast."""
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from dotenv import load_dotenv
+
+# Load environment variables from .env file if it exists
+load_dotenv()
+
+
+# ============================================================================
+# PATH RESOLUTION
+# ============================================================================
+
+
+def get_project_root() -> Path:
+    """Get the project root directory (where pyproject.toml is)."""
+    # Start from this file's directory and go up until we find pyproject.toml
+    current = Path(__file__).resolve().parent
+    while current != current.parent:
+        if (current / "pyproject.toml").exists():
+            return current
+        current = current.parent
+    # Fallback to parent of src
+    return Path(__file__).resolve().parent.parent.parent
+
+
+PROJECT_ROOT = get_project_root()
+
+
+# ============================================================================
+# EXTERNAL TOOLS CONFIGURATION
+# ============================================================================
+
+FFMPEG_PATH = os.environ.get("FFMPEG_PATH", "ffmpeg")
+WHISPER_CPP_PATH = os.environ.get("WHISPER_CPP_PATH")
+WHISPER_MODEL = os.environ.get("WHISPER_MODEL")
+OBSIDIAN_PATH = os.environ.get("OBSIDIAN_VAULT_PATH")
+
+
+# ============================================================================
+# PATHS
+# ============================================================================
+
+DEFAULT_TRANSCRIPTS_DIR = PROJECT_ROOT / "data" / "transcripts"
+DEFAULT_STATS_FILE = DEFAULT_TRANSCRIPTS_DIR / "transcription_stats.json"
+DEFAULT_ANALYSIS_PROMPTS_FILE = PROJECT_ROOT / "config" / "analysis_prompts.json"
+
+
+# ============================================================================
+# AUDIO PROCESSING
+# ============================================================================
+
+AUDIO_SAMPLE_RATE = "16000"
+AUDIO_CHANNELS = "1"
+AUDIO_CODEC = "pcm_s16le"
+AUDIO_QUALITY = "192"
+
+
+# ============================================================================
+# DOWNLOAD RETRY CONFIGURATION
+# ============================================================================
+
+MAX_DOWNLOAD_RETRIES = 3
+RETRY_SLEEP_SECONDS = 10
+
+# Download strategy configurations
+DOWNLOAD_STRATEGY_CONFIGS = {
+    "android": {
+        "socket_timeout": 45,
+        "retries": 15,
+        "fragment_retries": 15,
+        "http_chunk_size": 10 * 1024 * 1024,  # 10MB
+    },
+    "web": {
+        "socket_timeout": 60,
+        "retries": 20,
+        "fragment_retries": 20,
+        "http_chunk_size": 5 * 1024 * 1024,  # 5MB
+    },
+    "mixed": {
+        "socket_timeout": 60,
+        "retries": 20,
+        "fragment_retries": 20,
+        "http_chunk_size": 10 * 1024 * 1024,  # 10MB
+    },
+    "ios": {
+        "socket_timeout": 30,
+        "retries": 10,
+        "fragment_retries": 10,
+        "http_chunk_size": 10 * 1024 * 1024,  # 10MB
+    },
+}
+
+
+# ============================================================================
+# LLM ANALYSIS CONFIGURATION
+# ============================================================================
+
+DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_API_BASE_URL = "https://api.groq.com/openai/v1"
+
+# Groq pricing (per 1M tokens) for cost estimation
+GROQ_PRICING = {
+    "llama-3.3-70b-versatile": {"input": 0.59, "output": 0.79},
+    "llama-3.1-70b-versatile": {"input": 0.59, "output": 0.79},
+    "llama-3.1-8b-instant": {"input": 0.05, "output": 0.08},
+    "mixtral-8x7b-32768": {"input": 0.24, "output": 0.24},
+}
+
+MAX_TRANSCRIPT_LENGTH = 120000  # Characters, roughly 30k tokens for safety
+ANALYSIS_TIMEOUT = 300  # 5 minutes max for API call
+
+# Transcript processing constants
+TRANSCRIPT_TRUNCATION_BUFFER = 100
+TRANSCRIPT_TRUNCATION_MIN_RATIO = 0.8
+CHAR_TO_TOKEN_RATIO = 4
+TOKEN_PRICING_DENOMINATOR = 1_000_000
+
+
+# ============================================================================
+# DATACLASSES FOR STRUCTURED DATA
+# ============================================================================
+
+
+@dataclass
+class VideoInfo:
+    """Metadata about a video or audio source."""
+
+    title: str
+    webpage_url: str = ""
+    channel: str = ""
+    uploader: str = ""
+    duration: float = 0
+    duration_string: str = ""
+    view_count: int = 0
+    upload_date: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "VideoInfo":
+        """Create VideoInfo from a dictionary (e.g., yt-dlp info_dict)."""
+        return cls(
+            title=data.get("title", "Unknown"),
+            webpage_url=data.get("webpage_url", data.get("url", "")),
+            channel=data.get("channel", data.get("uploader", "")),
+            uploader=data.get("uploader", ""),
+            duration=data.get("duration", 0),
+            duration_string=data.get("duration_string", ""),
+            view_count=data.get("view_count", 0),
+            upload_date=data.get("upload_date", ""),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for backward compatibility."""
+        return {
+            "title": self.title,
+            "webpage_url": self.webpage_url,
+            "channel": self.channel,
+            "uploader": self.uploader,
+            "duration": self.duration,
+            "duration_string": self.duration_string,
+            "view_count": self.view_count,
+            "upload_date": self.upload_date,
+        }
+
+
+@dataclass
+class TranscriptionStats:
+    """Statistics for a transcription run."""
+
+    run_uid: str
+    run_timestamp: str
+    video_title: str
+    smart_filename: str
+    video_url: str
+    run_duration: float
+    transcription_duration: float
+    audio_duration: float
+    success: bool
+    saved_to_obsidian: bool = False
+    is_local_file: bool = False
+    # Analysis metadata
+    analysis_performed: bool = False
+    analysis_type: str | None = None
+    analysis_name: str | None = None
+    analysis_duration: float = 0
+    analysis_model: str | None = None
+    analysis_tokens: int = 0
+    analysis_cost: float = 0
+    analysis_truncated: bool = False
+    analysis_file: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "run_uid": self.run_uid,
+            "run_timestamp": self.run_timestamp,
+            "video_title": self.video_title,
+            "smart_filename": self.smart_filename,
+            "video_url": self.video_url,
+            "run_duration": self.run_duration,
+            "transcription_duration": self.transcription_duration,
+            "audio_duration": self.audio_duration,
+            "success": self.success,
+            "saved_to_obsidian": self.saved_to_obsidian,
+            "is_local_file": self.is_local_file,
+            "analysis_performed": self.analysis_performed,
+            "analysis_type": self.analysis_type,
+            "analysis_name": self.analysis_name,
+            "analysis_duration": self.analysis_duration,
+            "analysis_model": self.analysis_model,
+            "analysis_tokens": self.analysis_tokens,
+            "analysis_cost": self.analysis_cost,
+            "analysis_truncated": self.analysis_truncated,
+            "analysis_file": self.analysis_file,
+        }
+
+
+@dataclass
+class AnalysisResult:
+    """Result from LLM analysis."""
+
+    analysis_text: str
+    analysis_type: str
+    analysis_name: str
+    model: str
+    provider: str
+    tokens_input: int
+    tokens_output: int
+    tokens_total: int
+    estimated_cost: float | None
+    duration: float
+    truncated: bool
+
+
+@dataclass
+class PromptTemplate:
+    """A prompt template for LLM analysis."""
+
+    name: str
+    description: str
+    system_prompt: str
+    user_prompt: str
+    max_output_tokens: int = 2000
+
+
+@dataclass
+class PromptsConfig:
+    """Configuration for analysis prompts."""
+
+    prompts: dict[str, PromptTemplate] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "PromptsConfig":
+        """Create PromptsConfig from dictionary."""
+        prompts = {}
+        for key, value in data.get("prompts", {}).items():
+            prompts[key] = PromptTemplate(
+                name=value["name"],
+                description=value["description"],
+                system_prompt=value["system_prompt"],
+                user_prompt=value["user_prompt"],
+                max_output_tokens=value.get("max_output_tokens", 2000),
+            )
+        return cls(prompts=prompts)

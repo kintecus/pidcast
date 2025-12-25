@@ -1,6 +1,10 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "pidcast"
-version = "0.1.0"
+version = "0.2.0"
 description = "YouTube transcription tool with Whisper and LLM analysis"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,68 +16,43 @@ dependencies = [
 ]
 
 [project.scripts]
-yt-transcribe = "src.yt_transcribe:main"
+pidcast = "pidcast.cli:main"
+yt-transcribe = "pidcast.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pidcast"]
 
 [dependency-groups]
 dev = [
     "ruff>=0.8.0",
+    "pytest>=8.0.0",
 ]
 
 [tool.ruff]
-# Target Python 3.10+ (for broad compatibility)
 target-version = "py310"
-
-# Line length (default is 88, but adjust if needed)
 line-length = 100
-
-# Source code directory
 src = ["src"]
-
-# Exclude patterns
 extend-exclude = [
     ".venv",
     ".git",
     "__pycache__",
     "*.pyc",
     ".ruff_cache",
-    "transcripts/",
     "data/",
+    "config/",
 ]
 
 [tool.ruff.lint]
-# Enable recommended rules
-select = [
-    "E",    # pycodestyle errors
-    "W",    # pycodestyle warnings
-    "F",    # pyflakes
-    "I",    # isort (import sorting)
-    "N",    # pep8-naming
-    "UP",   # pyupgrade (modernize Python code)
-    "B",    # flake8-bugbear (find likely bugs)
-    "C4",   # flake8-comprehensions
-    "SIM",  # flake8-simplify
-]
-
-# Ignore specific rules that might be too strict
-ignore = [
-    "E501",   # Line too long (handled by formatter)
-    "B008",   # Do not perform function calls in argument defaults
-    "C901",   # Function too complex (might want to refactor but not enforce yet)
-]
-
-[tool.ruff.lint.per-file-ignores]
-# Don't require type hints in scripts
-"src/yt_transcribe.py" = ["N802", "N803", "N806"]  # Allow lowercase function/variable names
+select = ["E", "W", "F", "I", "N", "UP", "B", "C4", "SIM"]
+ignore = ["E501", "B008", "C901"]
 
 [tool.ruff.format]
-# Use double quotes for strings
 quote-style = "double"
-
-# Indent with spaces
 indent-style = "space"
-
-# Format docstrings
 docstring-code-format = true
-
-# Unix-style line endings
 line-ending = "lf"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
