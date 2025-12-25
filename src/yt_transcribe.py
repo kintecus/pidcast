@@ -4,7 +4,9 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
+import traceback
 import uuid
 from typing import Any
 
@@ -317,6 +319,89 @@ def format_duration(seconds: float) -> str:
 # ============================================================================
 
 
+def build_download_strategy(
+    name: str,
+    config_key: str,
+    format_str: str,
+    player_clients: list[str],
+    output_template: str,
+    verbose: bool,
+    po_token: str | None = None,
+) -> dict[str, Any]:
+    """Build a single download strategy configuration."""
+    config = DOWNLOAD_STRATEGY_CONFIGS[config_key]
+    extractor_args = {"youtube": {"player_client": player_clients}}
+    if po_token:
+        extractor_args["youtube"]["po_token"] = po_token
+
+    return {
+        "name": name,
+        "opts": {
+            "format": format_str,
+            "outtmpl": output_template,
+            "extractor_args": extractor_args,
+            **build_ytdlp_audio_postprocessor_config(),
+            "socket_timeout": config["socket_timeout"],
+            "retries": config["retries"],
+            "fragment_retries": config["fragment_retries"],
+            "http_chunk_size": config["http_chunk_size"],
+            "quiet": not verbose,
+            "no_warnings": not verbose,
+        },
+    }
+
+
+def build_download_strategies(
+    output_template: str, verbose: bool, po_token: str | None = None
+) -> list[dict[str, Any]]:
+    """Build list of download strategies in priority order."""
+    strategies = []
+
+    if po_token:
+        strategies.append(
+            build_download_strategy(
+                "iOS client with PO Token",
+                "ios",
+                "bestaudio[ext=m4a]/bestaudio/best",
+                ["ios"],
+                output_template,
+                verbose,
+                po_token,
+            )
+        )
+
+    strategies.extend(
+        [
+            build_download_strategy(
+                "Android client (recommended)",
+                "android",
+                "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
+                ["android"],
+                output_template,
+                verbose,
+            ),
+            build_download_strategy(
+                "Web client with retry",
+                "web",
+                "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/worst",
+                ["web"],
+                output_template,
+                verbose,
+            ),
+            build_download_strategy(
+                "Mixed clients (Android + Web)",
+                "mixed",
+                "bestaudio/best",
+                ["android", "web"],
+                output_template,
+                verbose,
+            ),
+        ]
+    )
+
+    return strategies
+
+
 def build_ytdlp_audio_postprocessor_config() -> dict[str, Any]:
     """Build yt-dlp postprocessor configuration for audio extraction.
 
@@ -342,6 +427,23 @@ def build_ytdlp_audio_postprocessor_config() -> dict[str, Any]:
     }
 
 
+def try_single_download(
+    video_url: str, strategy: dict[str, Any], verbose: bool
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Attempt a single download with the given strategy."""
+    with yt_dlp.YoutubeDL(strategy["opts"]) as ydl:
+        info_dict = ydl.extract_info(video_url, download=True)
+        audio_file = "temp_audio.wav"
+        if ensure_wav_file(audio_file, verbose):
+            return audio_file, info_dict
+    return None, None
+
+
+def is_retryable_error(error_msg: str) -> bool:
+    """Check if the download error warrants a retry."""
+    return "Operation timed out" in error_msg or "SABR" in error_msg
+
+
 def download_audio_with_retry(
     video_url: str, output_template: str, verbose: bool = False, po_token: str | None = None
 ) -> tuple[str | None, dict[str, Any] | None]:
@@ -357,140 +459,52 @@ def download_audio_with_retry(
     Returns:
         tuple: (audio_file_path, video_info_dict) or (None, None) on failure
     """
-
-    # Strategy 1: Android client (most reliable without PO token)
-    # Strategy 2: Web client with aggressive settings
-    # Strategy 3: iOS client (requires PO token for some videos)
-    config_android = DOWNLOAD_STRATEGY_CONFIGS["android"]
-    strategies = [
-        {
-            "name": "Android client (recommended)",
-            "opts": {
-                "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
-                "outtmpl": output_template,
-                "extractor_args": {"youtube": {"player_client": ["android"]}},
-                **build_ytdlp_audio_postprocessor_config(),
-                "socket_timeout": config_android["socket_timeout"],
-                "retries": config_android["retries"],
-                "fragment_retries": config_android["fragment_retries"],
-                "http_chunk_size": config_android["http_chunk_size"],
-                "quiet": not verbose,
-                "no_warnings": not verbose,
-            },
-        },
-        {
-            "name": "Web client with retry",
-            "opts": {
-                "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/worst",
-                "outtmpl": output_template,
-                "extractor_args": {"youtube": {"player_client": ["web"]}},
-                **build_ytdlp_audio_postprocessor_config(),
-                "socket_timeout": DOWNLOAD_STRATEGY_CONFIGS["web"]["socket_timeout"],
-                "retries": DOWNLOAD_STRATEGY_CONFIGS["web"]["retries"],
-                "fragment_retries": DOWNLOAD_STRATEGY_CONFIGS["web"]["fragment_retries"],
-                "http_chunk_size": DOWNLOAD_STRATEGY_CONFIGS["web"]["http_chunk_size"],
-                "quiet": not verbose,
-                "no_warnings": not verbose,
-            },
-        },
-        {
-            "name": "Mixed clients (Android + Web)",
-            "opts": {
-                "format": "bestaudio/best",
-                "outtmpl": output_template,
-                "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
-                **build_ytdlp_audio_postprocessor_config(),
-                "socket_timeout": DOWNLOAD_STRATEGY_CONFIGS["mixed"]["socket_timeout"],
-                "retries": DOWNLOAD_STRATEGY_CONFIGS["mixed"]["retries"],
-                "fragment_retries": DOWNLOAD_STRATEGY_CONFIGS["mixed"]["fragment_retries"],
-                "http_chunk_size": DOWNLOAD_STRATEGY_CONFIGS["mixed"]["http_chunk_size"],
-                "quiet": not verbose,
-                "no_warnings": not verbose,
-            },
-        },
-    ]
-
-    # Add iOS strategy if PO token is provided
-    if po_token:
-        config_ios = DOWNLOAD_STRATEGY_CONFIGS["ios"]
-        ios_strategy = {
-            "name": "iOS client with PO Token",
-            "opts": {
-                "format": "bestaudio[ext=m4a]/bestaudio/best",
-                "outtmpl": output_template,
-                "extractor_args": {"youtube": {"player_client": ["ios"], "po_token": po_token}},
-                **build_ytdlp_audio_postprocessor_config(),
-                "socket_timeout": config_ios["socket_timeout"],
-                "retries": config_ios["retries"],
-                "fragment_retries": config_ios["fragment_retries"],
-                "http_chunk_size": config_ios["http_chunk_size"],
-                "quiet": not verbose,
-                "no_warnings": not verbose,
-            },
-        }
-        # Insert iOS as first strategy if we have a token
-        strategies.insert(0, ios_strategy)
+    strategies = build_download_strategies(output_template, verbose, po_token)
 
     for strategy_idx, strategy in enumerate(strategies, 1):
-        if verbose:
-            print(
-                f"\n=== Attempting Strategy {strategy_idx}/{len(strategies)}: {strategy['name']} ==="
-            )
+        log_verbose(
+            f"\n=== Attempting Strategy {strategy_idx}/{len(strategies)}: {strategy['name']} ===",
+            verbose,
+        )
 
         for attempt in range(1, MAX_DOWNLOAD_RETRIES + 1):
             try:
-                if verbose:
-                    print(f"Attempt {attempt}/{MAX_DOWNLOAD_RETRIES}...")
+                log_verbose(f"Attempt {attempt}/{MAX_DOWNLOAD_RETRIES}...", verbose)
 
-                with yt_dlp.YoutubeDL(strategy["opts"]) as ydl:
-                    info_dict = ydl.extract_info(video_url, download=True)
+                audio_file, info_dict = try_single_download(video_url, strategy, verbose)
+                if audio_file and info_dict:
+                    log_success(f"Download successful with {strategy['name']}!", verbose)
+                    return audio_file, info_dict
 
-                    # Check if audio file was created
-                    audio_file = "temp_audio.wav"
-                    if ensure_wav_file(audio_file, verbose):
-                        if verbose:
-                            print(f"✓ Download successful with {strategy['name']}!")
-                        return audio_file, info_dict
-                    else:
-                        if verbose:
-                            print("Audio file not found after download, retrying...")
+                log_verbose("Audio file not found after download, retrying...", verbose)
 
             except yt_dlp.utils.DownloadError as e:
                 error_msg = str(e)
-                if verbose:
-                    print(f"✗ Download error: {error_msg}")
+                log_verbose(f"Download error: {error_msg}", verbose)
 
-                # Check for specific errors that indicate we should try next strategy
-                if "Operation timed out" in error_msg or "SABR" in error_msg:
+                if is_retryable_error(error_msg):
                     if attempt < MAX_DOWNLOAD_RETRIES:
-                        if verbose:
-                            print(f"Retrying in {RETRY_SLEEP_SECONDS} seconds...")
+                        log_verbose(f"Retrying in {RETRY_SLEEP_SECONDS} seconds...", verbose)
                         time.sleep(RETRY_SLEEP_SECONDS)
                         continue
-                    else:
-                        if verbose:
-                            print(
-                                f"Max retries reached for {strategy['name']}, trying next strategy..."
-                            )
-                        break
-                else:
-                    # For other errors, try next strategy immediately
-                    if verbose:
-                        print("Trying next strategy...")
+                    log_verbose(
+                        f"Max retries reached for {strategy['name']}, trying next strategy...",
+                        verbose,
+                    )
                     break
 
+                log_verbose("Trying next strategy...", verbose)
+                break
+
             except Exception as e:
-                if verbose:
-                    print(f"✗ Unexpected error: {type(e).__name__}: {e}")
+                log_verbose(f"Unexpected error: {type(e).__name__}: {e}", verbose)
 
                 if attempt < MAX_DOWNLOAD_RETRIES:
-                    if verbose:
-                        print(f"Retrying in {RETRY_SLEEP_SECONDS} seconds...")
+                    log_verbose(f"Retrying in {RETRY_SLEEP_SECONDS} seconds...", verbose)
                     time.sleep(RETRY_SLEEP_SECONDS)
                 else:
                     break
 
-    # All strategies failed
     return None, None
 
 
@@ -499,11 +513,60 @@ def download_audio_with_retry(
 # ============================================================================
 
 
+def show_transcription_progress(start_time: float, estimated_duration: float | None) -> None:
+    """Show progress indicator for transcription.
+
+    Args:
+        start_time: When transcription started
+        estimated_duration: Estimated total duration in seconds (or None)
+    """
+    elapsed = time.time() - start_time
+
+    if estimated_duration and estimated_duration > 0:
+        # Show progress with percentage
+        progress = min(elapsed / estimated_duration, 0.99)  # Cap at 99% until actually done
+        bar_width = 30
+        filled = int(bar_width * progress)
+        bar = "█" * filled + "░" * (bar_width - filled)
+
+        elapsed_str = format_duration(elapsed)
+        remaining = max(0, estimated_duration - elapsed)
+        remaining_str = format_duration(remaining)
+
+        print(
+            f"\r  Progress: [{bar}] {progress * 100:.0f}% | "
+            f"Elapsed: {elapsed_str} | Remaining: ~{remaining_str}",
+            end="",
+            flush=True,
+        )
+    else:
+        # Just show elapsed time with spinner
+        spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        elapsed_str = format_duration(elapsed)
+        spinner_char = spinner[int(elapsed * 2) % len(spinner)]
+        print(f"\r  {spinner_char} Transcribing... Elapsed: {elapsed_str}", end="", flush=True)
+
+
 def run_whisper_transcription(
-    audio_file: str, whisper_model: str, output_format: str, output_file: str, verbose: bool = False
+    audio_file: str,
+    whisper_model: str,
+    output_format: str,
+    output_file: str,
+    verbose: bool = False,
+    estimated_duration: float | None = None,
+    show_progress: bool = True,
 ) -> bool:
     """
     Runs whisper transcription.
+
+    Args:
+        audio_file: Path to audio file
+        whisper_model: Path to Whisper model
+        output_format: Output format (txt, vtt, srt, json)
+        output_file: Output file path
+        verbose: Enable verbose output
+        estimated_duration: Estimated transcription duration for progress bar
+        show_progress: Whether to show progress indicator (disabled in verbose mode)
 
     Returns:
         bool: True if successful, False otherwise
@@ -529,14 +592,36 @@ def run_whisper_transcription(
         if verbose:
             print("Running Whisper command:", " ".join(command))
 
-        # Don't use capture_output to avoid buffer truncation on long transcriptions
-        # Let output go directly to stdout/stderr or suppress entirely
+        # Start progress tracking in a separate thread (only if not verbose and progress enabled)
+        progress_thread = None
+        stop_progress = None
+
+        if show_progress and not verbose:
+            stop_progress = threading.Event()
+            start_time = time.time()
+
+            def update_progress():
+                while not stop_progress.is_set():
+                    show_transcription_progress(start_time, estimated_duration)
+                    time.sleep(0.1)  # Update 10 times per second
+
+            progress_thread = threading.Thread(target=update_progress, daemon=True)
+            progress_thread.start()
+
+        # Run transcription
         if verbose:
             # Show all output in verbose mode
             subprocess.run(command, check=True)
         else:
             # Suppress output in non-verbose mode but don't capture (avoids truncation)
             subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+        # Stop progress indicator
+        if stop_progress:
+            stop_progress.set()
+            if progress_thread:
+                progress_thread.join(timeout=0.5)
+            print()  # New line after progress bar
 
         if verbose:
             print("✓ Transcription completed successfully.")
@@ -1040,8 +1125,6 @@ def analyze_transcript_with_llm(
     except Exception as e:
         print(f"✗ Error during LLM analysis: {type(e).__name__}: {e}")
         if verbose:
-            import traceback
-
             traceback.print_exc()
         return None
 
@@ -1114,10 +1197,114 @@ def create_analysis_markdown_file(
     except Exception as e:
         print(f"✗ Error creating analysis file: {e}")
         if verbose:
-            import traceback
-
             traceback.print_exc()
         return None
+
+
+def render_analysis_to_terminal(analysis_file: str, verbose: bool = False) -> bool:
+    """
+    Render analysis markdown file to terminal with Rich formatting.
+
+    Args:
+        analysis_file: Path to analysis markdown file
+        verbose: Enable verbose output (shows extended metadata)
+
+    Returns:
+        True if successful, False on error
+    """
+    try:
+        from rich.console import Console
+        from rich.markdown import Markdown
+        from rich.panel import Panel
+        from rich.table import Table
+    except ImportError:
+        if verbose:
+            print("⚠ 'rich' package not installed. Install with: uv add rich")
+        return False
+
+    # Read analysis file
+    try:
+        with open(analysis_file, encoding="utf-8") as f:
+            content = f.read()
+    except Exception as e:
+        if verbose:
+            print(f"✗ Error reading analysis file: {e}")
+        return False
+
+    # Split YAML front matter from markdown content
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        if verbose:
+            print("✗ Invalid analysis file format (missing YAML front matter)")
+        return False
+
+    yaml_content = parts[1].strip()
+    markdown_content = parts[2].strip()
+
+    # Parse YAML front matter (simple key-value extraction)
+    metadata = {}
+    for line in yaml_content.split("\n"):
+        if ":" in line:
+            key, value = line.split(":", 1)
+            metadata[key.strip()] = value.strip().strip("\"'")
+
+    # Create Rich console
+    console = Console()
+
+    # Build metadata table
+    table = Table(show_header=False, box=None, padding=(0, 1))
+    table.add_column(style="cyan bold", width=20)
+    table.add_column(style="white")
+
+    # Add key metadata rows
+    table.add_row("Title", metadata.get("title", "Unknown"))
+    table.add_row(
+        "Analysis Type",
+        metadata.get("analysis_name", metadata.get("analysis_type", "Unknown")),
+    )
+    table.add_row("Model", metadata.get("analysis_model", "Unknown"))
+    table.add_row("Tokens", metadata.get("tokens_total", "Unknown"))
+
+    # Show cost if available
+    cost = metadata.get("estimated_cost")
+    if cost and cost != "None":
+        try:
+            table.add_row("Cost", f"${float(cost):.4f}")
+        except (ValueError, TypeError):
+            table.add_row("Cost", cost)
+
+    # Show duration
+    duration = metadata.get("analysis_duration")
+    if duration:
+        try:
+            table.add_row("Duration", f"{float(duration):.2f}s")
+        except (ValueError, TypeError):
+            table.add_row("Duration", duration)
+
+    # Add verbose metadata if requested
+    if verbose:
+        table.add_row("", "")  # Blank row separator
+        table.add_row("Source", metadata.get("source_transcript", "Unknown"))
+        table.add_row("Channel", metadata.get("channel", "Unknown"))
+        table.add_row("Video Duration", metadata.get("duration", "Unknown"))
+        table.add_row(
+            "Tokens (In/Out)",
+            f"{metadata.get('tokens_input', '?')}/{metadata.get('tokens_output', '?')}",
+        )
+        truncated = metadata.get("transcript_truncated", "False")
+        table.add_row("Truncated", "Yes" if truncated == "True" else "No")
+
+    # Render metadata panel
+    console.print(
+        Panel(table, title="[bold cyan]Analysis Metadata[/bold cyan]", border_style="cyan")
+    )
+    console.print()  # Blank line
+
+    # Render markdown content
+    md = Markdown(markdown_content)
+    console.print(md)
+
+    return True
 
 
 # ============================================================================
@@ -1377,7 +1564,12 @@ def main():
         output_format = args.output_format.replace("o", "")
 
         if not run_whisper_transcription(
-            audio_file, args.whisper_model, output_format, temp_whisper_output, args.verbose
+            audio_file,
+            args.whisper_model,
+            output_format,
+            temp_whisper_output,
+            args.verbose,
+            estimated_duration=estimated_time,
         ):
             print("\n✗ Transcription failed.")
             return
@@ -1480,9 +1672,14 @@ def main():
                                 print(
                                     f"\n✓ Analysis completed in {format_duration(analysis_duration)}"
                                 )
-                                print(f"✓ Analysis file: {analysis_file}")
+                                print(f"✓ Analysis file: file://{os.path.abspath(analysis_file)}")
+
+                                # Render analysis to terminal
+                                print()  # Blank line for separation
+                                render_analysis_to_terminal(analysis_file, verbose=args.verbose)
+
                                 if analysis_results.get("estimated_cost"):
-                                    print(f"✓ Cost: ${analysis_results['estimated_cost']:.4f}")
+                                    print(f"\n✓ Cost: ${analysis_results['estimated_cost']:.4f}")
                             else:
                                 error_msg = "✗ Failed to create analysis file"
                                 if not args.skip_analysis_on_error:
@@ -1501,8 +1698,6 @@ def main():
                         if not args.skip_analysis_on_error:
                             print(error_msg)
                             if args.verbose:
-                                import traceback
-
                                 traceback.print_exc()
                             return
                         print(error_msg + " (continuing)")
@@ -1551,7 +1746,7 @@ def main():
         print(f"\n{'=' * 60}")
         print("✓ Transcription completed successfully!")
         print(f"{'=' * 60}")
-        print(f"Markdown file: {markdown_file}")
+        print(f"Markdown file: file://{os.path.abspath(markdown_file)}")
         print(f"Total duration: {format_duration(duration)}")
         print(f"Transcription duration: {format_duration(transcription_duration)}")
 
@@ -1573,8 +1768,6 @@ def main():
     except Exception as e:
         print(f"\n✗ An unexpected error occurred: {type(e).__name__}: {e}")
         if args.verbose:
-            import traceback
-
             traceback.print_exc()
 
     finally:
