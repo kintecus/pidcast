@@ -8,6 +8,7 @@ dependencies = [
     "yt-dlp>=2025.10.22",
     "groq>=1.0.0",
     "python-dotenv>=1.2.1",
+    "rich>=13.0.0",
 ]
 
 [project.scripts]
