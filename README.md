@@ -41,16 +41,19 @@ A powerful YouTube transcription tool that downloads audio from YouTube videos a
 
    Get a free API key at: https://console.groq.com/
 
-4. **Run**:
+4. **Configure paths**:
+   Create a `.env` file (copy from `.env.example`) and set paths for `WHISPER_CPP_PATH`, `WHISPER_MODEL`, and `OBSIDIAN_VAULT_PATH`.
+
+5. **Run**:
    ```bash
    # Basic transcription
-   uv run python src/yt_transcribe.py "https://youtube.com/watch?v=VIDEO_ID"
+   uv run pidcast "https://youtube.com/watch?v=VIDEO_ID"
 
    # With LLM analysis
-   uv run python src/yt_transcribe.py "VIDEO_URL" --analyze
+   uv run pidcast "VIDEO_URL" --analyze
 
    # Save to Obsidian vault
-   uv run python src/yt_transcribe.py "VIDEO_URL" --save_to_obsidian --analyze
+   uv run pidcast "VIDEO_URL" --save_to_obsidian --analyze
    ```
 
 ## External Dependencies
@@ -59,31 +62,31 @@ The following tools must be installed separately:
 
 - **yt-dlp** - YouTube audio download
 - **ffmpeg** - Audio processing
-- **whisper.cpp** - Transcription engine (set `WHISPER_CPP_PATH` and `WHISPER_MODEL` in script)
+- **whisper.cpp** - Transcription engine (set `WHISPER_CPP_PATH` and `WHISPER_MODEL` in `.env`)
 
 ## Usage Examples
 
 ```bash
 # Transcribe a YouTube video
-./src/yt_transcribe.py "https://www.youtube.com/watch?v=VIDEO_ID"
+uv run pidcast "https://www.youtube.com/watch?v=VIDEO_ID"
 
 # Transcribe with verbose output
-./src/yt_transcribe.py "VIDEO_URL" --verbose
+uv run pidcast "VIDEO_URL" --verbose
 
 # Analyze transcript with LLM
-./src/yt_transcribe.py "VIDEO_URL" --analyze
+uv run pidcast "VIDEO_URL" --analyze
 
 # Extract key points instead of summary
-./src/yt_transcribe.py "VIDEO_URL" --analyze --analysis_type key_points
+uv run pidcast "VIDEO_URL" --analyze --analysis_type key_points
 
 # Transcribe local audio file
-./src/yt_transcribe.py "/path/to/audio/file.mp3"
+uv run pidcast "/path/to/audio/file.mp3"
 
 # Keep the raw transcript file
-./src/yt_transcribe.py "VIDEO_URL" --keep_transcript
+uv run pidcast "VIDEO_URL" --keep_transcript
 
 # Use PO Token for restricted videos
-./src/yt_transcribe.py "VIDEO_URL" --po_token "client.type+TOKEN"
+uv run pidcast "VIDEO_URL" --po_token "client.type+TOKEN"
 ```
 
 ## Development
@@ -114,7 +117,7 @@ uv sync --upgrade
 
 ## Documentation
 
-See [CLAUDE.md](src/CLAUDE.md) for detailed documentation including:
+See [CLAUDE.md](CLAUDE.md) for detailed documentation including:
 - Architecture overview
 - Download strategies
 - LLM analysis configuration
