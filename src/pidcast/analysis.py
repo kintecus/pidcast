@@ -4,6 +4,7 @@ import datetime
 import logging
 import time
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
 
 from .config import (
@@ -21,11 +22,28 @@ from .config import (
     AnalysisResult,
     PromptsConfig,
     VideoInfo,
+    get_fallback_chain,
 )
 from .exceptions import AnalysisError
 from .utils import load_json_file, log_error, log_success, log_warning, save_json_file
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# RATE LIMIT VIOLATION DATA
+# ============================================================================
+
+
+@dataclass
+class RateLimitViolation:
+    """Structured rate limit violation information."""
+
+    is_violated: bool
+    violation_types: list[str]  # ["TPM", "RPM", "RPD", "TPD"]
+    has_tpm_violation: bool
+    error_message: str | None = None
+    current_usage: dict[str, int] | None = None  # rpm, tpm, rpd, tpd usage
 
 
 # ============================================================================
@@ -208,7 +226,7 @@ def validate_rate_limits(
     model: str,
     stats_file_path: Path | str,
     verbose: bool = False,
-) -> tuple[bool, str | None]:
+) -> RateLimitViolation:
     """Validate if request would exceed Groq API rate limits.
 
     Checks against free tier limits for TPM, TPD, RPM, RPD.
@@ -220,13 +238,13 @@ def validate_rate_limits(
         verbose: Enable verbose output
 
     Returns:
-        Tuple of (is_valid, error_message)
+        RateLimitViolation with structured violation data
     """
     # Validate model is in rate limits config
     if model not in GROQ_RATE_LIMITS:
         if verbose:
             logger.debug(f"Model '{model}' not in GROQ_RATE_LIMITS, skipping validation")
-        return True, None
+        return RateLimitViolation(is_violated=False, violation_types=[], has_tpm_violation=False)
 
     limits = GROQ_RATE_LIMITS[model]
 
@@ -235,17 +253,17 @@ def validate_rate_limits(
     if not stats_file.exists():
         if verbose:
             logger.debug("Stats file doesn't exist yet, allowing first request")
-        return True, None
+        return RateLimitViolation(is_violated=False, violation_types=[], has_tpm_violation=False)
 
     try:
         stats_data = load_json_file(stats_file, default=[])
     except Exception as e:
         if verbose:
             logger.warning(f"Could not load stats file for rate limit checking: {e}")
-        return True, None
+        return RateLimitViolation(is_violated=False, violation_types=[], has_tpm_violation=False)
 
     if not isinstance(stats_data, list) or len(stats_data) == 0:
-        return True, None
+        return RateLimitViolation(is_violated=False, violation_types=[], has_tpm_violation=False)
 
     # Current time for window calculations
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -295,38 +313,60 @@ def validate_rate_limits(
                 logger.debug(f"Error parsing stat entry: {e}")
             continue
 
-    # Check each limit
-    violations = []
+    # Check each limit and track violation types
+    violation_types = []
+    violation_messages = []
 
     if rpm_usage + 1 > limits["rpm"]:
-        violations.append(
+        violation_types.append("RPM")
+        violation_messages.append(
             f"RPM limit exceeded: {rpm_usage} requests in last minute + 1 new request > {limits['rpm']} limit"
         )
 
     if tpm_usage + estimated_tokens > limits["tpm"]:
-        violations.append(
+        violation_types.append("TPM")
+        violation_messages.append(
             f"TPM limit exceeded: {tpm_usage} tokens in last minute + {estimated_tokens} estimated tokens > {limits['tpm']} limit"
         )
 
     if rpd_usage + 1 > limits["rpd"]:
-        violations.append(
+        violation_types.append("RPD")
+        violation_messages.append(
             f"RPD limit exceeded: {rpd_usage} requests in last 24h + 1 new request > {limits['rpd']} limit"
         )
 
     # Only check TPD if limit is set (not 0)
     if limits["tpd"] > 0 and tpd_usage + estimated_tokens > limits["tpd"]:
-        violations.append(
+        violation_types.append("TPD")
+        violation_messages.append(
             f"TPD limit exceeded: {tpd_usage} tokens in last 24h + {estimated_tokens} estimated tokens > {limits['tpd']} limit"
         )
 
-    # If any violations, build error message
-    if violations:
+    # If any violations, build error message and return structured data
+    if violation_types:
         error_msg = _build_rate_limit_error_message(
-            violations, model, rpm_usage, tpm_usage, rpd_usage, tpd_usage, estimated_tokens, limits
+            violation_messages,
+            model,
+            rpm_usage,
+            tpm_usage,
+            rpd_usage,
+            tpd_usage,
+            estimated_tokens,
+            limits,
         )
-        return False, error_msg
+        return RateLimitViolation(
+            is_violated=True,
+            violation_types=violation_types,
+            has_tpm_violation="TPM" in violation_types,
+            error_message=error_msg,
+            current_usage={"rpm": rpm_usage, "tpm": tpm_usage, "rpd": rpd_usage, "tpd": tpd_usage},
+        )
 
-    return True, None
+    return RateLimitViolation(
+        is_violated=False,
+        violation_types=[],
+        has_tpm_violation=False,
+    )
 
 
 def _build_rate_limit_error_message(
@@ -357,6 +397,26 @@ def _build_rate_limit_error_message(
     return msg
 
 
+def _get_next_fallback_model(
+    tried_models: set[str],
+    original_model: str | None = None,
+) -> str | None:
+    """Get next model to try in fallback chain.
+
+    Args:
+        tried_models: Set of models already attempted
+        original_model: Original model user requested
+
+    Returns:
+        Next model to try, or None if all exhausted
+    """
+    fallback_chain = get_fallback_chain(original_model)
+    for model in fallback_chain:
+        if model not in tried_models:
+            return model
+    return None
+
+
 # ============================================================================
 # LLM ANALYSIS
 # ============================================================================
@@ -371,7 +431,11 @@ def analyze_transcript_with_llm(
     model: str = DEFAULT_GROQ_MODEL,
     verbose: bool = False,
 ) -> AnalysisResult:
-    """Analyze transcript using Groq LLM API.
+    """Analyze transcript using Groq LLM API with automatic TPM fallback.
+
+    Automatically falls back to models with higher TPM capacity if the requested
+    model would exceed its tokens-per-minute limit. Fallback chain is ordered by
+    TPM capacity (highest first): groq/compound, mixtral, etc.
 
     Args:
         transcript: Full transcript text
@@ -379,14 +443,14 @@ def analyze_transcript_with_llm(
         analysis_type: Which prompt template to use
         prompts_config: Loaded prompts configuration
         api_key: Groq API key
-        model: Model name to use
+        model: Model name to use (preferred, may fallback)
         verbose: Enable verbose output
 
     Returns:
-        AnalysisResult with analysis data
+        AnalysisResult with analysis data (model field shows actual model used)
 
     Raises:
-        AnalysisError: If analysis fails
+        AnalysisError: If analysis fails (all fallback models exhausted or non-TPM error)
     """
     # Validate analysis_type exists
     if analysis_type not in prompts_config.prompts:
@@ -415,34 +479,81 @@ def analyze_transcript_with_llm(
     # Estimate tokens
     estimated_input_tokens = (len(system_prompt) + len(user_prompt)) // CHAR_TO_TOKEN_RATIO
     estimated_output_tokens = template.max_output_tokens
-    estimated_cost = estimate_analysis_cost(estimated_input_tokens, estimated_output_tokens, model)
+    estimated_total_tokens = estimated_input_tokens + estimated_output_tokens
 
+    # Track fallback attempts
+    tried_models: set[str] = set()
+    current_model = model
+    original_requested_model = model
+
+    # Log initial estimation
+    estimated_cost = estimate_analysis_cost(
+        estimated_input_tokens, estimated_output_tokens, current_model
+    )
     if verbose or estimated_cost:
         logger.info("\nAnalysis Estimation:")
         logger.info(f"  Type: {template.name}")
-        logger.info(f"  Model: {model}")
+        logger.info(f"  Model: {current_model}")
         logger.info(f"  Estimated input tokens: ~{estimated_input_tokens}")
         if estimated_cost:
             logger.info(f"  Estimated cost: ${estimated_cost:.4f}")
 
-    # Validate rate limits
-    if verbose:
-        logger.info("Checking Groq API rate limits...")
+    # FALLBACK RETRY LOOP
+    while True:
+        tried_models.add(current_model)
 
-    is_valid, error_msg = validate_rate_limits(
-        estimated_input_tokens + estimated_output_tokens,
-        model,
-        DEFAULT_STATS_FILE,
-        verbose,
-    )
+        # Validate rate limits
+        if verbose:
+            logger.info(f"Checking Groq API rate limits for {current_model}...")
 
-    if not is_valid:
-        raise AnalysisError(error_msg)
+        violation = validate_rate_limits(
+            estimated_total_tokens,
+            current_model,
+            DEFAULT_STATS_FILE,
+            verbose,
+        )
 
-    if verbose:
-        logger.info("✓ Rate limits OK")
+        if violation.is_violated:
+            # Check if TPM-only violation (fallback eligible)
+            if violation.has_tpm_violation and len(violation.violation_types) == 1:
+                # TPM-only violation - try fallback
+                logger.warning(
+                    f"TPM limit would be exceeded with {current_model} "
+                    f"({violation.current_usage['tpm']} + {estimated_total_tokens} > "
+                    f"{GROQ_RATE_LIMITS[current_model]['tpm']})"
+                )
 
-    # Call API
+                # Get next fallback model
+                next_model = _get_next_fallback_model(tried_models, original_requested_model)
+                if next_model and next_model != current_model:
+                    logger.info(f"Falling back to {next_model}...")
+                    current_model = next_model
+                    continue  # Retry with fallback model
+                else:
+                    # No more fallback models available
+                    all_models_tpm = ", ".join(
+                        f"{m} ({GROQ_RATE_LIMITS[m]['tpm']} TPM)" for m in tried_models
+                    )
+                    raise AnalysisError(
+                        f"TPM limit exceeded and all fallback models exhausted:\n"
+                        f"  Attempted: {all_models_tpm}\n"
+                        f"  Request tokens: {estimated_total_tokens}\n\n"
+                        f"  Options:\n"
+                        f"    1. Wait for rate limits to reset (1-24 hours)\n"
+                        f"    2. Use --skip_analysis_on_error to skip analysis\n"
+                        f"    3. Upgrade to a paid Groq plan for higher limits"
+                    )
+            else:
+                # Non-TPM violation or multiple violations (hard failure)
+                raise AnalysisError(violation.error_message)
+
+        # Rate limits OK, proceed with API call
+        if verbose:
+            logger.info(f"✓ Rate limits OK for {current_model}")
+
+        break  # Exit retry loop
+
+    # Call API with selected model
     try:
         from groq import Groq
 
@@ -451,7 +562,7 @@ def analyze_transcript_with_llm(
         start_time = time.time()
 
         response = client.chat.completions.create(
-            model=model,
+            model=current_model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -468,13 +579,20 @@ def analyze_transcript_with_llm(
         tokens_input = response.usage.prompt_tokens
         tokens_output = response.usage.completion_tokens
         tokens_total = response.usage.total_tokens
-        actual_cost = estimate_analysis_cost(tokens_input, tokens_output, model)
+        actual_cost = estimate_analysis_cost(tokens_input, tokens_output, current_model)
+
+        # Log fallback if it occurred
+        if current_model != original_requested_model:
+            logger.info(
+                f"Analysis completed with fallback model {current_model} "
+                f"(requested: {original_requested_model})"
+            )
 
         return AnalysisResult(
             analysis_text=analysis_text,
             analysis_type=analysis_type,
             analysis_name=template.name,
-            model=model,
+            model=current_model,  # Track actual model used
             provider="groq",
             tokens_input=tokens_input,
             tokens_output=tokens_output,
