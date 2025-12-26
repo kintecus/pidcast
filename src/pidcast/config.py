@@ -167,6 +167,54 @@ GROQ_RATE_LIMITS = {
     },
 }
 
+
+# ============================================================================
+# MODEL FALLBACK HELPERS
+# ============================================================================
+
+
+def get_fallback_models_by_tpm() -> list[str]:
+    """Get list of models ordered by TPM (tokens per minute) in descending order.
+
+    Returns:
+        List of model names ordered highest to lowest TPM
+    """
+    models_with_tpm = [(model, limits["tpm"]) for model, limits in GROQ_RATE_LIMITS.items()]
+    sorted_models = sorted(models_with_tpm, key=lambda x: x[1], reverse=True)
+    return [model for model, _ in sorted_models]
+
+
+def get_fallback_chain(requested_model: str | None = None) -> list[str]:
+    """Get ordered list of models to try for fallback on TPM violation.
+
+    Args:
+        requested_model: Model user explicitly requested (if any)
+
+    Returns:
+        List of models in fallback order
+    """
+    all_models = get_fallback_models_by_tpm()
+
+    if not requested_model or requested_model not in GROQ_RATE_LIMITS:
+        return all_models
+
+    # Return only models with higher or equal TPM than requested
+    requested_tpm = GROQ_RATE_LIMITS[requested_model]["tpm"]
+    return [m for m in all_models if GROQ_RATE_LIMITS[m]["tpm"] >= requested_tpm]
+
+
+def get_model_tpm_limit(model: str) -> int:
+    """Get TPM limit for a specific model.
+
+    Args:
+        model: Model name
+
+    Returns:
+        TPM limit, or 0 if model not found
+    """
+    return GROQ_RATE_LIMITS.get(model, {}).get("tpm", 0)
+
+
 MAX_TRANSCRIPT_LENGTH = 120000  # Characters, roughly 30k tokens for safety
 ANALYSIS_TIMEOUT = 300  # 5 minutes max for API call
 
