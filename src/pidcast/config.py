@@ -109,6 +109,62 @@ GROQ_PRICING = {
     "llama-3.1-70b-versatile": {"input": 0.59, "output": 0.79},
     "llama-3.1-8b-instant": {"input": 0.05, "output": 0.08},
     "mixtral-8x7b-32768": {"input": 0.24, "output": 0.24},
+    "groq/compound": {"input": 0.30, "output": 0.40},  # Estimated (uses multiple models)
+    "moonshotai/kimi-k2-instruct-0905": {"input": 1.00, "output": 3.00},
+    "openai/gpt-oss-120b": {"input": 0.15, "output": 0.60},
+    "openai/gpt-oss-20b": {"input": 0.075, "output": 0.30},
+}
+
+# Groq rate limits (free tier) for validation
+GROQ_RATE_LIMITS = {
+    "llama-3.3-70b-versatile": {
+        "rpm": 30,  # Requests per minute
+        "rpd": 1000,  # Requests per day
+        "tpm": 12000,  # Tokens per minute
+        "tpd": 100000,  # Tokens per day
+    },
+    "llama-3.1-70b-versatile": {
+        "rpm": 30,
+        "rpd": 1000,
+        "tpm": 12000,
+        "tpd": 100000,
+    },
+    "llama-3.1-8b-instant": {
+        "rpm": 30,
+        "rpd": 14400,
+        "tpm": 6000,
+        "tpd": 500000,
+    },
+    "mixtral-8x7b-32768": {
+        "rpm": 30,
+        "rpd": 14400,
+        "tpm": 40000,
+        "tpd": 1000000,
+    },
+    "groq/compound": {
+        "rpm": 30,
+        "rpd": 250,
+        "tpm": 70000,
+        "tpd": 0,  # No daily token limit specified
+    },
+    "moonshotai/kimi-k2-instruct-0905": {
+        "rpm": 60,
+        "rpd": 1000,
+        "tpm": 10000,
+        "tpd": 300000,
+    },
+    "openai/gpt-oss-120b": {
+        "rpm": 30,
+        "rpd": 1000,
+        "tpm": 8000,
+        "tpd": 200000,
+    },
+    "openai/gpt-oss-20b": {
+        "rpm": 30,
+        "rpd": 1000,
+        "tpm": 8000,
+        "tpd": 200000,
+    },
 }
 
 MAX_TRANSCRIPT_LENGTH = 120000  # Characters, roughly 30k tokens for safety
