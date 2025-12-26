@@ -286,6 +286,7 @@ class TranscriptionStats:
     success: bool
     saved_to_obsidian: bool = False
     is_local_file: bool = False
+    analysis_only: bool = False
     # Analysis metadata
     analysis_performed: bool = False
     analysis_type: str | None = None
@@ -311,6 +312,7 @@ class TranscriptionStats:
             "success": self.success,
             "saved_to_obsidian": self.saved_to_obsidian,
             "is_local_file": self.is_local_file,
+            "analysis_only": self.analysis_only,
             "analysis_performed": self.analysis_performed,
             "analysis_type": self.analysis_type,
             "analysis_name": self.analysis_name,

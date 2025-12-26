@@ -93,10 +93,17 @@ Examples:
   %(prog)s "/path/to/audio/file.mp3"
   %(prog)s "https://www.youtube.com/watch?v=VIDEO_ID" --output_dir ./transcripts --verbose
   %(prog)s "VIDEO_URL" --analyze --analysis_type key_points
+  %(prog)s --analyze_existing transcript.md --analysis_type summary
         """,
     )
 
-    parser.add_argument("input_source", help="YouTube video URL or path to local audio file")
+    # Input source group (mutually exclusive)
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument("input_source", nargs="?", help="YouTube video URL or path to local audio file")
+    input_group.add_argument(
+        "--analyze_existing",
+        help="Path to existing transcript file (.md or .txt) to analyze without re-transcribing",
+    )
     parser.add_argument(
         "--output_dir",
         default=None,
@@ -172,19 +179,117 @@ Examples:
 # ============================================================================
 
 
+def parse_transcript_file(filepath: str, verbose: bool = False) -> tuple[str, VideoInfo]:
+    """Parse a transcript file and extract transcript text and metadata.
+
+    Args:
+        filepath: Path to transcript file (.md or .txt)
+        verbose: Enable verbose output
+
+    Returns:
+        Tuple of (transcript_text, video_info)
+
+    Raises:
+        FileProcessingError: If file doesn't exist, is empty, or can't be parsed
+    """
+    file_path = Path(filepath)
+
+    # Validate file exists
+    if not file_path.exists():
+        raise FileProcessingError(f"File not found: {filepath}")
+
+    # Validate extension
+    if file_path.suffix not in [".md", ".txt"]:
+        raise FileProcessingError(
+            f"Unsupported file type: {file_path.suffix}. Only .md and .txt files are supported."
+        )
+
+    # Read file content
+    try:
+        with open(file_path, encoding="utf-8") as f:
+            content = f.read()
+    except Exception as e:
+        raise FileProcessingError(f"Failed to read file: {e}")
+
+    # Validate not empty
+    if not content.strip():
+        raise FileProcessingError("File is empty")
+
+    if verbose:
+        logger.info(f"Parsing {file_path.suffix} file: {filepath}")
+
+    # Parse based on file type
+    if file_path.suffix == ".md":
+        # Try to parse YAML front matter
+        parts = content.split("---", 2)
+
+        if len(parts) >= 3:
+            # Has YAML front matter
+            try:
+                yaml_content = parts[1].strip()
+                transcript_text = parts[2].strip()
+
+                # Parse YAML manually (simple key: value parsing)
+                metadata: dict[str, Any] = {}
+                for line in yaml_content.split("\n"):
+                    line = line.strip()
+                    if ":" in line and not line.startswith("#"):
+                        key, value = line.split(":", 1)
+                        key = key.strip()
+                        value = value.strip().strip("'\"")
+                        metadata[key] = value
+
+                # Create VideoInfo from metadata
+                video_info = VideoInfo(
+                    title=metadata.get("title", file_path.stem),
+                    webpage_url=metadata.get("url", ""),
+                    channel=metadata.get("channel", "Unknown"),
+                    duration_string=metadata.get("duration", "Unknown"),
+                )
+
+                if verbose:
+                    logger.info(f"Extracted metadata: title='{video_info.title}'")
+
+            except Exception as e:
+                # Fallback: treat as plain text
+                if verbose:
+                    logger.warning(f"Failed to parse YAML front matter, treating as plain text: {e}")
+                transcript_text = content
+                video_info = VideoInfo(title=file_path.stem)
+        else:
+            # No YAML front matter, treat as plain text
+            transcript_text = content
+            video_info = VideoInfo(title=file_path.stem)
+
+    else:  # .txt file
+        transcript_text = content
+        video_info = VideoInfo(title=file_path.stem)
+
+        if verbose:
+            logger.info(f"Plain text file - using filename as title: '{video_info.title}'")
+
+    # Validate transcript is not empty
+    if not transcript_text.strip():
+        raise FileProcessingError("No transcript content found in file")
+
+    return transcript_text, video_info
+
+
 def run_analysis(
-    markdown_file: Path,
+    markdown_file: Path | None,
     video_info: VideoInfo,
     output_dir: Path,
     args: argparse.Namespace,
+    transcript_text: str | None = None,
 ) -> tuple[Path | None, float, dict[str, Any]]:
     """Run LLM analysis on transcript.
 
     Args:
-        markdown_file: Path to transcript markdown file
+        markdown_file: Path to transcript markdown file (None if using transcript_text)
         video_info: Video metadata
         output_dir: Output directory
         args: Parsed arguments
+        transcript_text: Optional pre-loaded transcript text
 
     Returns:
         Tuple of (analysis_file, duration, metadata)
@@ -204,13 +309,18 @@ def run_analysis(
     if not prompts_config:
         raise AnalysisError(f"Failed to load analysis prompts from: {prompts_file}")
 
-    # Read transcript from markdown file
-    with open(markdown_file, encoding="utf-8") as f:
-        content = f.read()
+    # Get transcript text
+    if transcript_text is None:
+        if markdown_file is None:
+            raise AnalysisError("Either markdown_file or transcript_text must be provided")
 
-    # Extract transcript (everything after front matter)
-    parts = content.split("---", 2)
-    transcript_text = parts[2].strip() if len(parts) >= 3 else content
+        # Read transcript from markdown file
+        with open(markdown_file, encoding="utf-8") as f:
+            content = f.read()
+
+        # Extract transcript (everything after front matter)
+        parts = content.split("---", 2)
+        transcript_text = parts[2].strip() if len(parts) >= 3 else content
 
     # Analyze
     analysis_start = time.time()
@@ -225,6 +335,13 @@ def run_analysis(
     )
 
     # Create analysis markdown
+    # If markdown_file is None, create a placeholder filename from video title
+    source_file_for_naming = markdown_file
+    if source_file_for_naming is None:
+        # Create a smart filename for the analysis based on video title
+        smart_filename = create_smart_filename(video_info.title, max_length=60, include_date=True)
+        source_file_for_naming = output_dir / f"{smart_filename}.md"
+
     analysis_file = create_analysis_markdown_file(
         {
             "analysis_text": result.analysis_text,
@@ -239,7 +356,7 @@ def run_analysis(
             "duration": result.duration,
             "truncated": result.truncated,
         },
-        markdown_file,
+        source_file_for_naming,
         video_info,
         output_dir,
         args.verbose,
@@ -295,6 +412,81 @@ def main() -> None:
     success = False
     is_local_file = False
     video_info: VideoInfo | None = None
+
+    # Handle analyze-existing mode
+    if args.analyze_existing:
+        if args.verbose:
+            log_section("Analyze Existing Transcript")
+            logger.info(f"Input file: {args.analyze_existing}")
+            logger.info(f"Run ID: {run_uid}")
+            logger.info(f"Timestamp: {run_timestamp}")
+
+        try:
+            # Ensure output directory exists
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Parse transcript file
+            transcript_text, video_info = parse_transcript_file(args.analyze_existing, args.verbose)
+
+            logger.info(f"Title: {video_info.title}")
+            if video_info.channel != "Unknown":
+                logger.info(f"Channel: {video_info.channel}")
+
+            # Run analysis
+            analysis_file, analysis_duration, analysis_metadata = run_analysis(
+                None,  # No source markdown file in analyze-existing mode
+                video_info,
+                output_dir,
+                args,
+                transcript_text=transcript_text,
+            )
+
+            # Save statistics
+            end_time = time.time()
+            duration = end_time - start_time
+
+            stats = TranscriptionStats(
+                run_uid=run_uid,
+                run_timestamp=run_timestamp,
+                video_title=video_info.title,
+                smart_filename=analysis_file.name if analysis_file else "",
+                video_url=video_info.webpage_url or args.analyze_existing,
+                run_duration=duration,
+                transcription_duration=0,
+                audio_duration=0,
+                success=True,
+                saved_to_obsidian=args.save_to_obsidian,
+                is_local_file=True,
+                analysis_only=True,
+                analysis_performed=True,
+                analysis_type=analysis_metadata.get("analysis_type"),
+                analysis_name=analysis_metadata.get("analysis_name"),
+                analysis_duration=analysis_duration,
+                analysis_model=analysis_metadata.get("model"),
+                analysis_tokens=analysis_metadata.get("tokens_total", 0),
+                analysis_cost=analysis_metadata.get("estimated_cost", 0) or 0,
+                analysis_truncated=analysis_metadata.get("truncated", False),
+                analysis_file=analysis_file.name if analysis_file else None,
+            )
+
+            save_statistics(stats_file, stats, args.verbose)
+
+            log_section("✓ Analysis completed successfully!")
+            logger.info(f"Total duration: {format_duration(duration)}")
+
+            return  # Exit after analyze-existing mode
+
+        except (FileProcessingError, AnalysisError) as e:
+            log_error(str(e))
+            if args.verbose:
+                traceback.print_exc()
+            return
+
+        except Exception as e:
+            log_error(f"An unexpected error occurred: {type(e).__name__}: {e}")
+            if args.verbose:
+                traceback.print_exc()
+            return
 
     if args.verbose:
         log_section("Transcription Tool")
