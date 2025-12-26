@@ -1,5 +1,6 @@
 """LLM-based transcript analysis using Groq API."""
 
+import datetime
 import logging
 import time
 import traceback
@@ -10,7 +11,9 @@ from .config import (
     CHAR_TO_TOKEN_RATIO,
     DEFAULT_ANALYSIS_PROMPTS_FILE,
     DEFAULT_GROQ_MODEL,
+    DEFAULT_STATS_FILE,
     GROQ_PRICING,
+    GROQ_RATE_LIMITS,
     MAX_TRANSCRIPT_LENGTH,
     TOKEN_PRICING_DENOMINATOR,
     TRANSCRIPT_TRUNCATION_BUFFER,
@@ -200,6 +203,160 @@ def estimate_analysis_cost(prompt_tokens: int, completion_tokens: int, model: st
     return input_cost + output_cost
 
 
+def validate_rate_limits(
+    estimated_tokens: int,
+    model: str,
+    stats_file_path: Path | str,
+    verbose: bool = False,
+) -> tuple[bool, str | None]:
+    """Validate if request would exceed Groq API rate limits.
+
+    Checks against free tier limits for TPM, TPD, RPM, RPD.
+
+    Args:
+        estimated_tokens: Estimated total tokens for this request
+        model: Model name to validate against
+        stats_file_path: Path to transcription_stats.json file
+        verbose: Enable verbose output
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    # Validate model is in rate limits config
+    if model not in GROQ_RATE_LIMITS:
+        if verbose:
+            logger.debug(f"Model '{model}' not in GROQ_RATE_LIMITS, skipping validation")
+        return True, None
+
+    limits = GROQ_RATE_LIMITS[model]
+
+    # Load historical statistics
+    stats_file = Path(stats_file_path)
+    if not stats_file.exists():
+        if verbose:
+            logger.debug("Stats file doesn't exist yet, allowing first request")
+        return True, None
+
+    try:
+        stats_data = load_json_file(stats_file, default=[])
+    except Exception as e:
+        if verbose:
+            logger.warning(f"Could not load stats file for rate limit checking: {e}")
+        return True, None
+
+    if not isinstance(stats_data, list) or len(stats_data) == 0:
+        return True, None
+
+    # Current time for window calculations
+    now = datetime.datetime.now(datetime.timezone.utc)
+    one_minute_ago = now - datetime.timedelta(minutes=1)
+    one_day_ago = now - datetime.timedelta(days=1)
+
+    # Filter stats to only include analysis runs
+    analysis_runs = [
+        stat
+        for stat in stats_data
+        if isinstance(stat, dict) and stat.get("analysis_performed", False)
+    ]
+
+    # Calculate current usage in different time windows
+    rpm_usage = 0
+    rpd_usage = 0
+    tpm_usage = 0
+    tpd_usage = 0
+
+    for stat in analysis_runs:
+        try:
+            run_timestamp_str = stat.get("run_timestamp")
+            if not run_timestamp_str:
+                continue
+
+            # Parse ISO format timestamp (handle both with/without timezone)
+            if "+" in run_timestamp_str or run_timestamp_str.endswith("Z"):
+                run_time = datetime.datetime.fromisoformat(run_timestamp_str.replace("Z", "+00:00"))
+            else:
+                run_time = datetime.datetime.fromisoformat(run_timestamp_str).replace(
+                    tzinfo=datetime.timezone.utc
+                )
+
+            tokens = stat.get("analysis_tokens", 0) or 0
+
+            # Check minute window
+            if run_time >= one_minute_ago:
+                rpm_usage += 1
+                tpm_usage += tokens
+
+            # Check day window
+            if run_time >= one_day_ago:
+                rpd_usage += 1
+                tpd_usage += tokens
+        except (ValueError, KeyError, TypeError) as e:
+            if verbose:
+                logger.debug(f"Error parsing stat entry: {e}")
+            continue
+
+    # Check each limit
+    violations = []
+
+    if rpm_usage + 1 > limits["rpm"]:
+        violations.append(
+            f"RPM limit exceeded: {rpm_usage} requests in last minute + 1 new request > {limits['rpm']} limit"
+        )
+
+    if tpm_usage + estimated_tokens > limits["tpm"]:
+        violations.append(
+            f"TPM limit exceeded: {tpm_usage} tokens in last minute + {estimated_tokens} estimated tokens > {limits['tpm']} limit"
+        )
+
+    if rpd_usage + 1 > limits["rpd"]:
+        violations.append(
+            f"RPD limit exceeded: {rpd_usage} requests in last 24h + 1 new request > {limits['rpd']} limit"
+        )
+
+    # Only check TPD if limit is set (not 0)
+    if limits["tpd"] > 0 and tpd_usage + estimated_tokens > limits["tpd"]:
+        violations.append(
+            f"TPD limit exceeded: {tpd_usage} tokens in last 24h + {estimated_tokens} estimated tokens > {limits['tpd']} limit"
+        )
+
+    # If any violations, build error message
+    if violations:
+        error_msg = _build_rate_limit_error_message(
+            violations, model, rpm_usage, tpm_usage, rpd_usage, tpd_usage, estimated_tokens, limits
+        )
+        return False, error_msg
+
+    return True, None
+
+
+def _build_rate_limit_error_message(
+    violations: list[str],
+    model: str,
+    rpm_usage: int,
+    tpm_usage: int,
+    rpd_usage: int,
+    tpd_usage: int,
+    estimated_tokens: int,
+    limits: dict[str, int],
+) -> str:
+    """Build a detailed, user-friendly rate limit error message."""
+    msg = "Groq API rate limit would be exceeded:\n\n"
+
+    for violation in violations:
+        msg += f"  - {violation}\n"
+
+    msg += f"\nCurrent usage for model '{model}':\n"
+    msg += f"  Last minute:   {rpm_usage} requests, {tpm_usage} tokens (limits: RPM={limits['rpm']}, TPM={limits['tpm']})\n"
+    msg += f"  Last 24 hours: {rpd_usage} requests, {tpd_usage} tokens (limits: RPD={limits['rpd']}, TPD={limits['tpd']})\n"
+    msg += f"\nThis request would add: 1 request, {estimated_tokens} tokens\n\n"
+    msg += "Options:\n"
+    msg += "  1. Wait for rate limits to reset (1-24 hours depending on which limit)\n"
+    msg += "  2. Use --skip_analysis_on_error to skip analysis for this run\n"
+    msg += "  3. Upgrade to a paid Groq plan for higher limits\n"
+
+    return msg
+
+
 # ============================================================================
 # LLM ANALYSIS
 # ============================================================================
@@ -267,6 +424,23 @@ def analyze_transcript_with_llm(
         logger.info(f"  Estimated input tokens: ~{estimated_input_tokens}")
         if estimated_cost:
             logger.info(f"  Estimated cost: ${estimated_cost:.4f}")
+
+    # Validate rate limits
+    if verbose:
+        logger.info("Checking Groq API rate limits...")
+
+    is_valid, error_msg = validate_rate_limits(
+        estimated_input_tokens + estimated_output_tokens,
+        model,
+        DEFAULT_STATS_FILE,
+        verbose,
+    )
+
+    if not is_valid:
+        raise AnalysisError(error_msg)
+
+    if verbose:
+        logger.info("✓ Rate limits OK")
 
     # Call API
     try:

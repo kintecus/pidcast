@@ -141,17 +141,31 @@ Configuration is managed via environment variables (with fallbacks) in `src/pidc
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `WHISPER_CPP_PATH` | Path to whisper-cli binary | `/Users/ostaps/Code/whisper.cpp/build/bin/whisper-cli` |
-| `WHISPER_MODEL` | Path to Whisper model (.bin file) | `/Users/ostaps/Code/whisper.cpp/models/ggml-base.en.bin` |
-| `OBSIDIAN_VAULT_PATH` | Path to Obsidian vault folder | (hardcoded iCloud path) |
+| `WHISPER_CPP_PATH` | Path to whisper-cli binary | (required, no default) |
+| `WHISPER_MODEL` | Path to Whisper model (.bin file) | (required, no default) |
+| `OBSIDIAN_VAULT_PATH` | Path to Obsidian vault folder | None |
 | `FFMPEG_PATH` | Path to ffmpeg binary | `ffmpeg` |
 | `GROQ_API_KEY` | Groq API key for LLM analysis | None |
 
-LLM Analysis configuration constants in `config.py`:
+**Project Root Detection:**
+- `get_project_root()` finds pyproject.toml by walking up directory tree
+- `PROJECT_ROOT` is set automatically at module import time
+- All relative paths are resolved from project root
+
+**LLM Analysis Configuration Constants in `config.py`:**
 - `DEFAULT_GROQ_MODEL` - Default model for analysis (`llama-3.3-70b-versatile`)
-- `GROQ_PRICING` - Token pricing for cost estimation
+- `GROQ_PRICING` - Token pricing (per million) for cost estimation
+  - llama-3.3-70b-versatile: $0.59 input, $0.79 output
+  - llama-3.1-70b-versatile: $0.59 input, $0.79 output
+  - llama-3.1-8b-instant: $0.05 input, $0.08 output
+  - mixtral-8x7b-32768: $0.24 input/output
 - `MAX_TRANSCRIPT_LENGTH` - Maximum transcript length (120k chars)
 - `ANALYSIS_TIMEOUT` - API call timeout (300s)
+
+**Download Configuration Constants:**
+- `MAX_DOWNLOAD_RETRIES` - Retry attempts per strategy (3)
+- `RETRY_SLEEP_SECONDS` - Sleep between retries (10s)
+- `DOWNLOAD_STRATEGY_CONFIGS` - Client-specific yt-dlp options (socket timeouts, retry counts)
 
 ## Architecture
 
@@ -161,17 +175,33 @@ The codebase is organized as a Python package with modular components:
 
 ```
 pidcast/
-├── __init__.py       # Package initialization, version
+├── __init__.py       # Package initialization, version (0.2.0)
 ├── __main__.py       # Entry point for python -m pidcast
-├── cli.py            # Argument parsing and main pipeline orchestration
-├── config.py         # Constants, environment variables, dataclasses
-├── download.py       # YouTube download with multi-strategy fallback
-├── transcription.py  # Whisper transcription with progress display
-├── markdown.py       # Markdown file creation with YAML front matter
-├── analysis.py       # LLM-based transcript analysis via Groq
-├── utils.py          # Logging, filename generation, JSON I/O
-└── exceptions.py     # Custom exception hierarchy
+├── cli.py            # Argument parsing and main pipeline orchestration (507 lines)
+├── config.py         # Constants, environment variables, dataclasses (269 lines)
+├── download.py       # YouTube download with multi-strategy fallback (311 lines)
+├── transcription.py  # Whisper transcription with progress display (346 lines)
+├── markdown.py       # Markdown file creation with YAML front matter (183 lines)
+├── analysis.py       # LLM-based transcript analysis via Groq (429 lines)
+├── utils.py          # Logging, filename generation, JSON I/O (335 lines)
+└── exceptions.py     # Custom exception hierarchy (38 lines)
 ```
+
+### Main Execution Pipeline
+
+The `cli.py` `main()` function orchestrates the complete workflow:
+
+1. **Parse Arguments** (`parse_arguments()`) - Handle CLI flags and options
+2. **Validate Input** (`validate_input_source()`) - Check if YouTube URL or local file
+3. **Acquire Audio**:
+   - YouTube: `download_audio()` with multi-strategy retry
+   - Local: `process_local_file()` to convert to 16kHz WAV
+4. **Estimate Time** (`estimate_transcription_time()`) - Predict duration from stats
+5. **Transcribe** (`run_whisper_transcription()`) - Call whisper-cli with progress bar
+6. **Create Markdown** (`create_markdown_file()`) - Generate .md with YAML front matter
+7. **Optional Analysis** (`run_analysis()`) - LLM analysis via Groq API if `--analyze`
+8. **Save Statistics** (`save_statistics()`) - Append run metadata to JSON
+9. **Cleanup** - Remove temporary audio files
 
 ### Dataclasses
 
@@ -196,12 +226,22 @@ Custom exceptions in `exceptions.py`:
 
 The tool uses a multi-strategy approach for downloading YouTube audio (`download.py`):
 
-1. **Android client** (default, most reliable)
-2. **Web client** with aggressive retry settings
-3. **Mixed clients** (Android + Web fallback)
-4. **iOS client** (only if PO token provided)
+**Strategy Order:**
+1. **iOS client** (only if PO token provided via `--po_token`)
+2. **Android client** (default, most reliable)
+3. **Web client** with aggressive retry settings
+4. **Mixed clients** (Android + Web fallback)
 
-Each strategy has MAX_DOWNLOAD_RETRIES (3) attempts with RETRY_SLEEP_SECONDS (10s) between retries.
+**Retry Logic:**
+- Each strategy has MAX_DOWNLOAD_RETRIES (3) attempts
+- RETRY_SLEEP_SECONDS (10s) between retries
+- `is_retryable_error()` checks for "Operation timed out" or "SABR" errors
+- Falls back to next strategy if all retries fail
+
+**Audio Format Handling:**
+- Downloads best audio format (WebM or M4A)
+- `ensure_wav_file()` converts to WAV if needed using ffmpeg
+- Fallback: tries M4A if WebM fails
 
 ### Smart Filename Generation
 
@@ -217,15 +257,25 @@ The `create_smart_filename()` function in `utils.py`:
 Generated Markdown files include:
 - YAML front matter with metadata (title, date, URL, duration, channel, tags)
 - Full transcript text from Whisper
-- Automatic versioning (_v2, _v3) if filename exists
+- Automatic versioning (_v2, _v3, etc.) if filename exists
+
+**Analysis Markdown Files:**
+Analysis files (`*_analysis_[type].md`) include additional YAML fields:
+- `analysis_type`, `analysis_name`, `analysis_provider`, `analysis_model`
+- `tokens_input`, `tokens_output`, `tokens_total`
+- `estimated_cost`, `analysis_duration`, `transcript_truncated`
+- `source_transcript`, `source_url`
 
 ### Transcription Progress Indicator
 
 During transcription, a real-time progress indicator is displayed:
 - **With estimated time:** Shows a progress bar, percentage, elapsed time, and estimated time remaining
+  - Example: `[████████░░░░░░░░░░░░] 45% | Elapsed: 2m 15s | Remaining: ~3m 20s`
+  - Estimate based on historical average from `transcription_stats.json`
 - **Without estimated time:** Shows a spinner with elapsed time
+  - Example: `⠋ Transcribing... Elapsed: 1m 30s`
 - Progress is disabled in verbose mode to avoid interfering with Whisper output
-- Uses threading to update the display while transcription runs
+- Uses threading (`threading.Event()`) to update the display while transcription runs
 
 ### Statistics Tracking
 
@@ -262,6 +312,12 @@ Default templates in `config/analysis_prompts.json`:
 - `summary`: One-paragraph overview + key points + takeaways
 - `key_points`: Main topics + bullet points + quotes + insights
 - `action_items`: Direct actions + resources + best practices + tips
+
+**API Configuration:**
+- Temperature: 0.3 (deterministic output)
+- Timeout: 300 seconds (ANALYSIS_TIMEOUT)
+- Token estimation: `(prompt_length / 4)` for input tokens
+- Cost estimation displayed before API call
 
 ## Common Patterns
 
@@ -341,12 +397,39 @@ pidcast/
 └── tests/                        # Unit tests (TODO)
 ```
 
+### Local Audio File Processing
+
+The tool supports transcribing local audio files (`transcription.py`):
+
+**Supported Formats:**
+- .mp3, .wav, .m4a, .webm, .ogg, .flac, .aac
+
+**Processing Pipeline:**
+1. Validate file exists and has supported extension
+2. Extract audio duration using `ffprobe`
+3. Convert to 16kHz mono WAV using ffmpeg:
+   ```bash
+   ffmpeg -i input.mp3 -ar 16000 -ac 1 -c:a pcm_s16le output.wav
+   ```
+4. Create `VideoInfo` dataclass with file metadata
+5. Proceed with standard transcription pipeline
+
+**Filename Generation:**
+- Uses original filename (without extension) instead of video title
+- Applies same smart filtering and date prefix
+- Example: `2025-12-26_Interview_Recording.md`
+
 ## Notes
 
 - The tool creates temporary audio files (`temp_audio.wav`) that are cleaned up automatically
-- External tool paths can be configured via environment variables
+- External tool paths can be configured via environment variables (see .env.example)
 - LLM analysis is optional and requires `groq` package + API key
 - Analysis prompts file is auto-created with default templates on first use
 - Long transcripts (>120k chars) are automatically truncated at sentence boundaries
+  - Truncation happens at nearest sentence boundary (". ")
+  - Minimum retention: 80% of MAX_TRANSCRIPT_LENGTH
 - Analysis costs are estimated and displayed before API calls
 - Use `--skip_analysis_on_error` to continue even if analysis fails
+- Whisper transcription uses 8 threads (`-t 8`) by default
+- Statistics JSON tracks 18+ fields per run for performance analysis
+- Version detection prevents file overwrites (_v2, _v3 suffixes)
