@@ -62,7 +62,27 @@ The following tools must be installed separately:
 
 - **yt-dlp** - YouTube audio download
 - **ffmpeg** - Audio processing
-- **whisper.cpp** - Transcription engine (set `WHISPER_CPP_PATH` and `WHISPER_MODEL` in `.env`)
+- **whisper.cpp** - Transcription engine
+
+### Installing whisper.cpp
+
+1. Clone and build [whisper.cpp](https://github.com/ggerganov/whisper.cpp):
+   ```bash
+   git clone https://github.com/ggerganov/whisper.cpp.git
+   cd whisper.cpp
+   make
+   ```
+
+2. Download a Whisper model:
+   ```bash
+   bash ./models/download-ggml-model.sh base.en
+   ```
+
+3. Configure paths in `.env`:
+   ```bash
+   WHISPER_CPP_PATH=/path/to/whisper.cpp/main
+   WHISPER_MODEL=/path/to/whisper.cpp/models/ggml-base.en.bin
+   ```
 
 ## Usage Examples
 
