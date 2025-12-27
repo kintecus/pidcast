@@ -1,5 +1,12 @@
 ### APP ###
 data/
+# Keep eval reference transcripts and cost tracking
+!data/evals/
+!data/evals/references/
+data/evals/runs/
+data/evals/batches/
+data/evals/comparisons/
+data/evals/cost_tracking.json
 
 ### Python ###
 # Byte-compiled / optimized / DLL files

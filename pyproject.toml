@@ -18,6 +18,7 @@ dependencies = [
 [project.scripts]
 pidcast = "pidcast.cli:main"
 yt-transcribe = "pidcast.cli:main"
+pidcast-eval = "pidcast.evals.cli:eval_main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pidcast"]

@@ -1,0 +1,31 @@
+{
+  "transcripts": [
+    {
+      "transcript_id": "claude-skills-tech-talk",
+      "name": "Claude Skills Built Me an AI Agent Army",
+      "description": "Technical podcast discussion about Claude skills and AI agents - medium length (33 min), technical content",
+      "file_path": "data/evals/references/claude-skills-tech-talk.md",
+      "content_type": "technical_podcast",
+      "duration_seconds": 1985,
+      "source_url": "https://www.youtube.com/watch?v=G-5bInklwRQ"
+    },
+    {
+      "transcript_id": "agents-vs-skills-interview",
+      "name": "Don't Build Agents, Build Skills Instead",
+      "description": "Conference talk/interview with Anthropic engineers - medium-short length (16 min), structured presentation",
+      "file_path": "data/evals/references/agents-vs-skills-interview.md",
+      "content_type": "conference_talk",
+      "duration_seconds": 982,
+      "source_url": "https://www.youtube.com/watch?v=CEvIs9y1uog"
+    },
+    {
+      "transcript_id": "veal-stew-recipe",
+      "name": "How to cook the most yummy VEAL STEW WITH POTATOES",
+      "description": "Cooking tutorial video - short length (6 min), non-technical content, different domain for variety",
+      "file_path": "data/evals/references/veal-stew-recipe.md",
+      "content_type": "tutorial",
+      "duration_seconds": 358,
+      "source_url": "https://www.youtube.com/watch?v=KRzw4mJhp6s"
+    }
+  ]
+}
