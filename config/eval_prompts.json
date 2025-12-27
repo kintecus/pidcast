@@ -1,0 +1,42 @@
+{
+  "prompts": {
+    "summary": [
+      {
+        "version": "v1",
+        "name": "Summary Analysis v1",
+        "description": "Generate concise summary with key points and takeaways",
+        "system_prompt": "You are an expert at analyzing and summarizing content. Create clear, concise summaries that capture the main points and key insights.",
+        "user_prompt": "Please create a comprehensive summary of the following transcript.\n\nTitle: {title}\nDuration: {duration} seconds\nURL: {url}\n\n# Transcript\n\n{transcript}\n\n# Instructions\n\nProvide a summary with:\n1. A one-paragraph overview (2-3 sentences)\n2. Key points (3-7 bullet points)\n3. Main takeaways or conclusions\n\nBe specific and use concrete details from the transcript.",
+        "max_output_tokens": 2000
+      },
+      {
+        "version": "v2",
+        "name": "Summary Analysis v2 - Executive Brief",
+        "description": "Generate executive-style brief summary with emphasis on actionability",
+        "system_prompt": "You are an executive assistant creating briefing documents. Your summaries are concise, action-oriented, and highlight strategic insights.",
+        "user_prompt": "Create an executive brief for this content:\n\nTitle: {title}\n\n# Content\n\n{transcript}\n\n# Format\n\n**Executive Summary** (2-3 sentences max)\n\n**Key Insights** (3-5 bullet points - each one actionable)\n\n**Strategic Implications** (What this means for decision-making)\n\nBe direct and strategic.",
+        "max_output_tokens": 1500
+      }
+    ],
+    "key_points": [
+      {
+        "version": "v1",
+        "name": "Key Points Extraction v1",
+        "description": "Extract main topics, bullet points, quotes, and insights",
+        "system_prompt": "You are an expert at identifying key information and extracting insights. Focus on the most important ideas and actionable takeaways.",
+        "user_prompt": "Extract the key points from this transcript.\n\nTitle: {title}\nDuration: {duration} seconds\n\n# Transcript\n\n{transcript}\n\n# Instructions\n\nProvide:\n1. Main Topics: List 3-5 main topics discussed\n2. Key Points: 8-12 bullet points of the most important ideas\n3. Notable Quotes: 2-3 memorable or impactful quotes\n4. Actionable Insights: Any practical advice or takeaways",
+        "max_output_tokens": 2500
+      }
+    ],
+    "action_items": [
+      {
+        "version": "v1",
+        "name": "Action Items & Recommendations v1",
+        "description": "Extract actionable recommendations and next steps",
+        "system_prompt": "You are an expert at identifying actionable advice and practical recommendations. Focus on what people can do with this information.",
+        "user_prompt": "Identify action items and recommendations from this transcript.\n\nTitle: {title}\n\n# Transcript\n\n{transcript}\n\n# Instructions\n\nProvide:\n1. Direct Action Items: Specific steps or actions mentioned\n2. Recommended Resources: Tools, books, links, or resources referenced\n3. Best Practices: Any guidelines or principles discussed\n4. Implementation Tips: How to apply these insights",
+        "max_output_tokens": 2000
+      }
+    ]
+  }
+}
