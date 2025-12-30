@@ -5,12 +5,14 @@ A powerful YouTube transcription tool that downloads audio from YouTube videos a
 ## Features
 
 - 🎙️ **YouTube Audio Download** with multiple fallback strategies
-- 📝 **Whisper Transcription** using whisper.cpp
+- 📝 **Whisper Transcription** using whisper.cpp (local)
 - 🤖 **LLM Analysis** with Groq AI (summary, key points, action items)
 - 📄 **Markdown Output** with YAML front matter for Obsidian
 - 📊 **Smart Filenames** with automatic date prefixes
 - ⚡ **Fast Dependencies** managed with uv
 - ✨ **Code Quality** enforced with ruff
+
+![Pidcast example run](assets/screenshots/pidcast-example.png)
 
 ## Quick Start
 
