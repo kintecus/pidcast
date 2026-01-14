@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(uv --version:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv run ruff:*)",
+      "Bash(uv add:*)",
+      "Bash(python -c:*)",
+      "Bash(uv run python:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(python3:*)"
+    ]
+  }
+}
