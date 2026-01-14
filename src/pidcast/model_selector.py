@@ -226,12 +226,70 @@ class ModelSelector:
             return cfg.estimate_cost(input_tokens, output_tokens)
         return None
 
-    def tokens_within_tpm(self, model: str, estimated_tokens: int) -> bool:
-        """Check if estimated tokens would fit within model's TPM limit."""
+    def tokens_within_context(self, model: str, estimated_tokens: int) -> bool:
+        """Check if estimated tokens fit within model's context window."""
         cfg = self.get_model_config(model)
         if not cfg:
             return True  # Unknown model, let API decide
-        return estimated_tokens <= cfg.tpm
+        # Leave 10% buffer for safety
+        max_tokens = int(cfg.context_window * 0.9)
+        return estimated_tokens <= max_tokens
+
+    def get_max_context_tokens(self, model: str | None = None) -> int:
+        """Get maximum tokens for a model's context window (with safety buffer).
+
+        Args:
+            model: Model name (uses default if None)
+
+        Returns:
+            Max tokens (90% of context window for safety)
+        """
+        model = model or self.config.default_model
+        cfg = self.get_model_config(model)
+        if not cfg:
+            return 100000  # Conservative default
+        return int(cfg.context_window * 0.9)
+
+    def get_effective_token_limit(self, model: str | None = None) -> int:
+        """Get the effective token limit considering both context window and TPM.
+
+        The effective limit is the minimum of context window and TPM,
+        since both are constraints on a single request.
+
+        Args:
+            model: Model name (uses default if None)
+
+        Returns:
+            Effective token limit for a single request
+        """
+        model = model or self.config.default_model
+        cfg = self.get_model_config(model)
+        if not cfg:
+            return 8000  # Conservative default
+
+        # TPM is the rate limit per minute, but it's also effectively
+        # the max tokens for a single request (can't exceed minute quota)
+        context_limit = int(cfg.context_window * 0.9)
+        tpm_limit = cfg.tpm
+
+        # Use the more restrictive limit
+        return min(context_limit, tpm_limit)
+
+    def needs_chunking(self, estimated_tokens: int, model: str | None = None) -> bool:
+        """Check if the request needs to be chunked.
+
+        Args:
+            estimated_tokens: Estimated total tokens
+            model: Model to check against (uses default if None)
+
+        Returns:
+            True if tokens exceed all models' context windows
+        """
+        # Check if any model in the chain can handle it
+        for m in self.config.fallback_chain:
+            if self.tokens_within_context(m, estimated_tokens):
+                return False
+        return True
 
     def get_next_fallback(self) -> str | None:
         """Get next model in fallback chain that hasn't been tried.
@@ -259,8 +317,11 @@ class ModelSelector:
     ) -> tuple[str, bool]:
         """Select best model that can handle the token count.
 
-        Pre-checks TPM limits to avoid wasting API calls on models
-        that would immediately fail.
+        Pre-checks context window to avoid wasting API calls on models
+        that can't handle the request size.
+
+        Note: This does NOT check TPM (rate limits). TPM errors are handled
+        dynamically via handle_rate_limit() when the API returns 429.
 
         Args:
             estimated_tokens: Estimated total tokens for the request
@@ -273,27 +334,27 @@ class ModelSelector:
         start_model = preferred_model or self.config.default_model
         is_fallback = False
 
-        # If preferred model can handle tokens, use it
-        if self.tokens_within_tpm(start_model, estimated_tokens):
+        # If preferred model can handle tokens within context window, use it
+        if self.tokens_within_context(start_model, estimated_tokens):
             return start_model, False
 
         # Otherwise, find first model in fallback chain that can handle it
         logger.info(
-            f"Estimated {estimated_tokens} tokens exceeds {start_model} TPM limit, "
+            f"Estimated {estimated_tokens} tokens exceeds {start_model} context window, "
             f"selecting fallback..."
         )
 
         for model in self.config.fallback_chain:
-            if self.tokens_within_tpm(model, estimated_tokens):
+            if self.tokens_within_context(model, estimated_tokens):
                 if model != start_model:
                     is_fallback = True
                     logger.info(f"Pre-selected fallback model: {model}")
                 return model, is_fallback
 
-        # No model can handle it - return default and let API fail with clear error
+        # No model can handle it - this request is too large
         logger.warning(
             f"No model in fallback chain can handle {estimated_tokens} tokens. "
-            f"Trying {self.config.default_model} anyway."
+            f"Request may need to be chunked."
         )
         return self.config.default_model, False
 
