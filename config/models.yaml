@@ -1,0 +1,94 @@
+# Pidcast Model Configuration
+# Quality-prioritized fallback chain for LLM analysis
+
+# Default model to use (best quality)
+default_model: openai/gpt-oss-120b
+
+# Quality-prioritized fallback chain (best to acceptable)
+# When a model hits rate limits, try the next one in the chain
+fallback_chain:
+  - openai/gpt-oss-120b
+  - groq/compound
+  - openai/gpt-oss-20b
+  - llama-3.3-70b-versatile
+  - llama-3.1-8b-instant
+
+# Model configurations
+models:
+  openai/gpt-oss-120b:
+    display_name: GPT-OSS 120B
+    provider: groq
+    context_window: 131072
+    pricing:
+      input: 0.15   # per 1M tokens
+      output: 0.60
+    limits:
+      rpm: 30       # Requests per minute
+      rpd: 1000     # Requests per day
+      tpm: 8000     # Tokens per minute
+      tpd: 200000   # Tokens per day
+
+  groq/compound:
+    display_name: Groq Compound
+    provider: groq
+    context_window: 131072
+    pricing:
+      input: 0.30
+      output: 0.40
+    limits:
+      rpm: 30
+      rpd: 250
+      tpm: 70000
+      tpd: 0  # No daily limit
+
+  openai/gpt-oss-20b:
+    display_name: GPT-OSS 20B
+    provider: groq
+    context_window: 131072
+    pricing:
+      input: 0.075
+      output: 0.30
+    limits:
+      rpm: 30
+      rpd: 1000
+      tpm: 8000
+      tpd: 200000
+
+  llama-3.3-70b-versatile:
+    display_name: Llama 3.3 70B
+    provider: groq
+    context_window: 131072
+    pricing:
+      input: 0.59
+      output: 0.79
+    limits:
+      rpm: 30
+      rpd: 1000
+      tpm: 12000
+      tpd: 100000
+
+  llama-3.1-8b-instant:
+    display_name: Llama 3.1 8B
+    provider: groq
+    context_window: 131072
+    pricing:
+      input: 0.05
+      output: 0.08
+    limits:
+      rpm: 30
+      rpd: 14400
+      tpm: 6000
+      tpd: 500000
+
+  mixtral-8x7b-32768:
+    display_name: Mixtral 8x7B
+    provider: groq
+    context_window: 32768
+    pricing:
+      input: 0.24
+      output: 0.24
+    limits:
+      rpm: 30
+      rpd: 14400
+      tpm: 40000
+      tpd: 1000000

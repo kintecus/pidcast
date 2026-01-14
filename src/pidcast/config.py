@@ -48,6 +48,7 @@ OBSIDIAN_PATH = os.environ.get("OBSIDIAN_VAULT_PATH")
 DEFAULT_TRANSCRIPTS_DIR = PROJECT_ROOT / "data" / "transcripts"
 DEFAULT_STATS_FILE = DEFAULT_TRANSCRIPTS_DIR / "transcription_stats.json"
 DEFAULT_PROMPTS_FILE = PROJECT_ROOT / "config" / "prompts.yaml"
+DEFAULT_MODELS_FILE = PROJECT_ROOT / "config" / "models.yaml"
 
 # Deprecated: kept for backward compatibility
 DEFAULT_ANALYSIS_PROMPTS_FILE = DEFAULT_PROMPTS_FILE
