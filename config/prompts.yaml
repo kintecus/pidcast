@@ -102,3 +102,58 @@ prompts:
       2. Recommended Resources: Tools, books, links, or resources referenced
       3. Best Practices: Any guidelines or principles discussed
       4. Implementation Tips: How to apply these insights
+
+  # Chunking prompts for long content
+  chunk_analysis:
+    name: Chunk Analysis
+    description: Analyze a portion of a longer transcript
+    max_output_tokens: 1500
+    system_prompt: |
+      You are analyzing a portion of a longer video transcript.
+      Extract key information that can be synthesized with other chunks later.
+      Focus on facts, insights, and notable points - not overall structure.
+    user_prompt: |
+      Analyze this section of a transcript.
+
+      Title: {title}
+      This is chunk {chunk_num} of {total_chunks}.
+
+      # Transcript Section
+      {transcript}
+
+      # Instructions
+      Provide:
+      1. **Key Points** (3-5 bullet points of main ideas in this section)
+      2. **Notable Details** (specific facts, quotes, or data mentioned)
+      3. **Topics Covered** (brief list of subjects discussed)
+
+      Keep analysis focused and factual. Do not attempt to summarize the entire video.
+
+  synthesis:
+    name: Synthesis
+    description: Combine chunk analyses into coherent summary
+    max_output_tokens: 2000
+    system_prompt: |
+      You are synthesizing multiple chunk analyses into a coherent summary.
+      Remove redundancy, identify overarching themes, and create a unified narrative.
+      The final output should read as if analyzing the original full transcript.
+    user_prompt: |
+      Synthesize these chunk analyses into a coherent executive brief.
+
+      {chunk_analyses}
+
+      # Instructions
+      Create a unified summary:
+
+      1. **Executive Summary** (2-3 sentences covering the entire content)
+         - What is this content about overall?
+         - What's the main value for viewers?
+
+      2. **Key Points** (5-10 bullet points, deduplicated across chunks)
+         - Prioritize by importance, not chronology
+         - Merge related points from different chunks
+         - Remove redundant information
+
+      3. **Notable Insights** (2-3 standout quotes or data points)
+
+      The output should be cohesive and not feel like a collection of separate summaries.

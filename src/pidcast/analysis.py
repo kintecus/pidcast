@@ -7,6 +7,12 @@ from pathlib import Path
 
 import yaml
 
+from .chunking import (
+    chunk_transcript,
+    estimate_tokens,
+    format_chunk_for_analysis,
+    format_chunks_for_synthesis,
+)
 from .config import (
     ANALYSIS_TIMEOUT,
     CHAR_TO_TOKEN_RATIO,
@@ -151,6 +157,395 @@ def truncate_transcript(
 # ============================================================================
 
 
+def _create_groq_client(api_key: str):
+    """Create and return a Groq client."""
+    try:
+        from groq import Groq
+
+        return Groq(api_key=api_key)
+    except ImportError as e:
+        raise AnalysisError("'groq' package not installed. Run: pip install groq") from e
+
+
+def _call_llm_with_fallback(
+    client,
+    selector: ModelSelector,
+    system_prompt: str,
+    user_prompt: str,
+    max_tokens: int,
+    preferred_model: str,
+    verbose: bool = False,
+) -> tuple[str, str, int, int, int, float]:
+    """Call LLM API with automatic model fallback on rate limits.
+
+    Returns:
+        Tuple of (response_text, model_used, tokens_in, tokens_out, tokens_total, duration)
+    """
+
+    @with_retry(max_retries=3, base_delay=2.0)
+    def _call_api(model_name: str):
+        return client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=max_tokens,
+            temperature=0.3,
+            timeout=ANALYSIS_TIMEOUT,
+        )
+
+    current_model = preferred_model
+    start_time = time.time()
+
+    while current_model:
+        selector.mark_tried(current_model)
+
+        try:
+            if verbose:
+                logger.info(f"Calling {selector.get_display_name(current_model)}...")
+
+            response = _call_api(current_model)
+            duration = time.time() - start_time
+
+            return (
+                response.choices[0].message.content,
+                current_model,
+                response.usage.prompt_tokens,
+                response.usage.completion_tokens,
+                response.usage.total_tokens,
+                duration,
+            )
+
+        except Exception as e:
+            if is_rate_limit_error(e):
+                next_model = selector.handle_rate_limit(current_model)
+                if next_model:
+                    current_model = next_model
+                    continue
+                else:
+                    tried = selector.get_tried_models()
+                    raise AnalysisError(
+                        f"Rate limit exceeded on all fallback models.\n"
+                        f"Tried: {', '.join(sorted(tried))}\n\n"
+                        f"Options:\n"
+                        f"  1. Wait for rate limits to reset\n"
+                        f"  2. Use --skip_analysis_on_error to skip analysis"
+                    ) from e
+            else:
+                if verbose:
+                    traceback.print_exc()
+                raise AnalysisError(f"Error during LLM analysis: {type(e).__name__}: {e}") from e
+
+    raise AnalysisError("No models available for analysis")
+
+
+def _analyze_single(
+    transcript: str,
+    video_info: VideoInfo,
+    analysis_type: str,
+    prompts_config: PromptsConfig,
+    client,
+    selector: ModelSelector,
+    preferred_model: str,
+    verbose: bool = False,
+) -> AnalysisResult:
+    """Analyze transcript in a single API call (for shorter content).
+
+    Note: Truncation is NOT applied here. The calling function has already
+    verified this transcript fits within the model's context window. Long
+    transcripts are handled by _analyze_with_chunking instead.
+    """
+    template = prompts_config.prompts[analysis_type]
+
+    # Prepare variables (no truncation - chunking handles long content)
+    variables = {
+        "transcript": transcript,
+        "title": video_info.title,
+        "channel": video_info.channel,
+        "duration": video_info.duration_string,
+        "url": video_info.webpage_url,
+    }
+
+    # Substitute variables
+    system_prompt = substitute_prompt_variables(template.system_prompt, variables)
+    user_prompt = substitute_prompt_variables(template.user_prompt, variables)
+
+    # Estimate tokens
+    estimated_input_tokens = (len(system_prompt) + len(user_prompt)) // CHAR_TO_TOKEN_RATIO
+    estimated_output_tokens = template.max_output_tokens
+    estimated_total_tokens = estimated_input_tokens + estimated_output_tokens
+
+    # Select best model for this request
+    current_model, _ = selector.select_model_for_tokens(estimated_total_tokens, preferred_model)
+
+    # Log estimation
+    estimated_cost = selector.estimate_cost(
+        current_model, estimated_input_tokens, estimated_output_tokens
+    )
+    logger.info("\nAnalysis Estimation:")
+    logger.info(f"  Type: {template.name}")
+    logger.info(f"  Model: {selector.get_display_name(current_model)}")
+    logger.info(f"  Estimated input tokens: ~{estimated_input_tokens}")
+    if estimated_cost:
+        logger.info(f"  Estimated cost: ${estimated_cost:.4f}")
+
+    # Make the API call
+    selector.reset()  # Reset for fresh fallback tracking
+    response_text, model_used, tokens_in, tokens_out, tokens_total, duration = (
+        _call_llm_with_fallback(
+            client,
+            selector,
+            system_prompt,
+            user_prompt,
+            template.max_output_tokens,
+            current_model,
+            verbose,
+        )
+    )
+
+    # Log if fallback occurred
+    if model_used != preferred_model:
+        logger.info(
+            f"Analysis completed with fallback model {selector.get_display_name(model_used)} "
+            f"(requested: {selector.get_display_name(preferred_model)})"
+        )
+
+    actual_cost = selector.estimate_cost(model_used, tokens_in, tokens_out)
+
+    return AnalysisResult(
+        analysis_text=response_text,
+        analysis_type=analysis_type,
+        analysis_name=template.name,
+        model=model_used,
+        provider="groq",
+        tokens_input=tokens_in,
+        tokens_output=tokens_out,
+        tokens_total=tokens_total,
+        estimated_cost=actual_cost,
+        duration=duration,
+        truncated=False,  # No truncation in single analysis; chunking handles long content
+    )
+
+
+def _analyze_with_chunking(
+    transcript: str,
+    video_info: VideoInfo,
+    prompts_config: PromptsConfig,
+    client,
+    selector: ModelSelector,
+    preferred_model: str,
+    verbose: bool = False,
+) -> AnalysisResult:
+    """Analyze long transcript using chunking and synthesis."""
+    try:
+        from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
+    except ImportError:
+        # Fallback without progress display
+        return _analyze_with_chunking_simple(
+            transcript, video_info, prompts_config, client, selector, preferred_model, verbose
+        )
+
+    # Get prompts
+    chunk_template = prompts_config.prompts["chunk_analysis"]
+    synthesis_template = prompts_config.prompts["synthesis"]
+
+    # Determine chunk size based on effective limit (min of context and TPM)
+    effective_limit = selector.get_effective_token_limit(preferred_model)
+    # Leave room for prompt overhead (~1500 tokens) and output (~1500 tokens)
+    chunk_target_tokens = max(effective_limit - 3000, 2000)
+
+    # Split transcript into chunks
+    chunks = chunk_transcript(transcript, target_tokens=chunk_target_tokens)
+    logger.info(f"\nSplitting transcript into {len(chunks)} chunks for analysis...")
+
+    # Analyze each chunk
+    chunk_results = []
+    total_tokens = 0
+    total_cost = 0.0
+    start_time = time.time()
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[cyan]{task.description}"),
+        BarColumn(complete_style="green"),
+        TextColumn("{task.completed}/{task.total}"),
+    ) as progress:
+        task = progress.add_task("Analyzing chunks...", total=len(chunks))
+
+        for chunk in chunks:
+            progress.update(task, description=f"Chunk {chunk.index + 1}/{chunk.total_chunks}")
+
+            # Prepare chunk variables
+            variables = format_chunk_for_analysis(chunk, video_info.title)
+            system_prompt = substitute_prompt_variables(chunk_template.system_prompt, variables)
+            user_prompt = substitute_prompt_variables(chunk_template.user_prompt, variables)
+
+            # Make API call
+            selector.reset()
+            response_text, model_used, tokens_in, tokens_out, tokens_total_chunk, _ = (
+                _call_llm_with_fallback(
+                    client,
+                    selector,
+                    system_prompt,
+                    user_prompt,
+                    chunk_template.max_output_tokens,
+                    preferred_model,
+                    verbose,
+                )
+            )
+
+            chunk_results.append(response_text)
+            total_tokens += tokens_total_chunk
+            chunk_cost = selector.estimate_cost(model_used, tokens_in, tokens_out)
+            total_cost += chunk_cost or 0
+
+            progress.advance(task)
+
+        # Synthesis step
+        progress.update(task, description="Synthesizing results...")
+
+    logger.info("\nSynthesizing chunk analyses...")
+
+    # Prepare synthesis input
+    synthesis_input = format_chunks_for_synthesis(
+        chunk_results, video_info.title, video_info.duration_string
+    )
+    synthesis_variables = {"chunk_analyses": synthesis_input}
+    synthesis_system = substitute_prompt_variables(
+        synthesis_template.system_prompt, synthesis_variables
+    )
+    synthesis_user = substitute_prompt_variables(
+        synthesis_template.user_prompt, synthesis_variables
+    )
+
+    # Make synthesis call
+    selector.reset()
+    synthesis_text, synthesis_model, syn_in, syn_out, syn_total, _ = _call_llm_with_fallback(
+        client,
+        selector,
+        synthesis_system,
+        synthesis_user,
+        synthesis_template.max_output_tokens,
+        preferred_model,
+        verbose,
+    )
+
+    total_tokens += syn_total
+    syn_cost = selector.estimate_cost(synthesis_model, syn_in, syn_out)
+    total_cost += syn_cost or 0
+
+    duration = time.time() - start_time
+
+    return AnalysisResult(
+        analysis_text=synthesis_text,
+        analysis_type="executive_summary",
+        analysis_name=f"Executive Summary (Chunked: {len(chunks)} parts)",
+        model=synthesis_model,
+        provider="groq",
+        tokens_input=total_tokens,
+        tokens_output=0,
+        tokens_total=total_tokens,
+        estimated_cost=total_cost,
+        duration=duration,
+        truncated=False,
+    )
+
+
+def _analyze_with_chunking_simple(
+    transcript: str,
+    video_info: VideoInfo,
+    prompts_config: PromptsConfig,
+    client,
+    selector: ModelSelector,
+    preferred_model: str,
+    verbose: bool = False,
+) -> AnalysisResult:
+    """Analyze long transcript using chunking (without rich progress display)."""
+    chunk_template = prompts_config.prompts["chunk_analysis"]
+    synthesis_template = prompts_config.prompts["synthesis"]
+
+    effective_limit = selector.get_effective_token_limit(preferred_model)
+    chunk_target_tokens = max(effective_limit - 3000, 2000)
+
+    chunks = chunk_transcript(transcript, target_tokens=chunk_target_tokens)
+    logger.info(f"\nSplitting transcript into {len(chunks)} chunks for analysis...")
+
+    chunk_results = []
+    total_tokens = 0
+    total_cost = 0.0
+    start_time = time.time()
+
+    for chunk in chunks:
+        logger.info(f"Analyzing chunk {chunk.index + 1}/{chunk.total_chunks}...")
+
+        variables = format_chunk_for_analysis(chunk, video_info.title)
+        system_prompt = substitute_prompt_variables(chunk_template.system_prompt, variables)
+        user_prompt = substitute_prompt_variables(chunk_template.user_prompt, variables)
+
+        selector.reset()
+        response_text, model_used, tokens_in, tokens_out, tokens_total_chunk, _ = (
+            _call_llm_with_fallback(
+                client,
+                selector,
+                system_prompt,
+                user_prompt,
+                chunk_template.max_output_tokens,
+                preferred_model,
+                verbose,
+            )
+        )
+
+        chunk_results.append(response_text)
+        total_tokens += tokens_total_chunk
+        chunk_cost = selector.estimate_cost(model_used, tokens_in, tokens_out)
+        total_cost += chunk_cost or 0
+
+    logger.info("\nSynthesizing chunk analyses...")
+
+    synthesis_input = format_chunks_for_synthesis(
+        chunk_results, video_info.title, video_info.duration_string
+    )
+    synthesis_variables = {"chunk_analyses": synthesis_input}
+    synthesis_system = substitute_prompt_variables(
+        synthesis_template.system_prompt, synthesis_variables
+    )
+    synthesis_user = substitute_prompt_variables(
+        synthesis_template.user_prompt, synthesis_variables
+    )
+
+    selector.reset()
+    synthesis_text, synthesis_model, syn_in, syn_out, syn_total, _ = _call_llm_with_fallback(
+        client,
+        selector,
+        synthesis_system,
+        synthesis_user,
+        synthesis_template.max_output_tokens,
+        preferred_model,
+        verbose,
+    )
+
+    total_tokens += syn_total
+    syn_cost = selector.estimate_cost(synthesis_model, syn_in, syn_out)
+    total_cost += syn_cost or 0
+
+    duration = time.time() - start_time
+
+    return AnalysisResult(
+        analysis_text=synthesis_text,
+        analysis_type="executive_summary",
+        analysis_name=f"Executive Summary (Chunked: {len(chunks)} parts)",
+        model=synthesis_model,
+        provider="groq",
+        tokens_input=total_tokens,
+        tokens_output=0,
+        tokens_total=total_tokens,
+        estimated_cost=total_cost,
+        duration=duration,
+        truncated=False,
+    )
+
+
 def analyze_transcript_with_llm(
     transcript: str,
     video_info: VideoInfo,
@@ -162,8 +557,8 @@ def analyze_transcript_with_llm(
 ) -> AnalysisResult:
     """Analyze transcript using Groq LLM API with automatic model fallback.
 
-    Uses a quality-prioritized fallback chain when rate limits are hit.
-    The chain is defined in config/models.yaml.
+    For long transcripts that exceed model context windows, automatically
+    uses chunking with synthesis to produce coherent results.
 
     Args:
         transcript: Full transcript text
@@ -191,134 +586,57 @@ def analyze_transcript_with_llm(
             f"Analysis type '{analysis_type}' not found. Available types: {available_types}"
         )
 
-    # Get template
-    template = prompts_config.prompts[analysis_type]
+    # Create Groq client
+    client = _create_groq_client(api_key)
 
-    # Prepare variables
-    transcript_text, was_truncated = truncate_transcript(transcript, verbose=verbose)
-    variables = {
-        "transcript": transcript_text,
-        "title": video_info.title,
-        "channel": video_info.channel,
-        "duration": video_info.duration_string,
-        "url": video_info.webpage_url,
-    }
-
-    # Substitute variables
-    system_prompt = substitute_prompt_variables(template.system_prompt, variables)
-    user_prompt = substitute_prompt_variables(template.user_prompt, variables)
-
-    # Estimate tokens
-    estimated_input_tokens = (len(system_prompt) + len(user_prompt)) // CHAR_TO_TOKEN_RATIO
-    estimated_output_tokens = template.max_output_tokens
-    estimated_total_tokens = estimated_input_tokens + estimated_output_tokens
-
-    # Select best model for this request (pre-check TPM limits)
+    # Determine preferred model
     preferred_model = model or selector.get_default_model()
-    current_model, is_preselected_fallback = selector.select_model_for_tokens(
-        estimated_total_tokens, preferred_model
-    )
 
-    # Log initial estimation
-    estimated_cost = selector.estimate_cost(
-        current_model, estimated_input_tokens, estimated_output_tokens
-    )
-    logger.info("\nAnalysis Estimation:")
-    logger.info(f"  Type: {template.name}")
-    logger.info(f"  Model: {selector.get_display_name(current_model)}")
-    logger.info(f"  Estimated input tokens: ~{estimated_input_tokens}")
-    if estimated_cost:
-        logger.info(f"  Estimated cost: ${estimated_cost:.4f}")
+    # Estimate transcript tokens (rough estimate for chunking decision)
+    transcript_tokens = estimate_tokens(transcript)
+    # Use effective limit (considers both context window AND TPM rate limits)
+    effective_limit = selector.get_effective_token_limit(preferred_model)
 
-    # Define the API call function with retry decorator
-    @with_retry(max_retries=3, base_delay=2.0)
-    def _call_api(client, model_name: str):
-        return client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            max_tokens=template.max_output_tokens,
-            temperature=0.3,
-            timeout=ANALYSIS_TIMEOUT,
-        )
-
-    # Initialize Groq client
-    try:
-        from groq import Groq
-
-        client = Groq(api_key=api_key)
-    except ImportError as e:
-        raise AnalysisError("'groq' package not installed. Run: pip install groq") from e
-
-    # Fallback loop - try models until success or exhaustion
-    original_requested_model = preferred_model
-    start_time = time.time()
-
-    while current_model:
-        selector.mark_tried(current_model)
-
-        try:
-            if verbose:
-                logger.info(f"Calling {selector.get_display_name(current_model)}...")
-
-            response = _call_api(client, current_model)
-            duration = time.time() - start_time
-
-            # Extract results
-            analysis_text = response.choices[0].message.content
-            tokens_input = response.usage.prompt_tokens
-            tokens_output = response.usage.completion_tokens
-            tokens_total = response.usage.total_tokens
-            actual_cost = selector.estimate_cost(current_model, tokens_input, tokens_output)
-
-            # Log fallback if it occurred
-            if current_model != original_requested_model:
-                logger.info(
-                    f"Analysis completed with fallback model {selector.get_display_name(current_model)} "
-                    f"(requested: {selector.get_display_name(original_requested_model)})"
-                )
-
-            return AnalysisResult(
-                analysis_text=analysis_text,
-                analysis_type=analysis_type,
-                analysis_name=template.name,
-                model=current_model,
-                provider="groq",
-                tokens_input=tokens_input,
-                tokens_output=tokens_output,
-                tokens_total=tokens_total,
-                estimated_cost=actual_cost,
-                duration=duration,
-                truncated=was_truncated,
+    # Check if chunking is needed (transcript + prompt overhead > effective limit)
+    prompt_overhead = 2000  # Estimated tokens for system + user prompt template
+    if transcript_tokens + prompt_overhead > effective_limit:
+        # Verify we have chunking prompts
+        if "chunk_analysis" not in prompts_config.prompts:
+            raise AnalysisError(
+                "Transcript too long for single analysis and chunk_analysis prompt not found. "
+                "Add chunk_analysis and synthesis prompts to config/prompts.yaml"
+            )
+        if "synthesis" not in prompts_config.prompts:
+            raise AnalysisError(
+                "Transcript too long for single analysis and synthesis prompt not found. "
+                "Add synthesis prompt to config/prompts.yaml"
             )
 
-        except Exception as e:
-            # Check if this is a rate limit error that warrants fallback
-            if is_rate_limit_error(e):
-                next_model = selector.handle_rate_limit(current_model)
-                if next_model:
-                    current_model = next_model
-                    continue
-                else:
-                    # All models exhausted
-                    tried = selector.get_tried_models()
-                    raise AnalysisError(
-                        f"Rate limit exceeded on all fallback models.\n"
-                        f"Tried: {', '.join(sorted(tried))}\n\n"
-                        f"Options:\n"
-                        f"  1. Wait for rate limits to reset\n"
-                        f"  2. Use --skip_analysis_on_error to skip analysis"
-                    ) from e
-            else:
-                # Non-rate-limit error - don't fallback
-                if verbose:
-                    traceback.print_exc()
-                raise AnalysisError(f"Error during LLM analysis: {type(e).__name__}: {e}") from e
+        logger.info(
+            f"\nTranscript (~{transcript_tokens} tokens) exceeds effective limit "
+            f"(~{effective_limit} tokens). Using chunked analysis..."
+        )
+        return _analyze_with_chunking(
+            transcript,
+            video_info,
+            prompts_config,
+            client,
+            selector,
+            preferred_model,
+            verbose,
+        )
 
-    # Should never reach here, but just in case
-    raise AnalysisError("No models available for analysis")
+    # Standard single-call analysis
+    return _analyze_single(
+        transcript,
+        video_info,
+        analysis_type,
+        prompts_config,
+        client,
+        selector,
+        preferred_model,
+        verbose,
+    )
 
 
 # ============================================================================
