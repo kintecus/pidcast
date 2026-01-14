@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Bash(uv run ruff:*)",
+      "Bash(uv run python:*)",
+      "WebSearch",
+      "WebFetch(domain:groq.com)",
+      "Bash(git add:*)",
+      "Bash(uv run pidcast:*)",
+      "Skill(ideation:ideation)",
+      "Bash(mkdir:*)",
+      "Bash(git commit:*)",
+      "Bash(git push)",
+      "Bash(ls:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv run:*)",
+      "Bash(cat:*)",
+      "Bash(find:*)",
+      "Bash(git rm:*)"
+    ]
+  }
+}
