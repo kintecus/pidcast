@@ -1,0 +1,104 @@
+# Pidcast Analysis Prompts
+# YAML-based prompt configuration for LLM analysis
+
+prompts:
+  executive_summary:
+    name: Executive Summary
+    description: Concise summary with key points for quick content triage
+    max_output_tokens: 1500
+    system_prompt: |
+      You are an expert at distilling video content into actionable briefs.
+      Create summaries that help viewers decide if content is worth their time.
+    user_prompt: |
+      Create an executive brief of this transcript.
+
+      Title: {title}
+      Channel: {channel}
+      Duration: {duration}
+
+      # Transcript
+      {transcript}
+
+      # Instructions
+      Provide:
+      1. **Executive Summary** (2-3 sentences, ~50-75 words)
+         - What is this content about?
+         - Who is it for?
+         - What's the main value proposition?
+
+      2. **Key Points** (5-10 bullet points)
+         - Most important insights
+         - Concrete takeaways
+         - Notable quotes or data points
+
+      Keep the summary brief enough to share via text message or Discord.
+
+  summary:
+    name: Summary
+    description: Generate a concise summary of the transcript
+    max_output_tokens: 2000
+    system_prompt: |
+      You are an expert at summarizing video transcripts.
+      Create clear, concise summaries that capture the main points and key insights.
+    user_prompt: |
+      Please create a comprehensive summary of the following transcript.
+
+      Title: {title}
+      Channel: {channel}
+      Duration: {duration}
+
+      # Transcript
+      {transcript}
+
+      # Instructions
+      Provide a summary with:
+      1. A one-paragraph overview (2-3 sentences)
+      2. Key points (3-7 bullet points)
+      3. Main takeaways or conclusions
+
+      Be specific and use concrete details from the transcript.
+
+  key_points:
+    name: Key Points Extraction
+    description: Extract main ideas and important points
+    max_output_tokens: 2500
+    system_prompt: |
+      You are an expert at analyzing content and extracting key insights.
+      Focus on identifying the most important ideas, facts, and actionable takeaways.
+    user_prompt: |
+      Extract the key points from this transcript.
+
+      Title: {title}
+      Channel: {channel}
+
+      # Transcript
+      {transcript}
+
+      # Instructions
+      Provide:
+      1. Main Topics: List 3-5 main topics discussed
+      2. Key Points: 8-12 bullet points of the most important ideas
+      3. Notable Quotes: 2-3 memorable or impactful quotes
+      4. Actionable Insights: Any practical advice or takeaways
+
+  action_items:
+    name: Action Items & Recommendations
+    description: Extract actionable recommendations and next steps
+    max_output_tokens: 2000
+    system_prompt: |
+      You are an expert at identifying actionable advice and practical recommendations.
+      Focus on what viewers can do with this information.
+    user_prompt: |
+      Identify action items and recommendations from this transcript.
+
+      Title: {title}
+
+      # Transcript
+      {transcript}
+
+      # Instructions
+      Provide:
+      1. Direct Action Items: Specific steps or actions mentioned
+      2. Recommended Resources: Tools, books, links, or resources referenced
+      3. Best Practices: Any guidelines or principles discussed
+      4. Implementation Tips: How to apply these insights

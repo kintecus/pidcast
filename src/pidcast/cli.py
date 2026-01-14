@@ -17,8 +17,8 @@ from .analysis import (
     render_analysis_to_terminal,
 )
 from .config import (
-    DEFAULT_ANALYSIS_PROMPTS_FILE,
     DEFAULT_GROQ_MODEL,
+    DEFAULT_PROMPTS_FILE,
     DEFAULT_STATS_FILE,
     DEFAULT_TRANSCRIPTS_DIR,
     OBSIDIAN_PATH,
@@ -99,7 +99,9 @@ Examples:
 
     # Input source group (mutually exclusive)
     input_group = parser.add_mutually_exclusive_group(required=True)
-    input_group.add_argument("input_source", nargs="?", help="YouTube video URL or path to local audio file")
+    input_group.add_argument(
+        "input_source", nargs="?", help="YouTube video URL or path to local audio file"
+    )
     input_group.add_argument(
         "--analyze_existing",
         help="Path to existing transcript file (.md or .txt) to analyze without re-transcribing",
@@ -143,17 +145,32 @@ Examples:
     # LLM Analysis arguments
     analysis_group = parser.add_argument_group("LLM Analysis Options")
     analysis_group.add_argument(
-        "--analyze", action="store_true", help="Enable LLM-based transcript analysis"
+        "--no-analyze",
+        action="store_true",
+        dest="no_analyze",
+        help="Skip LLM analysis (default: analyze is enabled)",
+    )
+    analysis_group.add_argument(
+        "--analyze",
+        action="store_true",
+        help="(Deprecated) Enable LLM analysis - this is now the default behavior",
     )
     analysis_group.add_argument(
         "--analysis_type",
-        default="summary",
-        help="Analysis type/prompt template to use (default: summary)",
+        default="executive_summary",
+        help="Analysis type/prompt template to use (default: executive_summary)",
     )
+    analysis_group.add_argument(
+        "--prompts_file",
+        default=None,
+        help=f"Path to prompts YAML file (default: {DEFAULT_PROMPTS_FILE})",
+    )
+    # Keep old flag name for backward compatibility
     analysis_group.add_argument(
         "--analysis_prompts_file",
         default=None,
-        help=f"Path to analysis prompts JSON file (default: {DEFAULT_ANALYSIS_PROMPTS_FILE})",
+        dest="prompts_file_legacy",
+        help="(Deprecated) Use --prompts_file instead",
     )
     analysis_group.add_argument(
         "--groq_api_key",
@@ -169,6 +186,14 @@ Examples:
         "--skip_analysis_on_error",
         action="store_true",
         help="Continue if analysis fails instead of aborting",
+    )
+
+    # Output options
+    output_group = parser.add_argument_group("Output Options")
+    output_group.add_argument(
+        "--save",
+        action="store_true",
+        help="Save analysis output to file (default: terminal only)",
     )
 
     return parser.parse_args()
@@ -209,7 +234,7 @@ def parse_transcript_file(filepath: str, verbose: bool = False) -> tuple[str, Vi
         with open(file_path, encoding="utf-8") as f:
             content = f.read()
     except Exception as e:
-        raise FileProcessingError(f"Failed to read file: {e}")
+        raise FileProcessingError(f"Failed to read file: {e}") from e
 
     # Validate not empty
     if not content.strip():
@@ -253,7 +278,9 @@ def parse_transcript_file(filepath: str, verbose: bool = False) -> tuple[str, Vi
             except Exception as e:
                 # Fallback: treat as plain text
                 if verbose:
-                    logger.warning(f"Failed to parse YAML front matter, treating as plain text: {e}")
+                    logger.warning(
+                        f"Failed to parse YAML front matter, treating as plain text: {e}"
+                    )
                 transcript_text = content
                 video_info = VideoInfo(title=file_path.stem)
         else:
@@ -275,12 +302,75 @@ def parse_transcript_file(filepath: str, verbose: bool = False) -> tuple[str, Vi
     return transcript_text, video_info
 
 
+def _render_analysis_to_terminal_direct(
+    result: Any,
+    video_info: VideoInfo,
+    verbose: bool = False,
+) -> None:
+    """Render analysis result directly to terminal without saving to file.
+
+    Args:
+        result: AnalysisResult from LLM analysis
+        video_info: Video metadata
+        verbose: Enable verbose output
+    """
+    try:
+        from rich.console import Console
+        from rich.markdown import Markdown
+        from rich.panel import Panel
+        from rich.table import Table
+    except ImportError:
+        # Fallback to plain text
+        print(f"Title: {video_info.title}")
+        print(f"Analysis Type: {result.analysis_name}")
+        print(f"Model: {result.model}")
+        print("-" * 60)
+        print(result.analysis_text)
+        return
+
+    console = Console()
+
+    # Build metadata table
+    table = Table(show_header=False, box=None, padding=(0, 1))
+    table.add_column(style="cyan bold", width=20)
+    table.add_column(style="white")
+
+    table.add_row("Title", video_info.title)
+    table.add_row("Analysis Type", result.analysis_name)
+    table.add_row("Model", result.model)
+    table.add_row("Tokens", str(result.tokens_total))
+
+    if result.estimated_cost:
+        table.add_row("Cost", f"${result.estimated_cost:.4f}")
+
+    if verbose:
+        table.add_row("", "")  # Blank row
+        table.add_row("Channel", video_info.channel or "Unknown")
+        table.add_row("Duration", video_info.duration_string or "Unknown")
+        table.add_row(
+            "Tokens (In/Out)",
+            f"{result.tokens_input}/{result.tokens_output}",
+        )
+        table.add_row("Truncated", "Yes" if result.truncated else "No")
+
+    # Render metadata panel
+    console.print(
+        Panel(table, title="[bold cyan]Analysis Metadata[/bold cyan]", border_style="cyan")
+    )
+    console.print()
+
+    # Render markdown content
+    md = Markdown(result.analysis_text)
+    console.print(md)
+
+
 def run_analysis(
     markdown_file: Path | None,
     video_info: VideoInfo,
     output_dir: Path,
     args: argparse.Namespace,
     transcript_text: str | None = None,
+    save_to_file: bool = True,
 ) -> tuple[Path | None, float, dict[str, Any]]:
     """Run LLM analysis on transcript.
 
@@ -290,6 +380,7 @@ def run_analysis(
         output_dir: Output directory
         args: Parsed arguments
         transcript_text: Optional pre-loaded transcript text
+        save_to_file: Whether to save the analysis to a file
 
     Returns:
         Tuple of (analysis_file, duration, metadata)
@@ -303,11 +394,9 @@ def run_analysis(
             "Groq API key not found. Set GROQ_API_KEY environment variable or use --groq_api_key"
         )
 
-    # Load prompts
-    prompts_file = Path(args.analysis_prompts_file or DEFAULT_ANALYSIS_PROMPTS_FILE)
+    # Load prompts (use new flag or legacy flag for backward compatibility)
+    prompts_file = args.prompts_file or args.prompts_file_legacy
     prompts_config = load_analysis_prompts(prompts_file, args.verbose)
-    if not prompts_config:
-        raise AnalysisError(f"Failed to load analysis prompts from: {prompts_file}")
 
     # Get transcript text
     if transcript_text is None:
@@ -334,37 +423,6 @@ def run_analysis(
         args.verbose,
     )
 
-    # Create analysis markdown
-    # If markdown_file is None, create a placeholder filename from video title
-    source_file_for_naming = markdown_file
-    if source_file_for_naming is None:
-        # Create a smart filename for the analysis based on video title
-        smart_filename = create_smart_filename(video_info.title, max_length=60, include_date=True)
-        source_file_for_naming = output_dir / f"{smart_filename}.md"
-
-    analysis_file = create_analysis_markdown_file(
-        {
-            "analysis_text": result.analysis_text,
-            "analysis_type": result.analysis_type,
-            "analysis_name": result.analysis_name,
-            "model": result.model,
-            "provider": result.provider,
-            "tokens_input": result.tokens_input,
-            "tokens_output": result.tokens_output,
-            "tokens_total": result.tokens_total,
-            "estimated_cost": result.estimated_cost,
-            "duration": result.duration,
-            "truncated": result.truncated,
-        },
-        source_file_for_naming,
-        video_info,
-        output_dir,
-        args.verbose,
-    )
-
-    if not analysis_file:
-        raise AnalysisError("Failed to create analysis file")
-
     analysis_duration = time.time() - analysis_start
     metadata = {
         "analysis_type": result.analysis_type,
@@ -375,15 +433,58 @@ def run_analysis(
         "truncated": result.truncated,
     }
 
-    logger.info(f"\n✓ Analysis completed in {format_duration(analysis_duration)}")
-    logger.info(f"✓ Analysis file: file://{analysis_file.absolute()}")
+    analysis_file: Path | None = None
 
-    # Render analysis to terminal
-    print()  # Blank line
-    render_analysis_to_terminal(analysis_file, verbose=args.verbose)
+    # Create analysis markdown file only if saving
+    if save_to_file:
+        # If markdown_file is None, create a placeholder filename from video title
+        source_file_for_naming = markdown_file
+        if source_file_for_naming is None:
+            # Create a smart filename for the analysis based on video title
+            smart_filename = create_smart_filename(
+                video_info.title, max_length=60, include_date=True
+            )
+            source_file_for_naming = output_dir / f"{smart_filename}.md"
+
+        analysis_file = create_analysis_markdown_file(
+            {
+                "analysis_text": result.analysis_text,
+                "analysis_type": result.analysis_type,
+                "analysis_name": result.analysis_name,
+                "model": result.model,
+                "provider": result.provider,
+                "tokens_input": result.tokens_input,
+                "tokens_output": result.tokens_output,
+                "tokens_total": result.tokens_total,
+                "estimated_cost": result.estimated_cost,
+                "duration": result.duration,
+                "truncated": result.truncated,
+            },
+            source_file_for_naming,
+            video_info,
+            output_dir,
+            args.verbose,
+        )
+
+        if not analysis_file:
+            raise AnalysisError("Failed to create analysis file")
+
+        logger.info(f"\n✓ Analysis completed in {format_duration(analysis_duration)}")
+        logger.info(f"✓ Analysis file: file://{analysis_file.absolute()}")
+
+        # Render analysis to terminal from file
+        print()  # Blank line
+        render_analysis_to_terminal(analysis_file, verbose=args.verbose)
+    else:
+        # Terminal-only output - render directly without saving
+        logger.info(f"\n✓ Analysis completed in {format_duration(analysis_duration)}")
+        print()  # Blank line
+        _render_analysis_to_terminal_direct(result, video_info, args.verbose)
 
     if result.estimated_cost:
         logger.info(f"\n✓ Cost: ${result.estimated_cost:.4f}")
+
+    logger.info(f"✓ Generated with: {result.model}")
 
     return analysis_file, analysis_duration, metadata
 
@@ -415,6 +516,14 @@ def main() -> None:
 
     # Handle analyze-existing mode
     if args.analyze_existing:
+        # --no-analyze doesn't make sense with --analyze_existing
+        if args.no_analyze:
+            log_error(
+                "--no-analyze cannot be used with --analyze_existing. "
+                "The purpose of --analyze_existing is to analyze a transcript."
+            )
+            return
+
         if args.verbose:
             log_section("Analyze Existing Transcript")
             logger.info(f"Input file: {args.analyze_existing}")
@@ -432,6 +541,9 @@ def main() -> None:
             if video_info.channel != "Unknown":
                 logger.info(f"Channel: {video_info.channel}")
 
+            # Determine if we should save to file
+            should_save = args.save or args.save_to_obsidian
+
             # Run analysis
             analysis_file, analysis_duration, analysis_metadata = run_analysis(
                 None,  # No source markdown file in analyze-existing mode
@@ -439,6 +551,7 @@ def main() -> None:
                 output_dir,
                 args,
                 transcript_text=transcript_text,
+                save_to_file=should_save,
             )
 
             # Save statistics
@@ -571,16 +684,25 @@ def main() -> None:
         ):
             raise FileProcessingError("Failed to create Markdown file")
 
-        # LLM Analysis
+        # LLM Analysis (default: enabled unless --no-analyze)
         analysis_file: Path | None = None
         analysis_duration = 0.0
         analysis_performed = False
         analysis_metadata: dict[str, Any] = {}
 
-        if args.analyze:
+        # Analyze by default unless --no-analyze is set
+        should_analyze = not args.no_analyze
+        # Save to file if --save or --save_to_obsidian is set
+        should_save_analysis = args.save or args.save_to_obsidian
+
+        if should_analyze:
             try:
                 analysis_file, analysis_duration, analysis_metadata = run_analysis(
-                    markdown_file, video_info, output_dir, args
+                    markdown_file,
+                    video_info,
+                    output_dir,
+                    args,
+                    save_to_file=should_save_analysis,
                 )
                 analysis_performed = True
             except AnalysisError as e:

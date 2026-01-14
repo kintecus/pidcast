@@ -7,11 +7,13 @@ import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
+
 from .config import (
     ANALYSIS_TIMEOUT,
     CHAR_TO_TOKEN_RATIO,
-    DEFAULT_ANALYSIS_PROMPTS_FILE,
     DEFAULT_GROQ_MODEL,
+    DEFAULT_PROMPTS_FILE,
     DEFAULT_STATS_FILE,
     GROQ_PRICING,
     GROQ_RATE_LIMITS,
@@ -25,7 +27,7 @@ from .config import (
     get_fallback_chain,
 )
 from .exceptions import AnalysisError
-from .utils import load_json_file, log_error, log_success, log_warning, save_json_file
+from .utils import load_json_file, log_error, log_success, log_warning
 
 logger = logging.getLogger(__name__)
 
@@ -51,90 +53,55 @@ class RateLimitViolation:
 # ============================================================================
 
 
-def create_default_prompts_file(prompts_file: Path, verbose: bool = False) -> bool:
-    """Create a default analysis prompts configuration file.
+def load_analysis_prompts(
+    prompts_file: str | Path | None = None, verbose: bool = False
+) -> PromptsConfig:
+    """Load and validate analysis prompt templates from YAML file.
 
     Args:
-        prompts_file: Path where to create the file
+        prompts_file: Path to prompts YAML configuration (default: config/prompts.yaml)
         verbose: Enable verbose output
 
     Returns:
-        True if successful, False otherwise
+        PromptsConfig containing prompts
+
+    Raises:
+        AnalysisError: If prompts file is missing or invalid
     """
-    default_prompts = {
-        "prompts": {
-            "summary": {
-                "name": "Summary",
-                "description": "Generate a concise summary of the transcript",
-                "system_prompt": "You are an expert at summarizing video transcripts. Create clear, concise summaries that capture the main points and key insights.",
-                "user_prompt": "Please create a comprehensive summary of the following transcript.\n\nTitle: {title}\nChannel: {channel}\nDuration: {duration}\n\n# Transcript\n\n{transcript}\n\n# Instructions\n\nProvide a summary with:\n1. A one-paragraph overview (2-3 sentences)\n2. Key points (3-7 bullet points)\n3. Main takeaways or conclusions\n\nBe specific and use concrete details from the transcript.",
-                "max_output_tokens": 2000,
-            },
-            "key_points": {
-                "name": "Key Points Extraction",
-                "description": "Extract main ideas and important points",
-                "system_prompt": "You are an expert at analyzing content and extracting key insights. Focus on identifying the most important ideas, facts, and actionable takeaways.",
-                "user_prompt": "Extract the key points from this transcript.\n\nTitle: {title}\nChannel: {channel}\n\n# Transcript\n\n{transcript}\n\n# Instructions\n\nProvide:\n1. Main Topics: List 3-5 main topics discussed\n2. Key Points: 8-12 bullet points of the most important ideas\n3. Notable Quotes: 2-3 memorable or impactful quotes\n4. Actionable Insights: Any practical advice or takeaways",
-                "max_output_tokens": 2500,
-            },
-            "action_items": {
-                "name": "Action Items & Recommendations",
-                "description": "Extract actionable recommendations and next steps",
-                "system_prompt": "You are an expert at identifying actionable advice and practical recommendations from content. Focus on what viewers can do with this information.",
-                "user_prompt": "Identify action items and recommendations from this transcript.\n\nTitle: {title}\n\n# Transcript\n\n{transcript}\n\n# Instructions\n\nProvide:\n1. Direct Action Items: Specific steps or actions mentioned\n2. Recommended Resources: Tools, books, links, or resources referenced\n3. Best Practices: Any guidelines or principles discussed\n4. Implementation Tips: How to apply these insights",
-                "max_output_tokens": 2000,
-            },
-        }
-    }
-
-    if save_json_file(prompts_file, default_prompts, verbose=verbose):
-        if verbose:
-            logger.info("  Available analysis types: summary, key_points, action_items")
-        return True
-    return False
-
-
-def load_analysis_prompts(prompts_file: str | Path, verbose: bool = False) -> PromptsConfig | None:
-    """Load and validate analysis prompt templates from JSON file.
-
-    Args:
-        prompts_file: Path to prompts JSON configuration
-        verbose: Enable verbose output
-
-    Returns:
-        PromptsConfig containing prompts, or None on error
-    """
+    if prompts_file is None:
+        prompts_file = DEFAULT_PROMPTS_FILE
     prompts_file = Path(prompts_file)
 
-    # If file doesn't exist and it's the default path, create it
+    # Fail clearly if file doesn't exist (no auto-generation)
     if not prompts_file.exists():
-        if prompts_file == DEFAULT_ANALYSIS_PROMPTS_FILE:
-            if verbose:
-                logger.info(f"Prompts file not found at {prompts_file}")
-                logger.info("Creating default prompts file...")
-            if not create_default_prompts_file(prompts_file, verbose):
-                return None
-        else:
-            log_error(f"Prompts file not found: {prompts_file}")
-            return None
+        raise AnalysisError(
+            f"Prompts file not found: {prompts_file}\n"
+            f"Expected: config/prompts.yaml\n"
+            f"Please ensure the prompts.yaml file exists in the config directory."
+        )
 
-    # Load the file
-    config = load_json_file(prompts_file)
+    # Load YAML file
+    try:
+        with open(prompts_file, encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        raise AnalysisError(f"Invalid YAML in prompts file: {e}") from e
+
     if config is None:
-        return None
+        raise AnalysisError(f"Prompts file is empty: {prompts_file}")
 
     # Validate structure
     if "prompts" not in config:
-        log_error("Invalid prompts file: missing 'prompts' key")
-        return None
+        raise AnalysisError("Invalid prompts file: missing 'prompts' key")
 
     # Validate each prompt has required fields
     required_fields = ["name", "description", "system_prompt", "user_prompt"]
     for prompt_id, prompt_data in config["prompts"].items():
         missing_fields = [field for field in required_fields if field not in prompt_data]
         if missing_fields:
-            log_error(f"Prompt '{prompt_id}' missing required fields: {', '.join(missing_fields)}")
-            return None
+            raise AnalysisError(
+                f"Prompt '{prompt_id}' missing required fields: {', '.join(missing_fields)}"
+            )
 
     if verbose:
         log_success(f"Loaded {len(config['prompts'])} analysis prompt(s) from {prompts_file}")
