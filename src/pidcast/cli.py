@@ -17,7 +17,6 @@ from .analysis import (
     render_analysis_to_terminal,
 )
 from .config import (
-    DEFAULT_GROQ_MODEL,
     DEFAULT_PROMPTS_FILE,
     DEFAULT_STATS_FILE,
     DEFAULT_TRANSCRIPTS_DIR,
@@ -179,8 +178,8 @@ Examples:
     )
     analysis_group.add_argument(
         "--groq_model",
-        default=DEFAULT_GROQ_MODEL,
-        help=f"Groq model to use for analysis (default: {DEFAULT_GROQ_MODEL})",
+        default=None,
+        help="Groq model to use for analysis (default: from config/models.yaml)",
     )
     analysis_group.add_argument(
         "--skip_analysis_on_error",
