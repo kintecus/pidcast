@@ -8,6 +8,7 @@ import os
 import time
 import traceback
 import uuid
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -36,8 +37,11 @@ from .transcription import (
 from .utils import (
     cleanup_temp_files,
     create_smart_filename,
+    extract_youtube_video_id,
+    find_existing_transcription,
     format_duration,
     get_unique_filename,
+    is_interactive,
     log_error,
     log_section,
     log_success,
@@ -47,6 +51,148 @@ from .utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# DUPLICATE DETECTION
+# ============================================================================
+
+
+class DuplicateAction(Enum):
+    """User's choice when duplicate transcription is detected."""
+
+    RE_TRANSCRIBE = "retranscribe"
+    ANALYZE_EXISTING = "analyze"
+    FORCE_CONTINUE = "force"
+    CANCEL = "cancel"
+
+
+def prompt_duplicate_detected(
+    prev: "PreviousTranscription",
+    verbose: bool = False,
+) -> DuplicateAction:
+    """Display duplicate detection UI and get user's choice.
+
+    Args:
+        prev: Information about the previous transcription
+        verbose: Enable verbose output
+
+    Returns:
+        User's selected action
+    """
+    from .config import PreviousTranscription
+
+    try:
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.prompt import Prompt
+        from rich.table import Table
+    except ImportError:
+        return _prompt_duplicate_basic(prev)
+
+    console = Console()
+
+    # Build info panel
+    console.print()
+    console.print(
+        Panel(
+            "[yellow bold]Duplicate Detected![/yellow bold]\n\n"
+            "This video was previously transcribed.",
+            border_style="yellow",
+        )
+    )
+
+    # Show previous transcription details
+    table = Table(show_header=False, box=None, padding=(0, 2))
+    table.add_column(style="cyan", width=20)
+    table.add_column(style="white")
+
+    table.add_row("Title", prev.video_title)
+    table.add_row("Transcribed", prev.formatted_date)
+    table.add_row("File", prev.smart_filename)
+
+    # Check if transcript file still exists
+    transcript_exists = prev.transcript_path.exists()
+    if transcript_exists:
+        table.add_row("Status", "[green]Transcript file exists[/green]")
+    else:
+        table.add_row("Status", "[red]Transcript file not found[/red]")
+
+    if prev.analysis_performed:
+        table.add_row("Previous Analysis", prev.analysis_type or "Yes")
+
+    console.print(table)
+    console.print()
+
+    # Build options
+    console.print("[bold]What would you like to do?[/bold]")
+    console.print()
+    console.print("  [cyan]1[/cyan] - Re-transcribe the video")
+
+    if transcript_exists:
+        console.print("  [cyan]2[/cyan] - Analyze existing transcript (skip re-transcription)")
+    else:
+        console.print("  [dim]2 - Analyze existing (unavailable - file not found)[/dim]")
+
+    console.print("  [cyan]3[/cyan] - Continue anyway (force re-transcription)")
+    console.print("  [cyan]4[/cyan] - Cancel")
+    console.print()
+
+    # Get choice
+    valid_choices = ["1", "2", "3", "4"] if transcript_exists else ["1", "3", "4"]
+    while True:
+        choice = Prompt.ask(
+            "Enter choice",
+            choices=valid_choices,
+            default="4",
+        )
+
+        if choice == "1":
+            return DuplicateAction.RE_TRANSCRIBE
+        elif choice == "2" and transcript_exists:
+            return DuplicateAction.ANALYZE_EXISTING
+        elif choice == "3":
+            return DuplicateAction.FORCE_CONTINUE
+        elif choice == "4":
+            return DuplicateAction.CANCEL
+
+
+def _prompt_duplicate_basic(prev: "PreviousTranscription") -> DuplicateAction:
+    """Basic fallback prompt without rich."""
+    print("\n" + "=" * 60)
+    print("DUPLICATE DETECTED!")
+    print("=" * 60)
+    print(f"Title: {prev.video_title}")
+    print(f"Previously transcribed: {prev.formatted_date}")
+    print(f"File: {prev.smart_filename}")
+    print()
+    print("Options:")
+    print("  1 - Re-transcribe the video")
+    print("  2 - Analyze existing transcript")
+    print("  3 - Continue anyway")
+    print("  4 - Cancel")
+    print()
+
+    transcript_exists = prev.transcript_path.exists()
+    valid_choices = {"1", "3", "4"}
+    if transcript_exists:
+        valid_choices.add("2")
+    else:
+        print("  (Option 2 unavailable - transcript file not found)")
+
+    while True:
+        choice = input("Enter choice [4]: ").strip() or "4"
+        if choice in valid_choices:
+            break
+        print(f"Invalid choice. Please enter: {', '.join(sorted(valid_choices))}")
+
+    mapping = {
+        "1": DuplicateAction.RE_TRANSCRIBE,
+        "2": DuplicateAction.ANALYZE_EXISTING,
+        "3": DuplicateAction.FORCE_CONTINUE,
+        "4": DuplicateAction.CANCEL,
+    }
+    return mapping[choice]
 
 
 # ============================================================================
@@ -140,6 +286,12 @@ Examples:
         help="PO Token for bypassing YouTube restrictions (format: 'client.type+TOKEN')",
     )
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+    parser.add_argument(
+        "--force",
+        "-f",
+        action="store_true",
+        help="Skip duplicate detection and force transcription",
+    )
 
     # LLM Analysis arguments
     analysis_group = parser.add_argument_group("LLM Analysis Options")
@@ -488,6 +640,112 @@ def run_analysis(
     return analysis_file, analysis_duration, metadata
 
 
+def _run_analyze_existing_mode(
+    transcript_path: str | Path,
+    args: argparse.Namespace,
+    output_dir: Path,
+    stats_file: Path,
+    run_uid: str,
+    run_timestamp: str,
+    start_time: float,
+) -> bool:
+    """Run analysis on an existing transcript file.
+
+    This is extracted from the analyze_existing mode in main() to allow reuse
+    when the user selects "Analyze existing" from the duplicate detection prompt.
+
+    Args:
+        transcript_path: Path to the existing transcript file
+        args: Parsed command-line arguments
+        output_dir: Output directory for analysis files
+        stats_file: Path to statistics file
+        run_uid: Unique run identifier
+        run_timestamp: ISO timestamp for this run
+        start_time: Start time for duration calculation
+
+    Returns:
+        True if analysis completed successfully, False otherwise
+    """
+    transcript_path = Path(transcript_path)
+
+    if args.verbose:
+        log_section("Analyze Existing Transcript")
+        logger.info(f"Input file: {transcript_path}")
+        logger.info(f"Run ID: {run_uid}")
+        logger.info(f"Timestamp: {run_timestamp}")
+
+    try:
+        # Ensure output directory exists
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Parse transcript file
+        transcript_text, video_info = parse_transcript_file(str(transcript_path), args.verbose)
+
+        logger.info(f"Title: {video_info.title}")
+        if video_info.channel != "Unknown":
+            logger.info(f"Channel: {video_info.channel}")
+
+        # Determine if we should save to file
+        should_save = args.save or args.save_to_obsidian
+
+        # Run analysis
+        analysis_file, analysis_duration, analysis_metadata = run_analysis(
+            None,  # No source markdown file in analyze-existing mode
+            video_info,
+            output_dir,
+            args,
+            transcript_text=transcript_text,
+            save_to_file=should_save,
+        )
+
+        # Save statistics
+        end_time = time.time()
+        duration = end_time - start_time
+
+        stats = TranscriptionStats(
+            run_uid=run_uid,
+            run_timestamp=run_timestamp,
+            video_title=video_info.title,
+            smart_filename=analysis_file.name if analysis_file else "",
+            video_url=video_info.webpage_url or str(transcript_path),
+            run_duration=duration,
+            transcription_duration=0,
+            audio_duration=0,
+            success=True,
+            saved_to_obsidian=args.save_to_obsidian,
+            is_local_file=True,
+            analysis_only=True,
+            analysis_performed=True,
+            analysis_type=analysis_metadata.get("analysis_type"),
+            analysis_name=analysis_metadata.get("analysis_name"),
+            analysis_duration=analysis_duration,
+            analysis_model=analysis_metadata.get("model"),
+            analysis_tokens=analysis_metadata.get("tokens_total", 0),
+            analysis_cost=analysis_metadata.get("estimated_cost", 0) or 0,
+            analysis_truncated=analysis_metadata.get("truncated", False),
+            analysis_file=analysis_file.name if analysis_file else None,
+        )
+
+        save_statistics(stats_file, stats, args.verbose)
+
+        log_section("✓ Analysis completed successfully!")
+        logger.info(f"Total duration: {format_duration(duration)}")
+
+        return True
+
+    except (FileProcessingError, AnalysisError) as e:
+        log_error(str(e))
+        if args.verbose:
+            traceback.print_exc()
+        return False
+
+    except Exception as e:
+        log_error(f"An unexpected error occurred: {type(e).__name__}: {e}")
+        if args.verbose:
+            traceback.print_exc()
+        return False
+
+
 def main() -> None:
     """Main entry point for pidcast CLI."""
     args = parse_arguments()
@@ -523,82 +781,10 @@ def main() -> None:
             )
             return
 
-        if args.verbose:
-            log_section("Analyze Existing Transcript")
-            logger.info(f"Input file: {args.analyze_existing}")
-            logger.info(f"Run ID: {run_uid}")
-            logger.info(f"Timestamp: {run_timestamp}")
-
-        try:
-            # Ensure output directory exists
-            output_dir.mkdir(parents=True, exist_ok=True)
-
-            # Parse transcript file
-            transcript_text, video_info = parse_transcript_file(args.analyze_existing, args.verbose)
-
-            logger.info(f"Title: {video_info.title}")
-            if video_info.channel != "Unknown":
-                logger.info(f"Channel: {video_info.channel}")
-
-            # Determine if we should save to file
-            should_save = args.save or args.save_to_obsidian
-
-            # Run analysis
-            analysis_file, analysis_duration, analysis_metadata = run_analysis(
-                None,  # No source markdown file in analyze-existing mode
-                video_info,
-                output_dir,
-                args,
-                transcript_text=transcript_text,
-                save_to_file=should_save,
-            )
-
-            # Save statistics
-            end_time = time.time()
-            duration = end_time - start_time
-
-            stats = TranscriptionStats(
-                run_uid=run_uid,
-                run_timestamp=run_timestamp,
-                video_title=video_info.title,
-                smart_filename=analysis_file.name if analysis_file else "",
-                video_url=video_info.webpage_url or args.analyze_existing,
-                run_duration=duration,
-                transcription_duration=0,
-                audio_duration=0,
-                success=True,
-                saved_to_obsidian=args.save_to_obsidian,
-                is_local_file=True,
-                analysis_only=True,
-                analysis_performed=True,
-                analysis_type=analysis_metadata.get("analysis_type"),
-                analysis_name=analysis_metadata.get("analysis_name"),
-                analysis_duration=analysis_duration,
-                analysis_model=analysis_metadata.get("model"),
-                analysis_tokens=analysis_metadata.get("tokens_total", 0),
-                analysis_cost=analysis_metadata.get("estimated_cost", 0) or 0,
-                analysis_truncated=analysis_metadata.get("truncated", False),
-                analysis_file=analysis_file.name if analysis_file else None,
-            )
-
-            save_statistics(stats_file, stats, args.verbose)
-
-            log_section("✓ Analysis completed successfully!")
-            logger.info(f"Total duration: {format_duration(duration)}")
-
-            return  # Exit after analyze-existing mode
-
-        except (FileProcessingError, AnalysisError) as e:
-            log_error(str(e))
-            if args.verbose:
-                traceback.print_exc()
-            return
-
-        except Exception as e:
-            log_error(f"An unexpected error occurred: {type(e).__name__}: {e}")
-            if args.verbose:
-                traceback.print_exc()
-            return
+        _run_analyze_existing_mode(
+            args.analyze_existing, args, output_dir, stats_file, run_uid, run_timestamp, start_time
+        )
+        return
 
     if args.verbose:
         log_section("Transcription Tool")
@@ -612,6 +798,50 @@ def main() -> None:
 
         if args.verbose:
             logger.info(f"Type: {'Local File' if is_local_file else 'YouTube URL'}")
+
+        # Check for duplicate transcription (unless --force is used)
+        if not args.force:
+            prev_transcription = find_existing_transcription(
+                stats_file, args.input_source, output_dir
+            )
+
+            if prev_transcription:
+                # Handle non-interactive mode
+                if not is_interactive():
+                    log_error(
+                        f"Duplicate detected: '{prev_transcription.video_title}' "
+                        f"was already transcribed on {prev_transcription.formatted_date}. "
+                        "Use --force to proceed anyway."
+                    )
+                    return
+
+                # Interactive mode: prompt user for action
+                action = prompt_duplicate_detected(prev_transcription, args.verbose)
+
+                if action == DuplicateAction.CANCEL:
+                    logger.info("Operation cancelled.")
+                    return
+
+                elif action == DuplicateAction.ANALYZE_EXISTING:
+                    # Redirect to analyze-existing mode
+                    _run_analyze_existing_mode(
+                        prev_transcription.transcript_path,
+                        args,
+                        output_dir,
+                        stats_file,
+                        run_uid,
+                        run_timestamp,
+                        start_time,
+                    )
+                    return
+
+                elif action == DuplicateAction.RE_TRANSCRIBE:
+                    # Continue with normal transcription
+                    logger.info("Re-transcribing video...")
+
+                elif action == DuplicateAction.FORCE_CONTINUE:
+                    # Continue with normal transcription
+                    logger.info("Continuing with transcription...")
 
         # Ensure output directory exists
         output_dir.mkdir(parents=True, exist_ok=True)

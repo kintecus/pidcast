@@ -7,6 +7,7 @@ import os
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -276,6 +277,7 @@ def save_json_file(filepath: str | Path, data: Any, indent: int = 2, verbose: bo
 
 SUPPORTED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".webm", ".ogg", ".flac", ".aac"}
 YOUTUBE_URL_PATTERN = re.compile(r"https?://(www\.)?(youtube\.com|youtu\.be)/")
+YOUTUBE_VIDEO_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{11}$")
 
 
 def validate_input_source(source: str) -> tuple[str, bool]:
@@ -307,6 +309,130 @@ def validate_input_source(source: str) -> tuple[str, bool]:
         )
 
     return source, False
+
+
+def extract_youtube_video_id(url: str) -> str | None:
+    """Extract normalized video ID from various YouTube URL formats.
+
+    Handles:
+    - https://www.youtube.com/watch?v=VIDEO_ID
+    - https://www.youtube.com/watch?v=VIDEO_ID&feature=shared
+    - https://youtu.be/VIDEO_ID
+    - https://youtu.be/VIDEO_ID?si=TRACKING_PARAM
+    - https://www.youtube.com/live/VIDEO_ID
+    - https://m.youtube.com/watch?v=VIDEO_ID
+
+    Args:
+        url: YouTube URL in any supported format
+
+    Returns:
+        11-character video ID or None if not a valid YouTube URL
+    """
+    try:
+        parsed = urlparse(url)
+        host = parsed.netloc.lower().replace("www.", "").replace("m.", "")
+
+        if host == "youtu.be":
+            # Short URL: https://youtu.be/VIDEO_ID
+            video_id = parsed.path.lstrip("/").split("/")[0]
+        elif host == "youtube.com":
+            if parsed.path.startswith("/watch"):
+                # Standard: /watch?v=VIDEO_ID
+                params = parse_qs(parsed.query)
+                video_id = params.get("v", [None])[0]
+            elif parsed.path.startswith("/live/"):
+                # Live: /live/VIDEO_ID
+                video_id = parsed.path.replace("/live/", "").split("/")[0]
+            elif parsed.path.startswith("/embed/"):
+                # Embed: /embed/VIDEO_ID
+                video_id = parsed.path.replace("/embed/", "").split("/")[0]
+            elif parsed.path.startswith("/v/"):
+                # Old format: /v/VIDEO_ID
+                video_id = parsed.path.replace("/v/", "").split("/")[0]
+            else:
+                return None
+        else:
+            return None
+
+        # Validate video ID format (11 chars, alphanumeric + _ -)
+        if video_id and YOUTUBE_VIDEO_ID_PATTERN.match(video_id):
+            return video_id
+        return None
+    except Exception:
+        return None
+
+
+def find_existing_transcription(
+    stats_file: Path,
+    input_source: str,
+    output_dir: Path,
+) -> "PreviousTranscription | None":
+    """Search stats file for a previous transcription of the same video.
+
+    Args:
+        stats_file: Path to transcription_stats.json
+        input_source: Current input (URL or file path)
+        output_dir: Current output directory (to locate transcript file)
+
+    Returns:
+        PreviousTranscription if found, None otherwise
+    """
+    from .config import PreviousTranscription
+
+    # Load stats
+    stats = load_json_file(stats_file, default=[])
+    if not stats:
+        return None
+
+    # Determine what to match on
+    if os.path.exists(input_source):
+        # Local file: match by absolute path
+        abs_path = os.path.abspath(input_source)
+        for entry in reversed(stats):  # Most recent first
+            entry_url = entry.get("video_url", "")
+            if entry.get("is_local_file") and os.path.abspath(entry_url) == abs_path:
+                if entry.get("success") and entry.get("smart_filename"):
+                    return PreviousTranscription(
+                        video_id="",
+                        video_title=entry.get("video_title", "Unknown"),
+                        video_url=entry_url,
+                        run_timestamp=entry.get("run_timestamp", ""),
+                        smart_filename=entry.get("smart_filename", ""),
+                        output_dir=output_dir,
+                        analysis_performed=entry.get("analysis_performed", False),
+                        analysis_type=entry.get("analysis_type"),
+                    )
+    else:
+        # YouTube URL: match by normalized video ID
+        current_video_id = extract_youtube_video_id(input_source)
+        if not current_video_id:
+            return None
+
+        for entry in reversed(stats):  # Most recent first
+            entry_url = entry.get("video_url", "")
+            entry_video_id = extract_youtube_video_id(entry_url)
+
+            if entry_video_id == current_video_id:
+                if entry.get("success") and entry.get("smart_filename"):
+                    return PreviousTranscription(
+                        video_id=current_video_id,
+                        video_title=entry.get("video_title", "Unknown"),
+                        video_url=entry_url,
+                        run_timestamp=entry.get("run_timestamp", ""),
+                        smart_filename=entry.get("smart_filename", ""),
+                        output_dir=output_dir,
+                        analysis_performed=entry.get("analysis_performed", False),
+                        analysis_type=entry.get("analysis_type"),
+                    )
+
+    return None
+
+
+def is_interactive() -> bool:
+    """Check if running in interactive mode (TTY)."""
+    import sys
+
+    return sys.stdin.isatty() and sys.stdout.isatty()
 
 
 # ============================================================================
