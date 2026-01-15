@@ -259,7 +259,7 @@ Examples:
     parser.add_argument(
         "--save_to_obsidian",
         action="store_true",
-        help=f"Save to Obsidian vault at: {OBSIDIAN_PATH}",
+        help=f"Save analysis files to Obsidian vault (transcripts still saved to output_dir) at: {OBSIDIAN_PATH}",
     )
     parser.add_argument("--whisper_model", default=WHISPER_MODEL, help="Path to Whisper model file")
     parser.add_argument(
@@ -645,6 +645,7 @@ def _run_analyze_existing_mode(
     transcript_path: str | Path,
     args: argparse.Namespace,
     output_dir: Path,
+    analysis_output_dir: Path,
     stats_file: Path,
     run_uid: str,
     run_timestamp: str,
@@ -658,7 +659,8 @@ def _run_analyze_existing_mode(
     Args:
         transcript_path: Path to the existing transcript file
         args: Parsed command-line arguments
-        output_dir: Output directory for analysis files
+        output_dir: Output directory for transcript files
+        analysis_output_dir: Output directory for analysis files (may be Obsidian vault)
         stats_file: Path to statistics file
         run_uid: Unique run identifier
         run_timestamp: ISO timestamp for this run
@@ -676,8 +678,9 @@ def _run_analyze_existing_mode(
         logger.info(f"Timestamp: {run_timestamp}")
 
     try:
-        # Ensure output directory exists
+        # Ensure output directories exist
         output_dir.mkdir(parents=True, exist_ok=True)
+        analysis_output_dir.mkdir(parents=True, exist_ok=True)
 
         # Parse transcript file
         transcript_text, video_info = parse_transcript_file(str(transcript_path), args.verbose)
@@ -693,7 +696,7 @@ def _run_analyze_existing_mode(
         analysis_file, analysis_duration, analysis_metadata = run_analysis(
             None,  # No source markdown file in analyze-existing mode
             video_info,
-            output_dir,
+            analysis_output_dir,
             args,
             transcript_text=transcript_text,
             save_to_file=should_save,
@@ -758,10 +761,13 @@ def main() -> None:
     output_dir = Path(args.output_dir) if args.output_dir else DEFAULT_TRANSCRIPTS_DIR
     stats_file = Path(args.stats_file) if args.stats_file else DEFAULT_STATS_FILE
 
-    if args.save_to_obsidian:
-        output_dir = Path(OBSIDIAN_PATH)
-        if args.verbose:
-            logger.info(f"Saving to Obsidian vault: {output_dir}")
+    # Determine where analysis files should go
+    # Transcripts always go to output_dir, but analysis can go to Obsidian
+    analysis_output_dir = Path(OBSIDIAN_PATH) if args.save_to_obsidian else output_dir
+
+    if args.save_to_obsidian and args.verbose:
+        logger.info(f"Analysis will be saved to Obsidian vault: {analysis_output_dir}")
+        logger.info(f"Transcripts will be saved to: {output_dir}")
 
     # Initialize tracking variables
     run_uid = str(uuid.uuid4())
@@ -783,7 +789,7 @@ def main() -> None:
             return
 
         _run_analyze_existing_mode(
-            args.analyze_existing, args, output_dir, stats_file, run_uid, run_timestamp, start_time
+            args.analyze_existing, args, output_dir, analysis_output_dir, stats_file, run_uid, run_timestamp, start_time
         )
         return
 
@@ -829,6 +835,7 @@ def main() -> None:
                         prev_transcription.transcript_path,
                         args,
                         output_dir,
+                        analysis_output_dir,
                         stats_file,
                         run_uid,
                         run_timestamp,
@@ -844,8 +851,9 @@ def main() -> None:
                     # Continue with normal transcription
                     logger.info("Continuing with transcription...")
 
-        # Ensure output directory exists
+        # Ensure output directories exist
         output_dir.mkdir(parents=True, exist_ok=True)
+        analysis_output_dir.mkdir(parents=True, exist_ok=True)
 
         # Process input source
         if is_local_file:
@@ -899,27 +907,22 @@ def main() -> None:
         transcription_duration = time.time() - transcription_start
 
         # Create Markdown file (transcript)
-        # When saving to Obsidian, skip transcript file and only save analysis
+        # Always create transcript file in output_dir
         transcript_file = f"{temp_whisper_output}.txt"
-        markdown_file = None
 
-        if not args.save_to_obsidian:
-            logger.info("\nCreating Markdown file...")
-            markdown_file = get_unique_filename(output_dir, smart_filename, ".md")
+        logger.info("\nCreating Markdown file...")
+        markdown_file = get_unique_filename(output_dir, smart_filename, ".md")
 
-            try:
-                front_matter = json.loads(args.front_matter)
-            except json.JSONDecodeError as e:
-                logger.warning(f"Invalid JSON in front_matter, using empty dict: {e}")
-                front_matter = {}
+        try:
+            front_matter = json.loads(args.front_matter)
+        except json.JSONDecodeError as e:
+            logger.warning(f"Invalid JSON in front_matter, using empty dict: {e}")
+            front_matter = {}
 
-            if not create_markdown_file(
-                markdown_file, transcript_file, video_info, front_matter, args.verbose
-            ):
-                raise FileProcessingError("Failed to create Markdown file")
-        else:
-            if args.verbose:
-                logger.info("\nSkipping transcript file (Obsidian mode: analysis only)")
+        if not create_markdown_file(
+            markdown_file, transcript_file, video_info, front_matter, args.verbose
+        ):
+            raise FileProcessingError("Failed to create Markdown file")
 
         # LLM Analysis (default: enabled unless --no-analyze)
         analysis_file: Path | None = None
@@ -934,18 +937,12 @@ def main() -> None:
 
         if should_analyze:
             try:
-                # For Obsidian mode, read transcript from temp file since we didn't create markdown
-                transcript_text_for_analysis = None
-                if args.save_to_obsidian:
-                    with open(transcript_file, encoding="utf-8") as f:
-                        transcript_text_for_analysis = f.read()
-
                 analysis_file, analysis_duration, analysis_metadata = run_analysis(
                     markdown_file,
                     video_info,
-                    output_dir,
+                    analysis_output_dir,
                     args,
-                    transcript_text=transcript_text_for_analysis,
+                    transcript_text=None,
                     save_to_file=should_save_analysis,
                 )
                 analysis_performed = True
@@ -969,13 +966,8 @@ def main() -> None:
         end_time = time.time()
         duration = end_time - start_time
 
-        # Use analysis filename for Obsidian mode (when transcript is skipped)
-        filename_for_stats = (
-            analysis_file.name
-            if args.save_to_obsidian and analysis_file
-            else markdown_file.name if markdown_file
-            else ""
-        )
+        # Use transcript filename for stats (always created now)
+        filename_for_stats = markdown_file.name if markdown_file else ""
 
         stats = TranscriptionStats(
             run_uid=run_uid,
@@ -1004,9 +996,18 @@ def main() -> None:
 
         success = True
         log_section("✓ Transcription completed successfully!")
-        # Only log markdown file if it was created (not in Obsidian mode)
+
+        # Log transcript location
         if markdown_file:
-            logger.info(f"Markdown file: file://{markdown_file.absolute()}")
+            logger.info(f"Transcript file: file://{markdown_file.absolute()}")
+
+        # Log analysis location if performed
+        if analysis_performed and analysis_file:
+            if args.save_to_obsidian:
+                logger.info(f"Analysis saved to Obsidian vault: file://{analysis_file.absolute()}")
+            else:
+                logger.info(f"Analysis file: file://{analysis_file.absolute()}")
+
         logger.info(f"Total duration: {format_duration(duration)}")
         logger.info(f"Transcription duration: {format_duration(transcription_duration)}")
 
@@ -1019,9 +1020,6 @@ def main() -> None:
                 f"Estimation accuracy: {percentage_diff:.1f}% "
                 f"({format_duration(diff_abs)}) {direction} than estimated"
             )
-
-        if args.save_to_obsidian:
-            log_success("Saved to Obsidian vault")
 
     except KeyboardInterrupt:
         logger.info("\n\n✗ Process interrupted by user.")

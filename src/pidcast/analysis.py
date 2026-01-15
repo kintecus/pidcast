@@ -226,7 +226,29 @@ def _call_llm_with_fallback(
             )
 
         except Exception as e:
-            if is_rate_limit_error(e):
+            error_msg = str(e)
+
+            # Check for JSON validation error from Groq
+            if "json_validate_failed" in error_msg or "Failed to validate JSON" in error_msg:
+                # Try next model in fallback chain for JSON issues
+                log_warning(f"{selector.get_display_name(current_model)} failed JSON validation")
+                next_model = selector.handle_rate_limit(current_model)
+                if next_model:
+                    logger.info(f"Retrying with {selector.get_display_name(next_model)}...")
+                    current_model = next_model
+                    continue
+                else:
+                    tried = selector.get_tried_models()
+                    raise AnalysisError(
+                        f"JSON validation failed on all models.\n"
+                        f"Tried: {', '.join(sorted(tried))}\n\n"
+                        f"This can happen with smaller models or rate-limited requests.\n"
+                        f"Options:\n"
+                        f"  1. Try again (rate limits may have reset)\n"
+                        f"  2. Use --skip_analysis_on_error to save transcript without analysis\n"
+                        f"  3. Check if your transcript is extremely short (models need enough content)"
+                    ) from e
+            elif is_rate_limit_error(e):
                 next_model = selector.handle_rate_limit(current_model)
                 if next_model:
                     current_model = next_model
@@ -323,6 +345,11 @@ def _analyze_single(
     actual_cost = selector.estimate_cost(model_used, tokens_in, tokens_out)
 
     # Parse JSON response to extract analysis and tags
+    # TODO: Strengthen JSON parsing to handle malformed responses gracefully:
+    #   - Extract analysis from partial JSON (e.g., if tags are malformed but analysis is valid)
+    #   - Strip markdown code fences if present (```json ... ```)
+    #   - Try to fix common JSON errors (trailing commas, unescaped quotes)
+    #   - Consider using a more lenient JSON parser or regex extraction as fallback
     analysis_text = response_text
     contextual_tags = []
     try:
