@@ -610,6 +610,7 @@ def run_analysis(
                 "estimated_cost": result.estimated_cost,
                 "duration": result.duration,
                 "truncated": result.truncated,
+                "contextual_tags": result.contextual_tags,
             },
             source_file_for_naming,
             video_info,
@@ -897,21 +898,28 @@ def main() -> None:
 
         transcription_duration = time.time() - transcription_start
 
-        # Create Markdown file
-        logger.info("\nCreating Markdown file...")
-        markdown_file = get_unique_filename(output_dir, smart_filename, ".md")
+        # Create Markdown file (transcript)
+        # When saving to Obsidian, skip transcript file and only save analysis
         transcript_file = f"{temp_whisper_output}.txt"
+        markdown_file = None
 
-        try:
-            front_matter = json.loads(args.front_matter)
-        except json.JSONDecodeError as e:
-            logger.warning(f"Invalid JSON in front_matter, using empty dict: {e}")
-            front_matter = {}
+        if not args.save_to_obsidian:
+            logger.info("\nCreating Markdown file...")
+            markdown_file = get_unique_filename(output_dir, smart_filename, ".md")
 
-        if not create_markdown_file(
-            markdown_file, transcript_file, video_info, front_matter, args.verbose
-        ):
-            raise FileProcessingError("Failed to create Markdown file")
+            try:
+                front_matter = json.loads(args.front_matter)
+            except json.JSONDecodeError as e:
+                logger.warning(f"Invalid JSON in front_matter, using empty dict: {e}")
+                front_matter = {}
+
+            if not create_markdown_file(
+                markdown_file, transcript_file, video_info, front_matter, args.verbose
+            ):
+                raise FileProcessingError("Failed to create Markdown file")
+        else:
+            if args.verbose:
+                logger.info("\nSkipping transcript file (Obsidian mode: analysis only)")
 
         # LLM Analysis (default: enabled unless --no-analyze)
         analysis_file: Path | None = None
@@ -926,11 +934,18 @@ def main() -> None:
 
         if should_analyze:
             try:
+                # For Obsidian mode, read transcript from temp file since we didn't create markdown
+                transcript_text_for_analysis = None
+                if args.save_to_obsidian:
+                    with open(transcript_file, encoding="utf-8") as f:
+                        transcript_text_for_analysis = f.read()
+
                 analysis_file, analysis_duration, analysis_metadata = run_analysis(
                     markdown_file,
                     video_info,
                     output_dir,
                     args,
+                    transcript_text=transcript_text_for_analysis,
                     save_to_file=should_save_analysis,
                 )
                 analysis_performed = True
@@ -954,11 +969,19 @@ def main() -> None:
         end_time = time.time()
         duration = end_time - start_time
 
+        # Use analysis filename for Obsidian mode (when transcript is skipped)
+        filename_for_stats = (
+            analysis_file.name
+            if args.save_to_obsidian and analysis_file
+            else markdown_file.name if markdown_file
+            else ""
+        )
+
         stats = TranscriptionStats(
             run_uid=run_uid,
             run_timestamp=run_timestamp,
             video_title=video_info.title,
-            smart_filename=markdown_file.name,
+            smart_filename=filename_for_stats,
             video_url=args.input_source,
             run_duration=duration,
             transcription_duration=transcription_duration,
@@ -981,7 +1004,9 @@ def main() -> None:
 
         success = True
         log_section("✓ Transcription completed successfully!")
-        logger.info(f"Markdown file: file://{markdown_file.absolute()}")
+        # Only log markdown file if it was created (not in Obsidian mode)
+        if markdown_file:
+            logger.info(f"Markdown file: file://{markdown_file.absolute()}")
         logger.info(f"Total duration: {format_duration(duration)}")
         logger.info(f"Transcription duration: {format_duration(transcription_duration)}")
 

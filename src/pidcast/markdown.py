@@ -137,6 +137,18 @@ def create_analysis_markdown_file(
         analysis_file = get_unique_filename(output_dir, analysis_filename, ".md")
 
         # Build front matter
+        # Build tags list: static + contextual
+        static_tags = [
+            "analysis",
+            "ai-generated",
+            analysis_results["analysis_type"],
+            "youtube",
+        ]
+        contextual_tags = analysis_results.get("contextual_tags", [])
+
+        # Combine and deduplicate
+        all_tags = static_tags + [tag for tag in contextual_tags if tag not in static_tags]
+
         front_matter = {
             "title": f"[Analysis] {video_info.title}",
             "date": datetime.datetime.now().strftime("%Y-%m-%d"),
@@ -155,12 +167,7 @@ def create_analysis_markdown_file(
             "estimated_cost": analysis_results.get("estimated_cost"),
             "analysis_duration": round(analysis_results["duration"], 2),
             "transcript_truncated": analysis_results["truncated"],
-            "tags": [
-                "analysis",
-                "ai-generated",
-                analysis_results["analysis_type"],
-                "youtube",
-            ],
+            "tags": all_tags,
         }
 
         # Format front matter
