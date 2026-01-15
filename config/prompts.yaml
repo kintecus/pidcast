@@ -9,8 +9,22 @@ prompts:
     system_prompt: |
       You are an expert at distilling video content into actionable briefs.
       Create summaries that help viewers decide if content is worth their time.
+
+      CRITICAL: You MUST respond with valid JSON only, using this exact structure:
+      {
+        "analysis": "Your analysis text in markdown format here...",
+        "contextual_tags": ["tag1", "tag2", "tag3"]
+      }
+
+      For contextual_tags:
+      - Generate exactly 3 tags
+      - Use lowercase, hyphenated format (e.g., "machine-learning", "product-management")
+      - Choose specific, searchable topics from the content
+      - Tags should represent main themes or domains covered
+      - Avoid generic terms like "interesting", "video", "content"
+      - Good examples: "entrepreneurship", "crypto-regulation", "design-systems"
     user_prompt: |
-      Create an executive brief of this transcript.
+      Create an executive brief of this transcript and generate contextual tags.
 
       Title: {title}
       Channel: {channel}
@@ -20,7 +34,7 @@ prompts:
       {transcript}
 
       # Instructions
-      Provide:
+      In the "analysis" field, provide:
       1. **Executive Summary** (2-3 sentences, ~50-75 words)
          - What is this content about?
          - Who is it for?
@@ -33,6 +47,8 @@ prompts:
 
       Keep the summary brief enough to share via text message or Discord.
 
+      REMEMBER: Respond with JSON only!
+
   summary:
     name: Summary
     description: Generate a concise summary of the transcript
@@ -40,8 +56,20 @@ prompts:
     system_prompt: |
       You are an expert at summarizing video transcripts.
       Create clear, concise summaries that capture the main points and key insights.
+
+      CRITICAL: You MUST respond with valid JSON only, using this exact structure:
+      {
+        "analysis": "Your summary text in markdown format here...",
+        "contextual_tags": ["tag1", "tag2", "tag3"]
+      }
+
+      For contextual_tags:
+      - Generate exactly 3 tags
+      - Use lowercase, hyphenated format (e.g., "artificial-intelligence", "business-strategy")
+      - Choose specific, searchable topics from the content
+      - Avoid generic terms - be specific about the domains covered
     user_prompt: |
-      Please create a comprehensive summary of the following transcript.
+      Please create a comprehensive summary of the following transcript and generate contextual tags.
 
       Title: {title}
       Channel: {channel}
@@ -51,12 +79,14 @@ prompts:
       {transcript}
 
       # Instructions
-      Provide a summary with:
+      In the "analysis" field, provide a summary with:
       1. A one-paragraph overview (2-3 sentences)
       2. Key points (3-7 bullet points)
       3. Main takeaways or conclusions
 
       Be specific and use concrete details from the transcript.
+
+      REMEMBER: Respond with JSON only!
 
   key_points:
     name: Key Points Extraction
@@ -65,8 +95,20 @@ prompts:
     system_prompt: |
       You are an expert at analyzing content and extracting key insights.
       Focus on identifying the most important ideas, facts, and actionable takeaways.
+
+      CRITICAL: You MUST respond with valid JSON only, using this exact structure:
+      {
+        "analysis": "Your key points extraction in markdown format here...",
+        "contextual_tags": ["tag1", "tag2", "tag3"]
+      }
+
+      For contextual_tags:
+      - Generate exactly 3 tags
+      - Use lowercase, hyphenated format (e.g., "venture-capital", "climate-tech")
+      - Choose specific, searchable topics from the content
+      - Focus on the primary domains or themes discussed
     user_prompt: |
-      Extract the key points from this transcript.
+      Extract the key points from this transcript and generate contextual tags.
 
       Title: {title}
       Channel: {channel}
@@ -75,11 +117,13 @@ prompts:
       {transcript}
 
       # Instructions
-      Provide:
+      In the "analysis" field, provide:
       1. Main Topics: List 3-5 main topics discussed
       2. Key Points: 8-12 bullet points of the most important ideas
       3. Notable Quotes: 2-3 memorable or impactful quotes
       4. Actionable Insights: Any practical advice or takeaways
+
+      REMEMBER: Respond with JSON only!
 
   action_items:
     name: Action Items & Recommendations
@@ -88,8 +132,20 @@ prompts:
     system_prompt: |
       You are an expert at identifying actionable advice and practical recommendations.
       Focus on what viewers can do with this information.
+
+      CRITICAL: You MUST respond with valid JSON only, using this exact structure:
+      {
+        "analysis": "Your action items extraction in markdown format here...",
+        "contextual_tags": ["tag1", "tag2", "tag3"]
+      }
+
+      For contextual_tags:
+      - Generate exactly 3 tags
+      - Use lowercase, hyphenated format (e.g., "productivity-tips", "team-management")
+      - Choose specific, searchable topics from the content
+      - Focus on the actionable domains covered
     user_prompt: |
-      Identify action items and recommendations from this transcript.
+      Identify action items and recommendations from this transcript and generate contextual tags.
 
       Title: {title}
 
@@ -97,11 +153,13 @@ prompts:
       {transcript}
 
       # Instructions
-      Provide:
+      In the "analysis" field, provide:
       1. Direct Action Items: Specific steps or actions mentioned
       2. Recommended Resources: Tools, books, links, or resources referenced
       3. Best Practices: Any guidelines or principles discussed
       4. Implementation Tips: How to apply these insights
+
+      REMEMBER: Respond with JSON only!
 
   # Chunking prompts for long content
   chunk_analysis:
@@ -137,13 +195,26 @@ prompts:
       You are synthesizing multiple chunk analyses into a coherent summary.
       Remove redundancy, identify overarching themes, and create a unified narrative.
       The final output should read as if analyzing the original full transcript.
+
+      CRITICAL: You MUST respond with valid JSON only, using this exact structure:
+      {
+        "analysis": "Your synthesized summary in markdown format here...",
+        "contextual_tags": ["tag1", "tag2", "tag3"]
+      }
+
+      For contextual_tags:
+      - Generate exactly 3 tags based on the COMPLETE content (all chunks combined)
+      - Use lowercase, hyphenated format (e.g., "deep-learning", "financial-markets")
+      - Choose specific, searchable topics that represent the overall content
+      - Consider themes that span multiple chunks
+      - These tags should help categorize this content in Obsidian
     user_prompt: |
-      Synthesize these chunk analyses into a coherent executive brief.
+      Synthesize these chunk analyses into a coherent executive brief and generate contextual tags.
 
       {chunk_analyses}
 
       # Instructions
-      Create a unified summary:
+      In the "analysis" field, create a unified summary:
 
       1. **Executive Summary** (2-3 sentences covering the entire content)
          - What is this content about overall?
@@ -157,3 +228,5 @@ prompts:
       3. **Notable Insights** (2-3 standout quotes or data points)
 
       The output should be cohesive and not feel like a collection of separate summaries.
+
+      REMEMBER: Respond with JSON only!

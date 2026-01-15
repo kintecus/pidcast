@@ -374,6 +374,7 @@ class AnalysisResult:
     estimated_cost: float | None
     duration: float
     truncated: bool
+    contextual_tags: list[str] = field(default_factory=list)
 
 
 @dataclass

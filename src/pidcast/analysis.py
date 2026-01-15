@@ -1,5 +1,6 @@
 """LLM-based transcript analysis using Groq API."""
 
+import json
 import logging
 import time
 import traceback
@@ -175,8 +176,12 @@ def _call_llm_with_fallback(
     max_tokens: int,
     preferred_model: str,
     verbose: bool = False,
+    use_json_mode: bool = False,
 ) -> tuple[str, str, int, int, int, float]:
     """Call LLM API with automatic model fallback on rate limits.
+
+    Args:
+        use_json_mode: If True, request JSON response format from the model
 
     Returns:
         Tuple of (response_text, model_used, tokens_in, tokens_out, tokens_total, duration)
@@ -184,16 +189,19 @@ def _call_llm_with_fallback(
 
     @with_retry(max_retries=3, base_delay=2.0)
     def _call_api(model_name: str):
-        return client.chat.completions.create(
-            model=model_name,
-            messages=[
+        kwargs = {
+            "model": model_name,
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            max_tokens=max_tokens,
-            temperature=0.3,
-            timeout=ANALYSIS_TIMEOUT,
-        )
+            "max_tokens": max_tokens,
+            "temperature": 0.3,
+            "timeout": ANALYSIS_TIMEOUT,
+        }
+        if use_json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        return client.chat.completions.create(**kwargs)
 
     current_model = preferred_model
     start_time = time.time()
@@ -301,6 +309,7 @@ def _analyze_single(
             template.max_output_tokens,
             current_model,
             verbose,
+            use_json_mode=True,  # Enable JSON mode for tag generation
         )
     )
 
@@ -313,8 +322,26 @@ def _analyze_single(
 
     actual_cost = selector.estimate_cost(model_used, tokens_in, tokens_out)
 
+    # Parse JSON response to extract analysis and tags
+    analysis_text = response_text
+    contextual_tags = []
+    try:
+        result_json = json.loads(response_text)
+        # Get analysis text
+        analysis_text = result_json.get("analysis", response_text)
+        # Some LLMs may include literal \n instead of actual newlines - decode them
+        analysis_text = analysis_text.replace("\\n", "\n").replace("\\t", "\t")
+        contextual_tags = result_json.get("contextual_tags", [])
+        if verbose and contextual_tags:
+            logger.info(f"Generated tags: {contextual_tags}")
+    except json.JSONDecodeError:
+        # Fallback: treat entire response as analysis text
+        logger.warning("Failed to parse JSON response from LLM, using plain text (no tags)")
+        analysis_text = response_text
+        contextual_tags = []
+
     return AnalysisResult(
-        analysis_text=response_text,
+        analysis_text=analysis_text,
         analysis_type=analysis_type,
         analysis_name=template.name,
         model=model_used,
@@ -325,6 +352,7 @@ def _analyze_single(
         estimated_cost=actual_cost,
         duration=duration,
         truncated=False,  # No truncation in single analysis; chunking handles long content
+        contextual_tags=contextual_tags,
     )
 
 
@@ -429,6 +457,7 @@ def _analyze_with_chunking(
         synthesis_template.max_output_tokens,
         preferred_model,
         verbose,
+        use_json_mode=True,  # Enable JSON mode for tag generation
     )
 
     total_tokens += syn_total
@@ -437,8 +466,25 @@ def _analyze_with_chunking(
 
     duration = time.time() - start_time
 
+    # Parse JSON response to extract analysis and tags
+    final_analysis = synthesis_text
+    contextual_tags = []
+    try:
+        synthesis_json = json.loads(synthesis_text)
+        final_analysis = synthesis_json.get("analysis", synthesis_text)
+        # Some LLMs may include literal \n instead of actual newlines - decode them
+        final_analysis = final_analysis.replace("\\n", "\n").replace("\\t", "\t")
+        contextual_tags = synthesis_json.get("contextual_tags", [])
+        if verbose and contextual_tags:
+            logger.info(f"Generated tags from synthesis: {contextual_tags}")
+    except json.JSONDecodeError:
+        # Fallback: treat entire response as analysis text
+        logger.warning("Failed to parse synthesis JSON response, using plain text (no tags)")
+        final_analysis = synthesis_text
+        contextual_tags = []
+
     return AnalysisResult(
-        analysis_text=synthesis_text,
+        analysis_text=final_analysis,
         analysis_type="executive_summary",
         analysis_name=f"Executive Summary (Chunked: {len(chunks)} parts)",
         model=synthesis_model,
@@ -449,6 +495,7 @@ def _analyze_with_chunking(
         estimated_cost=total_cost,
         duration=duration,
         truncated=False,
+        contextual_tags=contextual_tags,
     )
 
 
@@ -523,6 +570,7 @@ def _analyze_with_chunking_simple(
         synthesis_template.max_output_tokens,
         preferred_model,
         verbose,
+        use_json_mode=True,  # Enable JSON mode for tag generation
     )
 
     total_tokens += syn_total
@@ -531,8 +579,25 @@ def _analyze_with_chunking_simple(
 
     duration = time.time() - start_time
 
+    # Parse JSON response to extract analysis and tags
+    final_analysis = synthesis_text
+    contextual_tags = []
+    try:
+        synthesis_json = json.loads(synthesis_text)
+        final_analysis = synthesis_json.get("analysis", synthesis_text)
+        # Some LLMs may include literal \n instead of actual newlines - decode them
+        final_analysis = final_analysis.replace("\\n", "\n").replace("\\t", "\t")
+        contextual_tags = synthesis_json.get("contextual_tags", [])
+        if verbose and contextual_tags:
+            logger.info(f"Generated tags from synthesis: {contextual_tags}")
+    except json.JSONDecodeError:
+        # Fallback: treat entire response as analysis text
+        logger.warning("Failed to parse synthesis JSON response, using plain text (no tags)")
+        final_analysis = synthesis_text
+        contextual_tags = []
+
     return AnalysisResult(
-        analysis_text=synthesis_text,
+        analysis_text=final_analysis,
         analysis_type="executive_summary",
         analysis_name=f"Executive Summary (Chunked: {len(chunks)} parts)",
         model=synthesis_model,
@@ -543,6 +608,7 @@ def _analyze_with_chunking_simple(
         estimated_cost=total_cost,
         duration=duration,
         truncated=False,
+        contextual_tags=contextual_tags,
     )
 
 
