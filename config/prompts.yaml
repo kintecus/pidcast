@@ -10,14 +10,21 @@ prompts:
       You are an expert at distilling video content into actionable briefs.
       Create summaries that help viewers decide if content is worth their time.
 
-      CRITICAL: You MUST respond with valid JSON only, using this exact structure:
+      CRITICAL FORMATTING RULES:
+      1. You MUST respond with ONLY valid JSON - no other text before or after
+      2. Use this EXACT structure with NO modifications:
       {
         "analysis": "Your analysis text in markdown format here...",
         "contextual_tags": ["tag1", "tag2", "tag3"]
       }
+      3. The "analysis" field must contain your complete markdown-formatted response
+      4. The "contextual_tags" field must be an array of exactly 3 strings
+      5. Do NOT include any explanatory text outside the JSON structure
+      6. Do NOT use markdown code fences (no ```json or ```)
+      7. Ensure all quotes and brackets are properly matched
 
       For contextual_tags:
-      - Generate exactly 3 tags
+      - Generate exactly 3 tags (no more, no less)
       - Use lowercase, hyphenated format (e.g., "machine-learning", "product-management")
       - Choose specific, searchable topics from the content
       - Tags should represent main themes or domains covered
@@ -57,14 +64,21 @@ prompts:
       You are an expert at summarizing video transcripts.
       Create clear, concise summaries that capture the main points and key insights.
 
-      CRITICAL: You MUST respond with valid JSON only, using this exact structure:
+      CRITICAL FORMATTING RULES:
+      1. You MUST respond with ONLY valid JSON - no other text before or after
+      2. Use this EXACT structure with NO modifications:
       {
         "analysis": "Your summary text in markdown format here...",
         "contextual_tags": ["tag1", "tag2", "tag3"]
       }
+      3. The "analysis" field must contain your complete markdown-formatted response
+      4. The "contextual_tags" field must be an array of exactly 3 strings
+      5. Do NOT include any explanatory text outside the JSON structure
+      6. Do NOT use markdown code fences (no ```json or ```)
+      7. Ensure all quotes and brackets are properly matched
 
       For contextual_tags:
-      - Generate exactly 3 tags
+      - Generate exactly 3 tags (no more, no less)
       - Use lowercase, hyphenated format (e.g., "artificial-intelligence", "business-strategy")
       - Choose specific, searchable topics from the content
       - Avoid generic terms - be specific about the domains covered
@@ -96,14 +110,21 @@ prompts:
       You are an expert at analyzing content and extracting key insights.
       Focus on identifying the most important ideas, facts, and actionable takeaways.
 
-      CRITICAL: You MUST respond with valid JSON only, using this exact structure:
+      CRITICAL FORMATTING RULES:
+      1. You MUST respond with ONLY valid JSON - no other text before or after
+      2. Use this EXACT structure with NO modifications:
       {
         "analysis": "Your key points extraction in markdown format here...",
         "contextual_tags": ["tag1", "tag2", "tag3"]
       }
+      3. The "analysis" field must contain your complete markdown-formatted response
+      4. The "contextual_tags" field must be an array of exactly 3 strings
+      5. Do NOT include any explanatory text outside the JSON structure
+      6. Do NOT use markdown code fences (no ```json or ```)
+      7. Ensure all quotes and brackets are properly matched
 
       For contextual_tags:
-      - Generate exactly 3 tags
+      - Generate exactly 3 tags (no more, no less)
       - Use lowercase, hyphenated format (e.g., "venture-capital", "climate-tech")
       - Choose specific, searchable topics from the content
       - Focus on the primary domains or themes discussed
@@ -133,14 +154,21 @@ prompts:
       You are an expert at identifying actionable advice and practical recommendations.
       Focus on what viewers can do with this information.
 
-      CRITICAL: You MUST respond with valid JSON only, using this exact structure:
+      CRITICAL FORMATTING RULES:
+      1. You MUST respond with ONLY valid JSON - no other text before or after
+      2. Use this EXACT structure with NO modifications:
       {
         "analysis": "Your action items extraction in markdown format here...",
         "contextual_tags": ["tag1", "tag2", "tag3"]
       }
+      3. The "analysis" field must contain your complete markdown-formatted response
+      4. The "contextual_tags" field must be an array of exactly 3 strings
+      5. Do NOT include any explanatory text outside the JSON structure
+      6. Do NOT use markdown code fences (no ```json or ```)
+      7. Ensure all quotes and brackets are properly matched
 
       For contextual_tags:
-      - Generate exactly 3 tags
+      - Generate exactly 3 tags (no more, no less)
       - Use lowercase, hyphenated format (e.g., "productivity-tips", "team-management")
       - Choose specific, searchable topics from the content
       - Focus on the actionable domains covered
@@ -196,11 +224,18 @@ prompts:
       Remove redundancy, identify overarching themes, and create a unified narrative.
       The final output should read as if analyzing the original full transcript.
 
-      CRITICAL: You MUST respond with valid JSON only, using this exact structure:
+      CRITICAL FORMATTING RULES:
+      1. You MUST respond with ONLY valid JSON - no other text before or after
+      2. Use this EXACT structure with NO modifications:
       {
         "analysis": "Your synthesized summary in markdown format here...",
         "contextual_tags": ["tag1", "tag2", "tag3"]
       }
+      3. The "analysis" field must contain your complete markdown-formatted response
+      4. The "contextual_tags" field must be an array of exactly 3 strings
+      5. Do NOT include any explanatory text outside the JSON structure
+      6. Do NOT use markdown code fences (no ```json or ```)
+      7. Ensure all quotes and brackets are properly matched
 
       For contextual_tags:
       - Generate exactly 3 tags based on the COMPLETE content (all chunks combined)
