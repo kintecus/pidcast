@@ -330,6 +330,36 @@ class TranscriptionStats:
 
 
 @dataclass
+class PreviousTranscription:
+    """Information about a previously completed transcription."""
+
+    video_id: str
+    video_title: str
+    video_url: str
+    run_timestamp: str
+    smart_filename: str
+    output_dir: Path
+    analysis_performed: bool = False
+    analysis_type: str | None = None
+
+    @property
+    def transcript_path(self) -> Path:
+        """Full path to the transcript file."""
+        return self.output_dir / self.smart_filename
+
+    @property
+    def formatted_date(self) -> str:
+        """Human-readable date string."""
+        try:
+            import datetime
+
+            dt = datetime.datetime.fromisoformat(self.run_timestamp)
+            return dt.strftime("%B %d, %Y at %H:%M")
+        except Exception:
+            return self.run_timestamp
+
+
+@dataclass
 class AnalysisResult:
     """Result from LLM analysis."""
 

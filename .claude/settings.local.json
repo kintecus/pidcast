@@ -17,7 +17,8 @@
       "Bash(uv run:*)",
       "Bash(cat:*)",
       "Bash(find:*)",
-      "Bash(git rm:*)"
+      "Bash(git rm:*)",
+      "Bash(python -m py_compile:*)"
     ]
   }
 }
