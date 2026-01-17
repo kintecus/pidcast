@@ -301,6 +301,10 @@ class TranscriptionStats:
     analysis_cost: float = 0
     analysis_truncated: bool = False
     analysis_file: str | None = None
+    # Fallback tracking
+    json_mode_failed: bool = False
+    used_plain_text_fallback: bool = False
+    tag_extraction_failed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -326,6 +330,9 @@ class TranscriptionStats:
             "analysis_cost": self.analysis_cost,
             "analysis_truncated": self.analysis_truncated,
             "analysis_file": self.analysis_file,
+            "json_mode_failed": self.json_mode_failed,
+            "used_plain_text_fallback": self.used_plain_text_fallback,
+            "tag_extraction_failed": self.tag_extraction_failed,
         }
 
 
