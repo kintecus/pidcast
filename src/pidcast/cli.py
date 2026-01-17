@@ -706,11 +706,15 @@ def _run_analyze_existing_mode(
         end_time = time.time()
         duration = end_time - start_time
 
+        # Store the original transcript filename, not the analysis filename
+        # This ensures duplicate detection can find the raw transcript on subsequent runs
+        transcript_filename = markdown_file.name if markdown_file else ""
+
         stats = TranscriptionStats(
             run_uid=run_uid,
             run_timestamp=run_timestamp,
             video_title=video_info.title,
-            smart_filename=analysis_file.name if analysis_file else "",
+            smart_filename=transcript_filename,
             video_url=video_info.webpage_url or str(transcript_path),
             run_duration=duration,
             transcription_duration=0,

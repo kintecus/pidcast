@@ -18,7 +18,9 @@
       "Bash(cat:*)",
       "Bash(find:*)",
       "Bash(git rm:*)",
-      "Bash(python -m py_compile:*)"
+      "Bash(python -m py_compile:*)",
+      "Bash(python3:*)",
+      "Bash(tail:*)"
     ]
   }
 }

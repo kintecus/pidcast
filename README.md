@@ -1,22 +1,24 @@
 # Pidcast - YouTube Transcription Tool
 
-A powerful YouTube transcription tool that downloads audio from YouTube videos and transcribes them using Whisper, with optional LLM-based analysis using Groq AI.
+YouTube transcription tool with local Whisper processing and LLM-powered analysis.
 
 ## Features
 
-- 🎙️ **YouTube Audio Download** with multiple fallback strategies
-- 📝 **Whisper Transcription** using whisper.cpp (local)
-- 🤖 **LLM Analysis** with Groq AI (summary, key points, action items)
-- 📄 **Markdown Output** with YAML front matter for Obsidian
-- 📊 **Smart Filenames** with automatic date prefixes
+- 🎙️ **YouTube Audio Download** with fallback strategies and duplicate detection
+- 📝 **Whisper Transcription** using whisper.cpp (local, fast)
+- 🤖 **LLM Analysis** with Groq AI (enabled by default)
+  - Automatic model fallback and retry logic
+  - Smart chunking for long transcripts with semantic boundaries
+  - JSON-validated structured output
+- 📄 **Markdown Output** with YAML front matter and contextual tags
+- 📊 **Smart Filenames** with date prefixes
 - ⚡ **Fast Dependencies** managed with uv
-- ✨ **Code Quality** enforced with ruff
 
 ![Pidcast example run](assets/screenshots/pidcast-example.png)
 
 ## Quick Start
 
-1. **Install uv** (fast Python package manager):
+1. **Install uv**:
    ```bash
    curl -LsSf https://astral.sh/uv/install.sh | sh
    ```
@@ -28,34 +30,22 @@ A powerful YouTube transcription tool that downloads audio from YouTube videos a
    uv sync
    ```
 
-3. **Set API key** (optional, for LLM analysis):
+3. **Configure** (copy `.env.example` to `.env` and set):
+   - `GROQ_API_KEY` - Get free key at https://console.groq.com/
+   - `WHISPER_CPP_PATH` - Path to whisper.cpp main binary
+   - `WHISPER_MODEL` - Path to Whisper model file
+   - `OBSIDIAN_VAULT_PATH` - (Optional) For `--save_to_obsidian`
 
-   **Option 1: .env file (recommended)**:
+4. **Run**:
    ```bash
-   cp .env.example .env
-   # Edit .env and set: GROQ_API_KEY=your-key-here
-   ```
-
-   **Option 2: Environment variable**:
-   ```bash
-   export GROQ_API_KEY="your-key"
-   ```
-
-   Get a free API key at: https://console.groq.com/
-
-4. **Configure paths**:
-   Create a `.env` file (copy from `.env.example`) and set paths for `WHISPER_CPP_PATH`, `WHISPER_MODEL`, and `OBSIDIAN_VAULT_PATH`.
-
-5. **Run**:
-   ```bash
-   # Basic transcription
+   # Transcribe with LLM analysis (default)
    uv run pidcast "https://youtube.com/watch?v=VIDEO_ID"
 
-   # With LLM analysis
-   uv run pidcast "VIDEO_URL" --analyze
+   # Transcription only (skip analysis)
+   uv run pidcast "VIDEO_URL" --no-analyze
 
    # Save to Obsidian vault
-   uv run pidcast "VIDEO_URL" --save_to_obsidian --analyze
+   uv run pidcast "VIDEO_URL" --save_to_obsidian
    ```
 
 ## External Dependencies
@@ -89,118 +79,55 @@ The following tools must be installed separately:
 ## Usage Examples
 
 ```bash
-# Transcribe a YouTube video
+# Basic transcription with analysis (default)
 uv run pidcast "https://www.youtube.com/watch?v=VIDEO_ID"
 
-# Transcribe with verbose output
-uv run pidcast "VIDEO_URL" --verbose
+# Transcription only (skip analysis)
+uv run pidcast "VIDEO_URL" --no-analyze
 
-# Analyze transcript with LLM
-uv run pidcast "VIDEO_URL" --analyze
+# Different analysis type
+uv run pidcast "VIDEO_URL" --analysis_type key_points
 
-# Extract key points instead of summary
-uv run pidcast "VIDEO_URL" --analyze --analysis_type key_points
+# Analyze existing transcript without re-transcribing
+uv run pidcast --analyze_existing transcript.md
 
 # Transcribe local audio file
 uv run pidcast "/path/to/audio/file.mp3"
 
-# Keep the raw transcript file
-uv run pidcast "VIDEO_URL" --keep_transcript
+# Force re-transcription (skip duplicate detection)
+uv run pidcast "VIDEO_URL" --force
+
+# Verbose output
+uv run pidcast "VIDEO_URL" --verbose
 
 # Use PO Token for restricted videos
 uv run pidcast "VIDEO_URL" --po_token "client.type+TOKEN"
 ```
 
-## Evaluating LLM Analysis (Evals)
+## Analysis Prompts & Configuration
 
-The `pidcast-eval` tool allows you to systematically test and compare different prompts and LLM models for transcript analysis.
+### Prompt Templates
+Prompts are configured in `config/prompts.yaml`. Each prompt template defines:
+- System and user prompts with variable substitution
+- Max output tokens
+- JSON response format for structured output with `analysis` and `contextual_tags`
 
-### Quick Start
+Available analysis types:
+- `executive_summary` (default) - Concise overview with key insights
+- `key_points` - Bulleted highlights
+- `action_items` - Actionable takeaways
 
-```bash
-# Run a single eval
-uv run pidcast-eval \
-  --prompt-version v1 \
-  --model llama-3.3-70b-versatile \
-  --transcript claude-skills-tech-talk
+### Model Configuration
+Models and fallback chains are defined in `config/models.yaml`:
+- Automatic fallback on rate limits or failures
+- Token-based model selection for long transcripts
+- Smart chunking for content exceeding context windows
 
-# Run matrix eval (all combinations)
-uv run pidcast-eval --run-matrix \
-  --prompts v1,v2 \
-  --models llama-3.3-70b-versatile,llama-3.1-8b-instant \
-  --transcripts veal-stew-recipe,agents-vs-skills-interview
-```
-
-### Features
-
-- **Prompt Versioning**: Test different prompt versions side-by-side
-- **Model Comparison**: Compare outputs from different LLM models
-- **Matrix Evaluation**: Run all combinations of prompts × models × transcripts
-- **Side-by-Side Comparisons**: Auto-generated markdown comparisons
-- **Cost Tracking**: Track and aggregate API costs over time
-- **Retry Logic**: Automatic retry with exponential backoff for transient errors
-- **Pre-flight Validation**: Validates configuration before running expensive batches
-
-### Available Reference Transcripts
-
-The evals system includes 3 curated reference transcripts:
-- `claude-skills-tech-talk` - Technical podcast (33 min)
-- `agents-vs-skills-interview` - Conference talk (16 min)
-- `veal-stew-recipe` - Tutorial (6 min)
-
-### Managing Prompts
-
-Prompts are stored in `config/eval_prompts.json` with versioning:
-
-```json
-{
-  "prompts": {
-    "summary": [
-      {
-        "version": "v1",
-        "name": "Summary Analysis v1",
-        "system_prompt": "...",
-        "user_prompt": "...",
-        "max_output_tokens": 2000
-      },
-      {
-        "version": "v2",
-        "name": "Summary Analysis v2 - Executive Brief",
-        "system_prompt": "...",
-        "user_prompt": "...",
-        "max_output_tokens": 1500
-      }
-    ]
-  }
-}
-```
-
-### Viewing Results
-
-Results are saved to `data/evals/`:
-- `runs/` - Individual eval runs (markdown + JSON metadata)
-- `comparisons/` - Side-by-side comparison files
-- `cost_tracking.json` - Append-only cost log
-
-### CLI Options
-
-```bash
-# Single eval mode
-uv run pidcast-eval \
-  --prompt-version v1 \
-  --model llama-3.3-70b-versatile \
-  --transcript claude-skills-tech-talk \
-  [--verbose]
-
-# Matrix mode
-uv run pidcast-eval --run-matrix \
-  --prompts v1,v2 \
-  --models llama-3.3-70b-versatile,llama-3.1-8b-instant \
-  --transcripts transcript-id-1,transcript-id-2 \
-  [--max-concurrent 3] \
-  [--skip-confirmation] \
-  [--verbose]
-```
+### Chunking Strategy
+Long transcripts are automatically chunked with:
+- Semantic boundary detection (paragraph/sentence breaks)
+- Overlap between chunks for context preservation
+- Synthesis step to combine chunk analyses
 
 ## Development
 
