@@ -2,7 +2,6 @@
 
 import logging
 import subprocess
-import threading
 import time
 from pathlib import Path
 
@@ -17,49 +16,6 @@ from .exceptions import TranscriptionError
 from .utils import format_duration, load_json_file
 
 logger = logging.getLogger(__name__)
-
-
-# ============================================================================
-# PROGRESS DISPLAY
-# ============================================================================
-
-
-def show_transcription_progress(start_time: float, estimated_duration: float | None) -> None:
-    """Show progress indicator for transcription.
-
-    Args:
-        start_time: When transcription started
-        estimated_duration: Estimated total duration in seconds (or None)
-    """
-    elapsed = time.time() - start_time
-
-    if estimated_duration and estimated_duration > 0:
-        # Show progress with percentage
-        progress = min(elapsed / estimated_duration, 0.99)  # Cap at 99% until done
-        bar_width = 30
-        filled = int(bar_width * progress)
-        bar = "█" * filled + "░" * (bar_width - filled)
-
-        elapsed_str = format_duration(elapsed)
-        remaining = max(0, estimated_duration - elapsed)
-        remaining_str = format_duration(remaining)
-
-        print(
-            f"\r  Progress: [{bar}] {progress * 100:.0f}% | "
-            f"Elapsed: {elapsed_str} | Remaining: ~{remaining_str}",
-            end="",
-            flush=True,
-        )
-    else:
-        # Just show elapsed time with spinner
-        spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-        elapsed_str = format_duration(elapsed)
-        spinner_char = spinner[int(elapsed * 2) % len(spinner)]
-        print(
-            f"\r  {spinner_char} Transcribing... Elapsed: {elapsed_str}",
-            end="",
-            flush=True,
-        )
 
 
 # ============================================================================
@@ -206,35 +162,64 @@ def run_whisper_transcription(
     if verbose:
         logger.info(f"Running Whisper command: {' '.join(command)}")
 
-    # Start progress tracking in a separate thread
-    progress_thread = None
-    stop_progress = None
-
-    if show_progress and not verbose:
-        stop_progress = threading.Event()
-        start_time = time.time()
-
-        def update_progress():
-            while not stop_progress.is_set():
-                show_transcription_progress(start_time, estimated_duration)
-                time.sleep(0.1)
-
-        progress_thread = threading.Thread(target=update_progress, daemon=True)
-        progress_thread.start()
-
     try:
-        # Run transcription
-        if verbose:
-            subprocess.run(command, check=True)
-        else:
-            subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        # Run transcription with Rich progress bar
+        if show_progress and not verbose:
+            try:
+                from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, BarColumn
 
-        # Stop progress indicator
-        if stop_progress:
-            stop_progress.set()
-            if progress_thread:
-                progress_thread.join(timeout=0.5)
-            print()  # New line after progress bar
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[cyan]Transcribing..."),
+                    BarColumn(),
+                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                    TimeElapsedColumn(),
+                ) as progress:
+                    # Add task with total based on estimated duration
+                    if estimated_duration and estimated_duration > 0:
+                        # Use estimated duration in deciseconds for granular updates
+                        total = int(estimated_duration * 10)
+                        task = progress.add_task("transcribe", total=total)
+
+                        # Run transcription in subprocess
+                        proc = subprocess.Popen(
+                            command,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.PIPE
+                        )
+
+                        # Update progress based on elapsed time
+                        start_time = time.time()
+                        while proc.poll() is None:
+                            elapsed = time.time() - start_time
+                            completed = min(int(elapsed * 10), total - 1)  # Cap at 99%
+                            progress.update(task, completed=completed)
+                            time.sleep(0.1)
+
+                        # Mark as complete
+                        progress.update(task, completed=total)
+
+                        # Check return code
+                        if proc.returncode != 0:
+                            stderr = proc.stderr.read().decode() if proc.stderr else ""
+                            raise subprocess.CalledProcessError(proc.returncode, command, stderr=stderr)
+
+                    else:
+                        # No estimate - just show spinner
+                        task = progress.add_task("transcribe", total=None)
+                        subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                        progress.update(task, completed=1)
+
+            except ImportError:
+                # Fallback if rich is not installed
+                logger.info("Transcribing (install 'rich' for progress display)...")
+                subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        else:
+            # Verbose mode or no progress
+            if verbose:
+                subprocess.run(command, check=True)
+            else:
+                subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
         if verbose:
             logger.info("✓ Transcription completed successfully.")
@@ -242,16 +227,13 @@ def run_whisper_transcription(
         return True
 
     except subprocess.CalledProcessError as e:
-        if stop_progress:
-            stop_progress.set()
         error_msg = f"Whisper transcription failed with exit code {e.returncode}"
         if hasattr(e, "stderr") and e.stderr:
-            error_msg += f": {e.stderr.decode()}"
+            stderr_text = e.stderr.decode() if isinstance(e.stderr, bytes) else str(e.stderr)
+            error_msg += f": {stderr_text}"
         raise TranscriptionError(error_msg) from e
 
     except FileNotFoundError as e:
-        if stop_progress:
-            stop_progress.set()
         raise TranscriptionError(
             f"Whisper binary not found at: {WHISPER_CPP_PATH}. "
             "Please check the WHISPER_CPP_PATH configuration."
