@@ -1,6 +1,7 @@
 """Model selection and fallback logic for LLM analysis."""
 
 import logging
+import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -105,9 +106,27 @@ def load_models_config(config_path: Path) -> ModelsConfig:
             tpd=limits.get("tpd", 0),
         )
 
+    default_model = data.get("default_model", "llama-3.3-70b-versatile")
+    fallback_chain = data.get("fallback_chain", list(models.keys()))
+
+    # Validate default_model exists
+    if default_model not in models:
+        raise AnalysisError(
+            f"Default model '{default_model}' not found in models configuration. "
+            f"Available models: {list(models.keys())}"
+        )
+
+    # Validate all models in fallback_chain exist
+    unknown_models = [m for m in fallback_chain if m not in models]
+    if unknown_models:
+        raise AnalysisError(
+            f"Unknown models in fallback_chain: {unknown_models}. "
+            f"Available models: {list(models.keys())}"
+        )
+
     return ModelsConfig(
-        default_model=data.get("default_model", "llama-3.3-70b-versatile"),
-        fallback_chain=data.get("fallback_chain", list(models.keys())),
+        default_model=default_model,
+        fallback_chain=fallback_chain,
         models=models,
     )
 
@@ -126,6 +145,15 @@ RETRYABLE_ERROR_MESSAGES = [
     "timeout",
     "connection",
     "temporarily unavailable",
+    # Common HTTP server errors
+    "503",
+    "502",
+    "504",
+    "service unavailable",
+    "bad gateway",
+    "gateway timeout",
+    "overloaded",
+    "capacity",
 ]
 
 
@@ -177,11 +205,14 @@ def with_retry(
 
                     retry_count = attempt + 1
                     delay = base_delay * (exponential_base**attempt)
+                    # Add jitter to prevent thundering herd: +/- 25% of delay
+                    jitter = delay * 0.25 * (2 * random.random() - 1)
+                    delay_with_jitter = max(0.1, delay + jitter)
                     logger.warning(
                         f"Attempt {attempt + 1}/{max_retries + 1} failed: {e}. "
-                        f"Retrying in {delay:.1f}s..."
+                        f"Retrying in {delay_with_jitter:.1f}s..."
                     )
-                    time.sleep(delay)
+                    time.sleep(delay_with_jitter)
 
             raise last_error  # type: ignore
 
@@ -314,7 +345,7 @@ class ModelSelector:
         self,
         estimated_tokens: int,
         preferred_model: str | None = None,
-    ) -> tuple[str, bool]:
+    ) -> tuple[str | None, bool]:
         """Select best model that can handle the token count.
 
         Pre-checks context window to avoid wasting API calls on models
@@ -328,7 +359,7 @@ class ModelSelector:
             preferred_model: User's preferred model (if specified)
 
         Returns:
-            Tuple of (model_name, is_fallback)
+            Tuple of (model_name, is_fallback) or (None, False) if no model can handle tokens
         """
         # Start with preferred or default
         start_model = preferred_model or self.config.default_model
@@ -351,12 +382,12 @@ class ModelSelector:
                     logger.info(f"Pre-selected fallback model: {model}")
                 return model, is_fallback
 
-        # No model can handle it - this request is too large
+        # No model can handle it - signal that chunking is required
         logger.warning(
             f"No model in fallback chain can handle {estimated_tokens} tokens. "
-            f"Request may need to be chunked."
+            f"Chunking is required."
         )
-        return self.config.default_model, False
+        return None, False
 
     def handle_rate_limit(self, current_model: str) -> str | None:
         """Handle a rate limit error by selecting next fallback.

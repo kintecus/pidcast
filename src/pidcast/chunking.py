@@ -115,7 +115,31 @@ def chunk_transcript(
     pos = 0
     chunk_index = 0
 
+    # Safety limit to prevent infinite loops
+    max_iterations = len(transcript) // CHUNK_MIN_CHARS + 10
+    iterations = 0
+
     while pos < len(transcript):
+        iterations += 1
+        if iterations > max_iterations:
+            logger.error(
+                f"Chunking exceeded {max_iterations} iterations, forcing termination. "
+                f"This likely indicates a bug in the boundary search logic."
+            )
+            # Force final chunk with remaining text
+            remaining = transcript[pos:].strip()
+            if remaining:
+                chunks.append(
+                    TranscriptChunk(
+                        index=chunk_index,
+                        total_chunks=0,
+                        text=remaining,
+                        char_start=pos,
+                        char_end=len(transcript),
+                        estimated_tokens=estimate_tokens(remaining),
+                    )
+                )
+            break
         # Calculate end of this chunk
         chunk_end = pos + target_chars
 
