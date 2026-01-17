@@ -14,6 +14,53 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
+# ERROR LOGGING
+# ============================================================================
+
+
+def log_error_to_file(
+    error_type: str,
+    error_details: dict,
+    log_dir: Path | str | None = None,
+) -> None:
+    """Log errors to persistent JSON Lines file.
+
+    Creates a structured error log entry with timestamp and details.
+    Each line is a separate JSON object for easy parsing and rotation.
+
+    Args:
+        error_type: Category of error (e.g., "json_validation_error", "rate_limit_error")
+        error_details: Dictionary of error-specific details to log
+        log_dir: Directory for log files (defaults to data/logs/)
+    """
+    from .config import PROJECT_ROOT
+
+    if log_dir is None:
+        log_dir = PROJECT_ROOT / "data" / "logs"
+    else:
+        log_dir = Path(log_dir)
+
+    # Ensure log directory exists
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "errors.jsonl"
+
+    # Create log entry
+    entry = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "error_type": error_type,
+        **error_details
+    }
+
+    # Append to log file (JSONL format - one JSON object per line)
+    try:
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception as e:
+        # Don't fail the main operation if logging fails
+        logger.debug(f"Failed to write to error log: {e}")
+
+
+# ============================================================================
 # LOGGING SETUP
 # ============================================================================
 
