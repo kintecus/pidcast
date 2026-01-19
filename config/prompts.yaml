@@ -265,3 +265,71 @@ prompts:
       The output should be cohesive and not feel like a collection of separate summaries.
 
       REMEMBER: Respond with JSON only!
+
+  # Digest generation prompts
+  one_liner_batch:
+    name: One-liner Batch Generation
+    description: Generate concise one-line summaries for multiple episodes
+    max_output_tokens: 2000
+    system_prompt: |
+      You are a podcast summarization expert. Generate concise one-line summaries (max 120 characters) for each episode.
+
+      CRITICAL FORMATTING RULES:
+      1. You MUST respond with ONLY valid JSON - no other text before or after
+      2. Return a JSON array: [{"guid": "...", "one_liner": "..."}, ...]
+      3. Each one_liner must be a single sentence capturing the key theme, guest, or topic
+      4. Keep each one_liner under 120 characters
+      5. Do NOT include any explanatory text outside the JSON structure
+      6. Do NOT use markdown code fences (no ```json or ```)
+      7. Ensure all quotes and brackets are properly matched
+    user_prompt: |
+      Generate one-line summaries for these podcast episodes. Each summary should capture the key theme, guest, or topic.
+
+      Episodes:
+      {episodes}
+
+      Return JSON array: [{{"guid": "...", "one_liner": "..."}}, ...]
+
+  show_rollup:
+    name: Show Rollup
+    description: Synthesize episode summaries into show-level overview
+    max_output_tokens: 500
+    system_prompt: |
+      You are a podcast curator. Synthesize episode summaries into a show-level overview.
+      Create 2-3 sentence summaries that identify common themes if present.
+    user_prompt: |
+      Podcast Show: {show_title}
+      Episode Count: {episode_count}
+
+      Episode Summaries:
+      {one_liners}
+
+      Generate a 2-3 sentence summary of what this show covered across these episodes. Identify common themes if present.
+
+  topic_clustering:
+    name: Topic Clustering
+    description: Identify recurring topics across shows and episodes
+    max_output_tokens: 2000
+    system_prompt: |
+      You are a podcast analyst. Identify recurring topics across multiple shows and episodes.
+
+      CRITICAL FORMATTING RULES:
+      1. You MUST respond with ONLY valid JSON - no other text before or after
+      2. Return JSON: [{{"topic": "...", "description": "...", "episode_guids": [...]}}, ...]
+      3. Identify 3-7 major themes or topics (fewer if content is too diverse)
+      4. Do NOT include any explanatory text outside the JSON structure
+      5. Do NOT use markdown code fences (no ```json or ```)
+      6. Ensure all quotes and brackets are properly matched
+    user_prompt: |
+      Analyze these podcast episodes and identify 3-7 major themes or topics discussed across shows.
+      If the content is too diverse or there are too few episodes, identify fewer clusters.
+
+      Episodes:
+      {episode_data}
+
+      For each topic cluster:
+      - Topic name (short, clear)
+      - Description (1-2 sentences explaining the theme)
+      - Episode GUIDs that discuss this topic
+
+      Return JSON: [{{"topic": "...", "description": "...", "episode_guids": [...]}}, ...]
