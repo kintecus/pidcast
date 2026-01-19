@@ -279,14 +279,14 @@ class DigestFormatter:
         """
         console = Console()
 
-        console.print("\n[bold cyan]Podcast Digest", style="bold")
+        console.print("\n[bold cyan]Podcast Digest[/bold cyan]")
         console.print(
-            f"[dim]{datetime.now().strftime('%Y-%m-%d')} · {len(digest.episodes)} episodes\n"
+            f"[dim]{datetime.now().strftime('%Y-%m-%d')} · {len(digest.episodes)} episodes[/dim]\n"
         )
 
         # Topic Clusters
         if digest.topic_clusters:
-            console.print("[bold yellow]Topics Across Shows\n")
+            console.print("[bold yellow]Topics Across Shows[/bold yellow]\n")
             for cluster in digest.topic_clusters:
                 panel_content = (
                     f"[bold]{cluster.topic}[/bold]\n{cluster.description}\n\n"
@@ -296,10 +296,10 @@ class DigestFormatter:
                 console.print()
 
         # Show Rollups
-        console.print("[bold green]Shows\n")
+        console.print("[bold green]Shows[/bold green]\n")
         for show_rollup in digest.show_rollups.values():
             console.print(
-                f"[bold cyan]{show_rollup.show.title}[/bold] ({show_rollup.episode_count} episodes)"
+                f"[bold cyan]{show_rollup.show.title}[/bold cyan] ({show_rollup.episode_count} episodes)"
             )
             console.print(f"  {show_rollup.summary}\n")
 
