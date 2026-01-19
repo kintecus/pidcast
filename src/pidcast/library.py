@@ -126,6 +126,12 @@ class LibraryManager:
         # Parse feed to extract metadata
         show_meta, episodes = RSSParser.parse_feed(feed_url, verbose=verbose)
 
+        # Determine backfill count: use provided value, then global config, then code default
+        if backfill_count is None:
+            from .config_manager import ConfigManager
+            config = ConfigManager.load_config()
+            backfill_count = config.get("backfill_limit", 5)
+
         # Create show
         show = Show(
             id=self.next_id,
@@ -136,7 +142,7 @@ class LibraryManager:
             artwork_url=show_meta["artwork_url"],
             added_at=datetime.now(),
             last_checked=None,
-            backfill_count=backfill_count if backfill_count is not None else 5,
+            backfill_count=backfill_count,
         )
 
         # Add to library
