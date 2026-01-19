@@ -10,6 +10,10 @@ YouTube transcription tool with local Whisper processing and LLM-powered analysi
   - Automatic model fallback and retry logic
   - Smart chunking for long transcripts with semantic boundaries
   - JSON-validated structured output
+- 📚 **Library Management** (NEW) - Manage podcast RSS feeds with persistent storage
+  - Add/remove shows from your library
+  - Preview episodes before adding
+  - Fetch episode metadata from RSS feeds
 - 📄 **Markdown Output** with YAML front matter and contextual tags
 - 📊 **Smart Filenames** with date prefixes
 - ⚡ **Fast Dependencies** managed with uv
@@ -78,6 +82,8 @@ The following tools must be installed separately:
 
 ## Usage Examples
 
+### Single Episode Transcription
+
 ```bash
 # Basic transcription with analysis (default)
 uv run pidcast "https://www.youtube.com/watch?v=VIDEO_ID"
@@ -103,6 +109,32 @@ uv run pidcast "VIDEO_URL" --verbose
 # Use PO Token for restricted videos
 uv run pidcast "VIDEO_URL" --po_token "client.type+TOKEN"
 ```
+
+### Library Management (NEW)
+
+Manage a persistent library of podcast shows for batch processing:
+
+```bash
+# Add a podcast to your library
+uv run pidcast add "https://feeds.example.com/podcast.xml"
+
+# Preview episodes before adding
+uv run pidcast add "https://feeds.example.com/podcast.xml" --preview
+
+# List all shows in library
+uv run pidcast list
+
+# Show details for a specific podcast (with recent episodes)
+uv run pidcast show 1
+
+# Show more episodes
+uv run pidcast show 1 --episodes 10
+
+# Remove a show from library
+uv run pidcast remove 1
+```
+
+The library is stored at `~/.config/pidcast/library.yaml` (or `%APPDATA%\pidcast\library.yaml` on Windows) and is human-readable and editable.
 
 ## Analysis Prompts & Configuration
 
