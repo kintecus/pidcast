@@ -1,5 +1,6 @@
 """Sync engine for automated podcast processing."""
 
+import json
 import logging
 import time
 import uuid
@@ -307,7 +308,7 @@ class SyncEngine:
 
                 # Run analysis
                 analysis_start = time.time()
-                _ = analyze_transcript_with_llm(
+                result = analyze_transcript_with_llm(
                     transcript_text,
                     video_info,
                     self.analysis_type,
@@ -317,6 +318,27 @@ class SyncEngine:
                     self.verbose,
                 )
                 analysis_duration = time.time() - analysis_start
+
+                # Append analysis to markdown file
+                try:
+                    with open(markdown_file, "a", encoding="utf-8") as f:
+                        f.write("\n\n---\n\n## Analysis\n\n")
+                        f.write(f"**Type:** {result.analysis_name}\n")
+                        f.write(f"**Model:** {result.model}\n")
+                        f.write(f"**Tokens:** {result.tokens_total}\n\n")
+                        f.write("```json\n")
+                        f.write(
+                            json.dumps(
+                                {
+                                    "analysis": result.analysis_text,
+                                    "contextual_tags": result.contextual_tags,
+                                },
+                                indent=2,
+                            )
+                        )
+                        f.write("\n```\n")
+                except Exception as e:
+                    logger.warning(f"    Failed to append analysis to markdown: {e}")
 
                 if self.verbose:
                     logger.info(
