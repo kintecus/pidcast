@@ -35,3 +35,33 @@ class FileProcessingError(PidcastError):
     """Error processing local audio file."""
 
     pass
+
+
+class LibraryError(PidcastError):
+    """Base exception for library operations."""
+
+    pass
+
+
+class FeedFetchError(LibraryError):
+    """Failed to fetch RSS feed."""
+
+    pass
+
+
+class FeedParseError(LibraryError):
+    """Failed to parse RSS feed."""
+
+    pass
+
+
+class ShowNotFoundError(LibraryError):
+    """Show not found in library."""
+
+    pass
+
+
+class DuplicateShowError(LibraryError):
+    """Show already exists in library."""
+
+    pass
