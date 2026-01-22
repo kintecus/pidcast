@@ -23,24 +23,27 @@ YouTube transcription tool with local Whisper processing and LLM-powered analysi
 ## Quick Start
 
 1. **Install uv**:
+
    ```bash
    curl -LsSf https://astral.sh/uv/install.sh | sh
    ```
 
 2. **Clone and setup**:
+
    ```bash
-   git clone <repo>
+   git clone https://github.com/kintecus/pidcast
    cd pidcast
    uv sync
    ```
 
 3. **Configure** (copy `.env.example` to `.env` and set):
-   - `GROQ_API_KEY` - Get free key at https://console.groq.com/
+   - `GROQ_API_KEY` - Get free key at <https://console.groq.com/>
    - `WHISPER_CPP_PATH` - Path to whisper.cpp main binary
    - `WHISPER_MODEL` - Path to Whisper model file
    - `OBSIDIAN_VAULT_PATH` - (Optional) For `--save_to_obsidian`
 
 4. **Run**:
+
    ```bash
    # Transcribe with LLM analysis (default)
    uv run pidcast "https://youtube.com/watch?v=VIDEO_ID"
@@ -63,6 +66,7 @@ The following tools must be installed separately:
 ### Installing whisper.cpp
 
 1. Clone and build [whisper.cpp](https://github.com/ggerganov/whisper.cpp):
+
    ```bash
    git clone https://github.com/ggerganov/whisper.cpp.git
    cd whisper.cpp
@@ -70,11 +74,13 @@ The following tools must be installed separately:
    ```
 
 2. Download a Whisper model:
+
    ```bash
    bash ./models/download-ggml-model.sh base.en
    ```
 
 3. Configure paths in `.env`:
+
    ```bash
    WHISPER_CPP_PATH=/path/to/whisper.cpp/main
    WHISPER_MODEL=/path/to/whisper.cpp/models/ggml-base.en.bin
@@ -116,22 +122,28 @@ Manage a persistent library of podcast shows for batch processing:
 
 ```bash
 # Add a podcast to your library
-uv run pidcast add "https://feeds.example.com/podcast.xml"
+uv run pidcast lib add "https://feeds.example.com/podcast.xml"
 
 # Preview episodes before adding
-uv run pidcast add "https://feeds.example.com/podcast.xml" --preview
+uv run pidcast lib add "https://feeds.example.com/podcast.xml" --preview
 
 # List all shows in library
-uv run pidcast list
+uv run pidcast lib list
 
 # Show details for a specific podcast (with recent episodes)
-uv run pidcast show 1
+uv run pidcast lib show 1
 
 # Show more episodes
-uv run pidcast show 1 --episodes 10
+uv run pidcast lib show 1 --episodes 10
 
 # Remove a show from library
-uv run pidcast remove 1
+uv run pidcast lib remove 1
+
+# Sync library and process new episodes
+uv run pidcast lib sync
+
+# Generate digest from processing history
+uv run pidcast lib digest
 ```
 
 The library is stored at `~/.config/pidcast/library.yaml` (or `%APPDATA%\pidcast\library.yaml` on Windows) and is human-readable and editable.
@@ -139,24 +151,31 @@ The library is stored at `~/.config/pidcast/library.yaml` (or `%APPDATA%\pidcast
 ## Analysis Prompts & Configuration
 
 ### Prompt Templates
+
 Prompts are configured in `config/prompts.yaml`. Each prompt template defines:
+
 - System and user prompts with variable substitution
 - Max output tokens
 - JSON response format for structured output with `analysis` and `contextual_tags`
 
 Available analysis types:
+
 - `executive_summary` (default) - Concise overview with key insights
 - `key_points` - Bulleted highlights
 - `action_items` - Actionable takeaways
 
 ### Model Configuration
+
 Models and fallback chains are defined in `config/models.yaml`:
+
 - Automatic fallback on rate limits or failures
 - Token-based model selection for long transcripts
 - Smart chunking for content exceeding context windows
 
 ### Chunking Strategy
+
 Long transcripts are automatically chunked with:
+
 - Semantic boundary detection (paragraph/sentence breaks)
 - Overlap between chunks for context preservation
 - Synthesis step to combine chunk analyses
@@ -190,6 +209,7 @@ uv sync --upgrade
 ## Documentation
 
 See [CLAUDE.md](CLAUDE.md) for detailed documentation including:
+
 - Architecture overview
 - Download strategies
 - LLM analysis configuration

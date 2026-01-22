@@ -231,6 +231,12 @@ def parse_arguments() -> argparse.Namespace:
     Returns:
         Parsed arguments namespace
     """
+    import sys
+
+    # Check if first argument is 'lib' to determine which parser to use
+    # This is necessary because argparse can't mix subparsers with positional args cleanly
+    is_lib_command = len(sys.argv) > 1 and sys.argv[1] == "lib"
+
     parser = argparse.ArgumentParser(
         description="Automate audio transcription with Whisper (YouTube URL or local file).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -242,118 +248,126 @@ Examples:
   %(prog)s "VIDEO_URL" --save_to_obsidian
   %(prog)s --analyze_existing transcript.md --analysis_type summary
 
-  # Library management (new)
-  %(prog)s add "https://feeds.example.com/podcast.xml"
-  %(prog)s add "https://feeds.example.com/podcast.xml" --preview
-  %(prog)s list
-  %(prog)s show 1
-  %(prog)s remove 1
+  # Library management
+  %(prog)s lib add "https://feeds.example.com/podcast.xml"
+  %(prog)s lib add "https://feeds.example.com/podcast.xml" --preview
+  %(prog)s lib list
+  %(prog)s lib show 1
+  %(prog)s lib remove 1
+  %(prog)s lib sync
+  %(prog)s lib digest
         """,
     )
 
-    # Create subparsers for library commands
-    subparsers = parser.add_subparsers(dest="command", help="Library management commands")
+    # Only create subparsers if 'lib' command is used
+    # This allows URLs/files to be parsed as positional arguments in transcription mode
+    if is_lib_command:
+        subparsers = parser.add_subparsers(dest="mode", help="Command mode", required=False)
 
-    # Add command: add podcast to library
-    add_parser = subparsers.add_parser("add", help="Add podcast to library")
-    add_parser.add_argument("feed_url", help="RSS feed URL")
-    add_parser.add_argument(
-        "--preview", action="store_true", help="Preview episodes before adding"
-    )
-    add_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+        # Library subcommand with nested subparsers
+        lib_parser = subparsers.add_parser('lib', help='Podcast library management')
+        lib_subparsers = lib_parser.add_subparsers(dest='lib_command', help="Library management commands", required=True)
 
-    # List command: list all shows
-    list_parser = subparsers.add_parser("list", help="List all shows in library")
-    list_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+        # Add command: add podcast to library
+        add_parser = lib_subparsers.add_parser("add", help="Add podcast to library")
+        add_parser.add_argument("feed_url", help="RSS feed URL")
+        add_parser.add_argument(
+            "--preview", action="store_true", help="Preview episodes before adding"
+        )
+        add_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
 
-    # Show command: show details for a podcast
-    show_parser = subparsers.add_parser("show", help="Show details for a podcast")
-    show_parser.add_argument("show_id", type=int, help="Show ID")
-    show_parser.add_argument(
-        "--episodes", type=int, default=5, help="Number of recent episodes to show (default: 5)"
-    )
-    show_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+        # List command: list all shows
+        list_parser = lib_subparsers.add_parser("list", help="List all shows in library")
+        list_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
 
-    # Remove command: remove podcast from library
-    remove_parser = subparsers.add_parser("remove", help="Remove podcast from library")
-    remove_parser.add_argument("show_id", type=int, help="Show ID")
-    remove_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+        # Show command: show details for a podcast
+        show_parser = lib_subparsers.add_parser("show", help="Show details for a podcast")
+        show_parser.add_argument("show_id", type=int, help="Show ID")
+        show_parser.add_argument(
+            "--episodes", type=int, default=5, help="Number of recent episodes to show (default: 5)"
+        )
+        show_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
 
-    # Sync command: sync library and process new episodes
-    sync_parser = subparsers.add_parser("sync", help="Sync library shows and process new episodes")
-    sync_parser.add_argument(
-        "--show",
-        type=int,
-        metavar="ID",
-        help="Sync only specific show by ID",
-    )
-    sync_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Preview what would be processed without executing",
-    )
-    sync_parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Reprocess episodes even if already successful",
-    )
-    sync_parser.add_argument(
-        "--backfill",
-        type=int,
-        metavar="N",
-        help="Override global backfill limit for this sync",
-    )
-    sync_parser.add_argument(
-        "--output_dir",
-        help="Output directory for transcript files (default: data/transcripts)",
-    )
-    sync_parser.add_argument(
-        "--whisper_model",
-        help=f"Path to Whisper model file (default: {WHISPER_MODEL})",
-    )
-    sync_parser.add_argument(
-        "--groq_api_key",
-        help="Groq API key for LLM analysis (default: GROQ_API_KEY env var)",
-    )
-    sync_parser.add_argument(
-        "--analysis_type",
-        default="executive_summary",
-        help="Analysis type/prompt template to use (default: executive_summary)",
-    )
-    sync_parser.add_argument(
-        "--prompts_file",
-        help=f"Path to prompts YAML file (default: {DEFAULT_PROMPTS_FILE})",
-    )
-    sync_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-    sync_parser.add_argument(
-        "--no-digest",
-        action="store_true",
-        help="Skip digest generation (only generate individual episode files)",
-    )
+        # Remove command: remove podcast from library
+        remove_parser = lib_subparsers.add_parser("remove", help="Remove podcast from library")
+        remove_parser.add_argument("show_id", type=int, help="Show ID")
+        remove_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
 
-    # Digest command: generate podcast digest from history
-    digest_parser = subparsers.add_parser("digest", help="Generate podcast digest from processing history")
-    digest_parser.add_argument(
-        "--date",
-        help="Generate digest for specific date (YYYY-MM-DD)",
-    )
-    digest_parser.add_argument(
-        "--range",
-        help="Generate digest for date range (e.g., 7d, 30d)",
-    )
-    digest_parser.add_argument(
-        "--output_dir",
-        help="Output directory for digest file (default: data/transcripts)",
-    )
-    digest_parser.add_argument(
-        "--groq_api_key",
-        help="Groq API key for LLM analysis (default: GROQ_API_KEY env var)",
-    )
-    digest_parser.add_argument(
-        "--prompts_file",
-        help=f"Path to prompts YAML file (default: {DEFAULT_PROMPTS_FILE})",
-    )
-    digest_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+        # Sync command: sync library and process new episodes
+        sync_parser = lib_subparsers.add_parser("sync", help="Sync library shows and process new episodes")
+        sync_parser.add_argument(
+            "--show",
+            type=int,
+            metavar="ID",
+            help="Sync only specific show by ID",
+        )
+        sync_parser.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="Preview what would be processed without executing",
+        )
+        sync_parser.add_argument(
+            "--force",
+            action="store_true",
+            help="Reprocess episodes even if already successful",
+        )
+        sync_parser.add_argument(
+            "--backfill",
+            type=int,
+            metavar="N",
+            help="Override global backfill limit for this sync",
+        )
+        sync_parser.add_argument(
+            "--output_dir",
+            help="Output directory for transcript files (default: data/transcripts)",
+        )
+        sync_parser.add_argument(
+            "--whisper_model",
+            help=f"Path to Whisper model file (default: {WHISPER_MODEL})",
+        )
+        sync_parser.add_argument(
+            "--groq_api_key",
+            help="Groq API key for LLM analysis (default: GROQ_API_KEY env var)",
+        )
+        sync_parser.add_argument(
+            "--analysis_type",
+            default="executive_summary",
+            help="Analysis type/prompt template to use (default: executive_summary)",
+        )
+        sync_parser.add_argument(
+            "--prompts_file",
+            help=f"Path to prompts YAML file (default: {DEFAULT_PROMPTS_FILE})",
+        )
+        sync_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+        sync_parser.add_argument(
+            "--no-digest",
+            action="store_true",
+            help="Skip digest generation (only generate individual episode files)",
+        )
+
+        # Digest command: generate podcast digest from history
+        digest_parser = lib_subparsers.add_parser("digest", help="Generate podcast digest from processing history")
+        digest_parser.add_argument(
+            "--date",
+            help="Generate digest for specific date (YYYY-MM-DD)",
+        )
+        digest_parser.add_argument(
+            "--range",
+            help="Generate digest for date range (e.g., 7d, 30d)",
+        )
+        digest_parser.add_argument(
+            "--output_dir",
+            help="Output directory for digest file (default: data/transcripts)",
+        )
+        digest_parser.add_argument(
+            "--groq_api_key",
+            help="Groq API key for LLM analysis (default: GROQ_API_KEY env var)",
+        )
+        digest_parser.add_argument(
+            "--prompts_file",
+            help=f"Path to prompts YAML file (default: {DEFAULT_PROMPTS_FILE})",
+        )
+        digest_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
 
     # Input source group (mutually exclusive) - for original workflow
     input_group = parser.add_mutually_exclusive_group(required=False)
@@ -1310,24 +1324,24 @@ def main() -> None:
     setup_logging(getattr(args, "verbose", False))
 
     # Route to library commands if specified
-    if hasattr(args, "command") and args.command:
-        if args.command == "add":
+    if getattr(args, "mode", None) == "lib":
+        if args.lib_command == "add":
             cmd_add(args)
-        elif args.command == "list":
+        elif args.lib_command == "list":
             cmd_list(args)
-        elif args.command == "show":
+        elif args.lib_command == "show":
             cmd_show(args)
-        elif args.command == "remove":
+        elif args.lib_command == "remove":
             cmd_remove(args)
-        elif args.command == "sync":
+        elif args.lib_command == "sync":
             cmd_sync(args)
-        elif args.command == "digest":
+        elif args.lib_command == "digest":
             cmd_digest(args)
         return
 
     # Validate that we have either input_source or analyze_existing for transcription workflow
     if not args.input_source and not args.analyze_existing:
-        log_error("Error: Either provide a URL/file path or use a library command (add, list, show, remove, sync)")
+        log_error("Error: Either provide a URL/file path or use a library command")
         log_error("Run 'pidcast --help' for usage information")
         return
 

@@ -20,7 +20,10 @@
       "Bash(git rm:*)",
       "Bash(python -m py_compile:*)",
       "Bash(python3:*)",
-      "Bash(tail:*)"
+      "Bash(tail:*)",
+      "Skill(ideation)",
+      "Bash(git checkout:*)",
+      "Bash(python:*)"
     ]
   }
 }
