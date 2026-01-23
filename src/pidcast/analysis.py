@@ -5,7 +5,9 @@ import logging
 import re
 import time
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import yaml
 
@@ -40,27 +42,21 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
-# CUSTOM EXCEPTIONS
+# RESULT TYPES
 # ============================================================================
 
 
-class PlainTextFallbackSuccess(Exception):
-    """Special exception to signal successful plain text fallback with extracted tags.
-
-    This is used to propagate the results from _analyze_with_plain_text_fallback
-    through _call_llm_with_fallback to the caller, since the return signatures differ.
-    """
-
-    def __init__(self, analysis_text: str, tags: list[str], model: str,
-                 tokens_in: int, tokens_out: int, tokens_total: int, duration: float):
-        self.analysis_text = analysis_text
-        self.tags = tags
-        self.model = model
-        self.tokens_in = tokens_in
-        self.tokens_out = tokens_out
-        self.tokens_total = tokens_total
-        self.duration = duration
-        super().__init__("Plain text fallback succeeded")
+@dataclass
+class LLMCallResult:
+    """Result from an LLM API call."""
+    response_text: str
+    model: str
+    tokens_in: int
+    tokens_out: int
+    tokens_total: int
+    duration: float
+    tags: list[str] | None = None
+    used_plain_text_fallback: bool = False
 
 
 # ============================================================================
@@ -386,14 +382,11 @@ def _call_llm_with_fallback(
     preferred_model: str,
     verbose: bool = False,
     use_json_mode: bool = False,
-) -> tuple[str, str, int, int, int, float]:
+) -> LLMCallResult:
     """Call LLM API with automatic model fallback on rate limits.
 
     Args:
         use_json_mode: If True, request JSON response format from the model
-
-    Returns:
-        Tuple of (response_text, model_used, tokens_in, tokens_out, tokens_total, duration)
     """
 
     @with_retry(max_retries=3, base_delay=2.0)
@@ -425,13 +418,13 @@ def _call_llm_with_fallback(
             response = _call_api(current_model)
             duration = time.time() - start_time
 
-            return (
-                response.choices[0].message.content,
-                current_model,
-                response.usage.prompt_tokens,
-                response.usage.completion_tokens,
-                response.usage.total_tokens,
-                duration,
+            return LLMCallResult(
+                response_text=response.choices[0].message.content,
+                model=current_model,
+                tokens_in=response.usage.prompt_tokens,
+                tokens_out=response.usage.completion_tokens,
+                tokens_total=response.usage.total_tokens,
+                duration=duration,
             )
 
         except Exception as e:
@@ -464,12 +457,10 @@ def _call_llm_with_fallback(
                     # All models exhausted with JSON validation errors
                     # If we were using JSON mode, try plain text fallback
                     if use_json_mode:
-                        from .utils import log_error_to_file
-
                         tried = selector.get_tried_models()
                         log_warning(
-                            f"JSON mode failed on all models. "
-                            f"Falling back to plain text analysis with separate tag extraction..."
+                            "JSON mode failed on all models. "
+                            "Falling back to plain text analysis with separate tag extraction..."
                         )
 
                         # Log the fallback event
@@ -481,23 +472,10 @@ def _call_llm_with_fallback(
                             }
                         )
 
-                        # Use two-call strategy - this will raise its own exception if it fails
-                        # Note: We need to return the expanded tuple here
-                        analysis_text, tags, model_used, tokens_in, tokens_out, tokens_total, duration = (
-                            _analyze_with_plain_text_fallback(
-                                client, selector, system_prompt, user_prompt,
-                                max_tokens, preferred_model, verbose
-                            )
-                        )
-                        # Since parse_llm_json_response expects the full response, we need to
-                        # format the tags back into the response. But since we're returning from
-                        # _call_llm_with_fallback, we just return the analysis text.
-                        # The caller will need to handle tags separately or we store them differently.
-                        # Actually, looking at the signature, _call_llm_with_fallback returns a 6-tuple,
-                        # but _analyze_with_plain_text_fallback returns a 7-tuple with tags.
-                        # We need to handle this mismatch. Let's raise a special exception with the data.
-                        raise PlainTextFallbackSuccess(
-                            analysis_text, tags, model_used, tokens_in, tokens_out, tokens_total, duration
+                        # Use two-call strategy and return result with tags
+                        return _analyze_with_plain_text_fallback(
+                            client, selector, system_prompt, user_prompt,
+                            max_tokens, preferred_model, verbose
                         )
                     else:
                         # Not using JSON mode, so we can't fall back
@@ -541,9 +519,9 @@ def _analyze_with_plain_text_fallback(
     max_output_tokens: int,
     preferred_model: str,
     verbose: bool,
-) -> tuple[str, list[str], str, int, int, int, float]:
-    """
-    Two-call strategy for when JSON mode fails:
+) -> LLMCallResult:
+    """Two-call strategy for when JSON mode fails.
+
     1. Get analysis as plain text
     2. Extract tags from analysis text
 
@@ -557,7 +535,7 @@ def _analyze_with_plain_text_fallback(
         verbose: Enable verbose logging
 
     Returns:
-        Tuple of (analysis_text, tags, model_used, tokens_in, tokens_out, tokens_total, duration)
+        LLMCallResult with analysis text and extracted tags
     """
     from .utils import log_error_to_file
 
@@ -569,17 +547,15 @@ def _analyze_with_plain_text_fallback(
 
     # Call 1: Get analysis as plain text
     try:
-        analysis_text, model_used, tokens_in_1, tokens_out_1, tokens_total_1, duration_1 = (
-            _call_llm_with_fallback(
-                client,
-                selector,
-                plain_system,
-                plain_user,
-                max_output_tokens,
-                preferred_model,
-                verbose,
-                use_json_mode=False,  # Plain text
-            )
+        result1 = _call_llm_with_fallback(
+            client,
+            selector,
+            plain_system,
+            plain_user,
+            max_output_tokens,
+            preferred_model,
+            verbose,
+            use_json_mode=False,  # Plain text
         )
     except Exception as e:
         # Log the failure
@@ -593,42 +569,44 @@ def _analyze_with_plain_text_fallback(
         raise
 
     if verbose:
-        logger.info(f"Plain text analysis completed ({tokens_out_1} tokens)")
+        logger.info(f"Plain text analysis completed ({result1.tokens_out} tokens)")
 
     # Call 2: Extract tags from analysis
-    tags = []
+    tags: list[str] = []
     tokens_in_2 = 0
     tokens_out_2 = 0
     tokens_total_2 = 0
     duration_2 = 0.0
 
     tag_system = "You are a metadata extraction assistant. Extract 3-5 concise, relevant contextual tags from the analysis."
-    tag_user = f"Extract 3-5 tags from this analysis. Return only the tags, comma-separated:\n\n{analysis_text[:2000]}"
+    tag_user = f"Extract 3-5 tags from this analysis. Return only the tags, comma-separated:\n\n{result1.response_text[:2000]}"
 
     try:
         # Reset selector for tag extraction attempt
         selector.reset()
-        tag_response, _, tokens_in_2, tokens_out_2, tokens_total_2, duration_2 = (
-            _call_llm_with_fallback(
-                client,
-                selector,
-                tag_system,
-                tag_user,
-                200,  # Short response
-                preferred_model,
-                verbose,
-                use_json_mode=False,
-            )
+        result2 = _call_llm_with_fallback(
+            client,
+            selector,
+            tag_system,
+            tag_user,
+            200,  # Short response
+            preferred_model,
+            verbose,
+            use_json_mode=False,
         )
 
+        tokens_in_2 = result2.tokens_in
+        tokens_out_2 = result2.tokens_out
+        tokens_total_2 = result2.tokens_total
+        duration_2 = result2.duration
+
         # Parse tags from response (comma-separated or newlines)
-        tag_response = tag_response.strip()
+        tag_response = result2.response_text.strip()
         # Remove common prefixes like "Tags:", "Here are the tags:", etc.
         tag_response = re.sub(r'^(tags?|here are the tags?):?\s*', '', tag_response, flags=re.IGNORECASE)
         # Split by comma or newline
         raw_tags = [t.strip() for t in tag_response.replace("\n", ",").split(",") if t.strip()]
         # Clean up tags (remove quotes, bullets, numbers)
-        tags = []
         for tag in raw_tags[:5]:  # Limit to 5
             tag = re.sub(r'^[\d\.\-\*\)]+\s*', '', tag)  # Remove list markers
             tag = tag.strip('"\'`')  # Remove quotes
@@ -649,13 +627,16 @@ def _analyze_with_plain_text_fallback(
             }
         )
 
-    # Combine metrics
-    total_tokens_in = tokens_in_1 + tokens_in_2
-    total_tokens_out = tokens_out_1 + tokens_out_2
-    total_tokens = tokens_total_1 + tokens_total_2
-    total_duration = duration_1 + duration_2
-
-    return analysis_text, tags, model_used, total_tokens_in, total_tokens_out, total_tokens, total_duration
+    return LLMCallResult(
+        response_text=result1.response_text,
+        model=result1.model,
+        tokens_in=result1.tokens_in + tokens_in_2,
+        tokens_out=result1.tokens_out + tokens_out_2,
+        tokens_total=result1.tokens_total + tokens_total_2,
+        duration=result1.duration + duration_2,
+        tags=tags,
+        used_plain_text_fallback=True,
+    )
 
 
 def _analyze_single(
@@ -716,58 +697,57 @@ def _analyze_single(
 
     # Make the API call
     selector.reset()  # Reset for fresh fallback tracking
-    try:
-        response_text, model_used, tokens_in, tokens_out, tokens_total, duration = (
-            _call_llm_with_fallback(
-                client,
-                selector,
-                system_prompt,
-                user_prompt,
-                template.max_output_tokens,
-                current_model,
-                verbose,
-                use_json_mode=True,  # Enable JSON mode for tag generation
-            )
+    result = _call_llm_with_fallback(
+        client,
+        selector,
+        system_prompt,
+        user_prompt,
+        template.max_output_tokens,
+        current_model,
+        verbose,
+        use_json_mode=True,  # Enable JSON mode for tag generation
+    )
+
+    # Log if fallback occurred
+    if result.model != preferred_model:
+        logger.info(
+            f"Analysis completed with fallback model {selector.get_display_name(result.model)} "
+            f"(requested: {selector.get_display_name(preferred_model)})"
         )
 
-        # Log if fallback occurred
-        if model_used != preferred_model:
-            logger.info(
-                f"Analysis completed with fallback model {selector.get_display_name(model_used)} "
-                f"(requested: {selector.get_display_name(preferred_model)})"
-            )
+    actual_cost = selector.estimate_cost(result.model, result.tokens_in, result.tokens_out)
 
-        actual_cost = selector.estimate_cost(model_used, tokens_in, tokens_out)
-
-        # Parse JSON response to extract analysis and tags
-        analysis_text, contextual_tags = parse_llm_json_response(response_text, verbose)
-
-    except PlainTextFallbackSuccess as e:
-        # Plain text fallback succeeded - use the extracted data
+    # Handle plain text fallback vs JSON response
+    if result.used_plain_text_fallback:
         logger.info("Plain text fallback completed successfully")
-        analysis_text = e.analysis_text
-        contextual_tags = e.tags
-        model_used = e.model
-        tokens_in = e.tokens_in
-        tokens_out = e.tokens_out
-        tokens_total = e.tokens_total
-        duration = e.duration
-        actual_cost = selector.estimate_cost(model_used, tokens_in, tokens_out)
+        analysis_text = result.response_text
+        contextual_tags = result.tags or []
+    else:
+        # Parse JSON response to extract analysis and tags
+        analysis_text, contextual_tags = parse_llm_json_response(result.response_text, verbose)
 
     return AnalysisResult(
         analysis_text=analysis_text,
         analysis_type=analysis_type,
         analysis_name=template.name,
-        model=model_used,
+        model=result.model,
         provider="groq",
-        tokens_input=tokens_in,
-        tokens_output=tokens_out,
-        tokens_total=tokens_total,
+        tokens_input=result.tokens_in,
+        tokens_output=result.tokens_out,
+        tokens_total=result.tokens_total,
         estimated_cost=actual_cost,
-        duration=duration,
+        duration=result.duration,
         truncated=False,  # No truncation in single analysis; chunking handles long content
         contextual_tags=contextual_tags,
     )
+
+
+@dataclass
+class ChunkProgress:
+    """Progress tracking for chunk analysis."""
+    current: int
+    total: int
+    phase: str  # "chunk" or "synthesis"
 
 
 def _analyze_with_chunking(
@@ -778,16 +758,9 @@ def _analyze_with_chunking(
     selector: ModelSelector,
     preferred_model: str,
     verbose: bool = False,
+    progress_callback: Callable[[ChunkProgress], None] | None = None,
 ) -> AnalysisResult:
     """Analyze long transcript using chunking and synthesis."""
-    try:
-        from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
-    except ImportError:
-        # Fallback without progress display
-        return _analyze_with_chunking_simple(
-            transcript, video_info, prompts_config, client, selector, preferred_model, verbose
-        )
-
     # Get prompts
     chunk_template = prompts_config.prompts["chunk_analysis"]
     synthesis_template = prompts_config.prompts["synthesis"]
@@ -802,7 +775,7 @@ def _analyze_with_chunking(
     logger.info(f"\nSplitting transcript into {len(chunks)} chunks for analysis...")
 
     # Analyze each chunk
-    chunk_results = []
+    chunk_results: list[str] = []
     total_tokens = 0
     total_cost = 0.0
     start_time = time.time()
@@ -810,44 +783,37 @@ def _analyze_with_chunking(
     # Reset selector once before processing all chunks to preserve cross-chunk failure memory
     selector.reset()
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[cyan]{task.description}"),
-        BarColumn(complete_style="green"),
-        TextColumn("{task.completed}/{task.total}"),
-    ) as progress:
-        task = progress.add_task("Analyzing chunks...", total=len(chunks))
+    for chunk in chunks:
+        # Report progress
+        if progress_callback:
+            progress_callback(ChunkProgress(chunk.index + 1, chunk.total_chunks, "chunk"))
+        else:
+            logger.info(f"Analyzing chunk {chunk.index + 1}/{chunk.total_chunks}...")
 
-        for chunk in chunks:
-            progress.update(task, description=f"Chunk {chunk.index + 1}/{chunk.total_chunks}")
+        # Prepare chunk variables
+        variables = format_chunk_for_analysis(chunk, video_info.title)
+        system_prompt = substitute_prompt_variables(chunk_template.system_prompt, variables)
+        user_prompt = substitute_prompt_variables(chunk_template.user_prompt, variables)
 
-            # Prepare chunk variables
-            variables = format_chunk_for_analysis(chunk, video_info.title)
-            system_prompt = substitute_prompt_variables(chunk_template.system_prompt, variables)
-            user_prompt = substitute_prompt_variables(chunk_template.user_prompt, variables)
+        # Make API call (don't reset selector to preserve failure memory across chunks)
+        result = _call_llm_with_fallback(
+            client,
+            selector,
+            system_prompt,
+            user_prompt,
+            chunk_template.max_output_tokens,
+            preferred_model,
+            verbose,
+        )
 
-            # Make API call (don't reset selector to preserve failure memory across chunks)
-            response_text, model_used, tokens_in, tokens_out, tokens_total_chunk, _ = (
-                _call_llm_with_fallback(
-                    client,
-                    selector,
-                    system_prompt,
-                    user_prompt,
-                    chunk_template.max_output_tokens,
-                    preferred_model,
-                    verbose,
-                )
-            )
+        chunk_results.append(result.response_text)
+        total_tokens += result.tokens_total
+        chunk_cost = selector.estimate_cost(result.model, result.tokens_in, result.tokens_out)
+        total_cost += chunk_cost or 0
 
-            chunk_results.append(response_text)
-            total_tokens += tokens_total_chunk
-            chunk_cost = selector.estimate_cost(model_used, tokens_in, tokens_out)
-            total_cost += chunk_cost or 0
-
-            progress.advance(task)
-
-        # Synthesis step
-        progress.update(task, description="Synthesizing results...")
+    # Report synthesis phase
+    if progress_callback:
+        progress_callback(ChunkProgress(len(chunks), len(chunks), "synthesis"))
 
     logger.info("\nSynthesizing chunk analyses...")
 
@@ -878,46 +844,40 @@ def _analyze_with_chunking(
 
     # Make synthesis call
     selector.reset()
-    try:
-        synthesis_text, synthesis_model, syn_in, syn_out, syn_total, _ = _call_llm_with_fallback(
-            client,
-            selector,
-            synthesis_system,
-            synthesis_user,
-            synthesis_template.max_output_tokens,
-            preferred_model,
-            verbose,
-            use_json_mode=True,  # Enable JSON mode for tag generation
-        )
+    synthesis_result = _call_llm_with_fallback(
+        client,
+        selector,
+        synthesis_system,
+        synthesis_user,
+        synthesis_template.max_output_tokens,
+        preferred_model,
+        verbose,
+        use_json_mode=True,  # Enable JSON mode for tag generation
+    )
 
-        total_tokens += syn_total
-        syn_cost = selector.estimate_cost(synthesis_model, syn_in, syn_out)
-        total_cost += syn_cost or 0
+    total_tokens += synthesis_result.tokens_total
+    synthesis_cost = selector.estimate_cost(
+        synthesis_result.model, synthesis_result.tokens_in, synthesis_result.tokens_out
+    )
+    total_cost += synthesis_cost or 0
+    duration = time.time() - start_time
 
-        duration = time.time() - start_time
-
-        # Parse JSON response to extract analysis and tags
-        final_analysis, contextual_tags = parse_llm_json_response(synthesis_text, verbose)
-
-    except PlainTextFallbackSuccess as e:
-        # Plain text fallback succeeded for synthesis
+    # Handle plain text fallback vs JSON response
+    if synthesis_result.used_plain_text_fallback:
         logger.info("Synthesis completed with plain text fallback")
-        final_analysis = e.analysis_text
-        contextual_tags = e.tags
-        synthesis_model = e.model
-        syn_in = e.tokens_in
-        syn_out = e.tokens_out
-        syn_total = e.tokens_total
-        total_tokens += syn_total
-        syn_cost = selector.estimate_cost(synthesis_model, syn_in, syn_out)
-        total_cost += syn_cost or 0
-        duration = time.time() - start_time
+        final_analysis = synthesis_result.response_text
+        contextual_tags = synthesis_result.tags or []
+    else:
+        # Parse JSON response to extract analysis and tags
+        final_analysis, contextual_tags = parse_llm_json_response(
+            synthesis_result.response_text, verbose
+        )
 
     return AnalysisResult(
         analysis_text=final_analysis,
         analysis_type="executive_summary",
         analysis_name=f"Executive Summary (Chunked: {len(chunks)} parts)",
-        model=synthesis_model,
+        model=synthesis_result.model,
         provider="groq",
         tokens_input=total_tokens,
         tokens_output=0,
@@ -929,7 +889,7 @@ def _analyze_with_chunking(
     )
 
 
-def _analyze_with_chunking_simple(
+def _analyze_with_chunking_rich(
     transcript: str,
     video_info: VideoInfo,
     prompts_config: PromptsConfig,
@@ -938,125 +898,57 @@ def _analyze_with_chunking_simple(
     preferred_model: str,
     verbose: bool = False,
 ) -> AnalysisResult:
-    """Analyze long transcript using chunking (without rich progress display)."""
-    chunk_template = prompts_config.prompts["chunk_analysis"]
-    synthesis_template = prompts_config.prompts["synthesis"]
+    """Analyze with chunking using Rich progress display.
 
-    effective_limit = selector.get_effective_token_limit(preferred_model)
-    chunk_target_tokens = max(effective_limit - 3000, 2000)
-
-    chunks = chunk_transcript(transcript, target_tokens=chunk_target_tokens)
-    logger.info(f"\nSplitting transcript into {len(chunks)} chunks for analysis...")
-
-    chunk_results = []
-    total_tokens = 0
-    total_cost = 0.0
-    start_time = time.time()
-
-    # Reset selector once before processing all chunks to preserve cross-chunk failure memory
-    selector.reset()
-
-    for chunk in chunks:
-        logger.info(f"Analyzing chunk {chunk.index + 1}/{chunk.total_chunks}...")
-
-        variables = format_chunk_for_analysis(chunk, video_info.title)
-        system_prompt = substitute_prompt_variables(chunk_template.system_prompt, variables)
-        user_prompt = substitute_prompt_variables(chunk_template.user_prompt, variables)
-
-        # Don't reset selector to preserve failure memory across chunks
-        response_text, model_used, tokens_in, tokens_out, tokens_total_chunk, _ = (
-            _call_llm_with_fallback(
-                client,
-                selector,
-                system_prompt,
-                user_prompt,
-                chunk_template.max_output_tokens,
-                preferred_model,
-                verbose,
-            )
-        )
-
-        chunk_results.append(response_text)
-        total_tokens += tokens_total_chunk
-        chunk_cost = selector.estimate_cost(model_used, tokens_in, tokens_out)
-        total_cost += chunk_cost or 0
-
-    logger.info("\nSynthesizing chunk analyses...")
-
-    # Validate chunk results before synthesis
-    valid_results = [r for r in chunk_results if r and len(r.strip()) > 50]
-    if len(valid_results) < len(chunk_results):
-        logger.warning(
-            f"Only {len(valid_results)}/{len(chunk_results)} chunks produced valid results. "
-            f"Some chunk analyses may have failed or returned minimal content."
-        )
-    if not valid_results:
-        raise AnalysisError(
-            "All chunk analyses failed or returned empty results - cannot synthesize. "
-            "This may indicate API issues or model failures across all chunks."
-        )
-
-    synthesis_input = format_chunks_for_synthesis(
-        valid_results, video_info.title, video_info.duration_string
-    )
-    synthesis_variables = {"chunk_analyses": synthesis_input}
-    synthesis_system = substitute_prompt_variables(
-        synthesis_template.system_prompt, synthesis_variables
-    )
-    synthesis_user = substitute_prompt_variables(
-        synthesis_template.user_prompt, synthesis_variables
-    )
-
-    selector.reset()
+    This is a thin wrapper that sets up Rich progress and delegates to
+    _analyze_with_chunking with a progress callback.
+    """
     try:
-        synthesis_text, synthesis_model, syn_in, syn_out, syn_total, _ = _call_llm_with_fallback(
+        from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
+    except ImportError:
+        # Fallback without progress display
+        return _analyze_with_chunking(
+            transcript, video_info, prompts_config, client, selector, preferred_model, verbose
+        )
+
+    # Create progress context and callback
+    progress_context = Progress(
+        SpinnerColumn(),
+        TextColumn("[cyan]{task.description}"),
+        BarColumn(complete_style="green"),
+        TextColumn("{task.completed}/{task.total}"),
+    )
+
+    # We need to track the task ID and progress instance
+    task_id = None
+
+    def progress_callback(prog: ChunkProgress) -> None:
+        nonlocal task_id
+        if task_id is None:
+            return
+        if prog.phase == "chunk":
+            progress_context.update(task_id, description=f"Chunk {prog.current}/{prog.total}")
+            progress_context.update(task_id, completed=prog.current)
+        elif prog.phase == "synthesis":
+            progress_context.update(task_id, description="Synthesizing results...")
+
+    with progress_context as progress:
+        # Estimate chunks for progress bar (rough estimate based on token limit)
+        effective_limit = selector.get_effective_token_limit(preferred_model)
+        chunk_target_tokens = max(effective_limit - 3000, 2000)
+        estimated_chunks = max(1, estimate_tokens(transcript) // chunk_target_tokens)
+        task_id = progress.add_task("Analyzing chunks...", total=estimated_chunks)
+
+        return _analyze_with_chunking(
+            transcript,
+            video_info,
+            prompts_config,
             client,
             selector,
-            synthesis_system,
-            synthesis_user,
-            synthesis_template.max_output_tokens,
             preferred_model,
             verbose,
-            use_json_mode=True,  # Enable JSON mode for tag generation
+            progress_callback=progress_callback,
         )
-
-        total_tokens += syn_total
-        syn_cost = selector.estimate_cost(synthesis_model, syn_in, syn_out)
-        total_cost += syn_cost or 0
-
-        duration = time.time() - start_time
-
-        # Parse JSON response to extract analysis and tags
-        final_analysis, contextual_tags = parse_llm_json_response(synthesis_text, verbose)
-
-    except PlainTextFallbackSuccess as e:
-        # Plain text fallback succeeded for synthesis
-        logger.info("Synthesis completed with plain text fallback")
-        final_analysis = e.analysis_text
-        contextual_tags = e.tags
-        synthesis_model = e.model
-        syn_in = e.tokens_in
-        syn_out = e.tokens_out
-        syn_total = e.tokens_total
-        total_tokens += syn_total
-        syn_cost = selector.estimate_cost(synthesis_model, syn_in, syn_out)
-        total_cost += syn_cost or 0
-        duration = time.time() - start_time
-
-    return AnalysisResult(
-        analysis_text=final_analysis,
-        analysis_type="executive_summary",
-        analysis_name=f"Executive Summary (Chunked: {len(chunks)} parts)",
-        model=synthesis_model,
-        provider="groq",
-        tokens_input=total_tokens,
-        tokens_output=0,
-        tokens_total=total_tokens,
-        estimated_cost=total_cost,
-        duration=duration,
-        truncated=False,
-        contextual_tags=contextual_tags,
-    )
 
 
 def analyze_transcript_with_llm(
@@ -1129,7 +1021,8 @@ def analyze_transcript_with_llm(
             f"\nTranscript (~{transcript_tokens} tokens) exceeds effective limit "
             f"(~{effective_limit} tokens). Using chunked analysis..."
         )
-        return _analyze_with_chunking(
+        # Use Rich progress display if available
+        return _analyze_with_chunking_rich(
             transcript,
             video_info,
             prompts_config,

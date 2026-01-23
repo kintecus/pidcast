@@ -1316,76 +1316,20 @@ def cmd_sync(args: argparse.Namespace) -> None:
             traceback.print_exc()
 
 
-def main() -> None:
-    """Main entry point for pidcast CLI."""
-    args = parse_arguments()
-
-    # Set up logging
-    setup_logging(getattr(args, "verbose", False))
-
-    # Route to library commands if specified
-    if getattr(args, "mode", None) == "lib":
-        if args.lib_command == "add":
-            cmd_add(args)
-        elif args.lib_command == "list":
-            cmd_list(args)
-        elif args.lib_command == "show":
-            cmd_show(args)
-        elif args.lib_command == "remove":
-            cmd_remove(args)
-        elif args.lib_command == "sync":
-            cmd_sync(args)
-        elif args.lib_command == "digest":
-            cmd_digest(args)
-        return
-
-    # Validate that we have either input_source or analyze_existing for transcription workflow
-    if not args.input_source and not args.analyze_existing:
-        log_error("Error: Either provide a URL/file path or use a library command")
-        log_error("Run 'pidcast --help' for usage information")
-        return
-
-    # Set defaults for paths
-    output_dir = Path(args.output_dir) if args.output_dir else DEFAULT_TRANSCRIPTS_DIR
-    stats_file = Path(args.stats_file) if args.stats_file else DEFAULT_STATS_FILE
-
-    # Determine where analysis files should go
-    # Transcripts always go to output_dir, but analysis can go to Obsidian
-    analysis_output_dir = Path(OBSIDIAN_PATH) if args.save_to_obsidian else output_dir
-
-    if args.save_to_obsidian and args.verbose:
-        logger.info(f"Analysis will be saved to Obsidian vault: {analysis_output_dir}")
-        logger.info(f"Transcripts will be saved to: {output_dir}")
-
-    # Initialize tracking variables
-    run_uid = str(uuid.uuid4())
-    run_timestamp = datetime.datetime.now().isoformat()
-    start_time = time.time()
+def _run_transcription_workflow(
+    args: argparse.Namespace,
+    output_dir: Path,
+    analysis_output_dir: Path,
+    stats_file: Path,
+    run_uid: str,
+    run_timestamp: str,
+    start_time: float,
+) -> bool:
+    """Execute the main transcription workflow."""
     audio_file: str | None = None
-    success = False
     is_local_file = False
     video_info: VideoInfo | None = None
-
-    # Handle analyze-existing mode
-    if args.analyze_existing:
-        # --no-analyze doesn't make sense with --analyze_existing
-        if args.no_analyze:
-            log_error(
-                "--no-analyze cannot be used with --analyze_existing. "
-                "The purpose of --analyze_existing is to analyze a transcript."
-            )
-            return
-
-        _run_analyze_existing_mode(
-            args.analyze_existing, args, output_dir, analysis_output_dir, stats_file, run_uid, run_timestamp, start_time
-        )
-        return
-
-    if args.verbose:
-        log_section("Transcription Tool")
-        logger.info(f"Input: {args.input_source}")
-        logger.info(f"Run ID: {run_uid}")
-        logger.info(f"Timestamp: {run_timestamp}")
+    success = False
 
     try:
         # Validate input
@@ -1393,51 +1337,6 @@ def main() -> None:
 
         if args.verbose:
             logger.info(f"Type: {'Local File' if is_local_file else 'YouTube URL'}")
-
-        # Check for duplicate transcription (unless --force is used)
-        if not args.force:
-            prev_transcription = find_existing_transcription(
-                stats_file, args.input_source, output_dir
-            )
-
-            if prev_transcription:
-                # Handle non-interactive mode
-                if not is_interactive():
-                    log_error(
-                        f"Duplicate detected: '{prev_transcription.video_title}' "
-                        f"was already transcribed on {prev_transcription.formatted_date}. "
-                        "Use --force to proceed anyway."
-                    )
-                    return
-
-                # Interactive mode: prompt user for action
-                action = prompt_duplicate_detected(prev_transcription, args.verbose)
-
-                if action == DuplicateAction.CANCEL:
-                    logger.info("Operation cancelled.")
-                    return
-
-                elif action == DuplicateAction.ANALYZE_EXISTING:
-                    # Redirect to analyze-existing mode
-                    _run_analyze_existing_mode(
-                        prev_transcription.transcript_path,
-                        args,
-                        output_dir,
-                        analysis_output_dir,
-                        stats_file,
-                        run_uid,
-                        run_timestamp,
-                        start_time,
-                    )
-                    return
-
-                elif action == DuplicateAction.RE_TRANSCRIBE:
-                    # Continue with normal transcription
-                    logger.info("Re-transcribing video...")
-
-                elif action == DuplicateAction.FORCE_CONTINUE:
-                    # Continue with normal transcription
-                    logger.info("Continuing with transcription...")
 
         # Ensure output directories exist
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -1495,7 +1394,6 @@ def main() -> None:
         transcription_duration = time.time() - transcription_start
 
         # Create Markdown file (transcript)
-        # Always create transcript file in output_dir
         transcript_file = f"{temp_whisper_output}.txt"
 
         logger.info("\nCreating Markdown file...")
@@ -1518,9 +1416,7 @@ def main() -> None:
         analysis_performed = False
         analysis_metadata: dict[str, Any] = {}
 
-        # Analyze by default unless --no-analyze is set
         should_analyze = not args.no_analyze
-        # Save to file if --save or --save_to_obsidian is set
         should_save_analysis = args.save or args.save_to_obsidian
 
         if should_analyze:
@@ -1553,8 +1449,6 @@ def main() -> None:
         # Store statistics
         end_time = time.time()
         duration = end_time - start_time
-
-        # Use transcript filename for stats (always created now)
         filename_for_stats = markdown_file.name if markdown_file else ""
 
         stats = TranscriptionStats(
@@ -1609,18 +1503,23 @@ def main() -> None:
                 f"({format_duration(diff_abs)}) {direction} than estimated"
             )
 
+        return True
+
     except KeyboardInterrupt:
         logger.info("\n\n✗ Process interrupted by user.")
+        return False
 
     except (DownloadError, TranscriptionError, FileProcessingError, AnalysisError) as e:
         log_error(str(e))
         if args.verbose:
             traceback.print_exc()
+        return False
 
     except Exception as e:
         log_error(f"An unexpected error occurred: {type(e).__name__}: {e}")
         if args.verbose:
             traceback.print_exc()
+        return False
 
     finally:
         # Clean up temporary audio files
@@ -1645,7 +1544,7 @@ def main() -> None:
             stats = TranscriptionStats(
                 run_uid=run_uid,
                 run_timestamp=run_timestamp,
-                video_title=video_info.title if video_info else "Unknown",
+                video_title=video_info.title,
                 smart_filename="",
                 video_url=args.input_source,
                 run_duration=duration,
@@ -1655,6 +1554,114 @@ def main() -> None:
                 is_local_file=is_local_file,
             )
             save_statistics(stats_file, stats, False)
+
+
+def main() -> None:
+    """Main entry point for pidcast CLI."""
+    args = parse_arguments()
+
+    # Set up logging
+    setup_logging(getattr(args, "verbose", False))
+
+    # Route to library commands if specified
+    if getattr(args, "mode", None) == "lib":
+        lib_commands = {
+            "add": cmd_add,
+            "list": cmd_list,
+            "show": cmd_show,
+            "remove": cmd_remove,
+            "sync": cmd_sync,
+            "digest": cmd_digest,
+        }
+        handler = lib_commands.get(args.lib_command)
+        if handler:
+            handler(args)
+        return
+
+    # Validate that we have either input_source or analyze_existing for transcription workflow
+    if not args.input_source and not args.analyze_existing:
+        log_error("Error: Either provide a URL/file path or use a library command")
+        log_error("Run 'pidcast --help' for usage information")
+        return
+
+    # Set defaults for paths
+    output_dir = Path(args.output_dir) if args.output_dir else DEFAULT_TRANSCRIPTS_DIR
+    stats_file = Path(args.stats_file) if args.stats_file else DEFAULT_STATS_FILE
+
+    # Determine where analysis files should go
+    analysis_output_dir = Path(OBSIDIAN_PATH) if args.save_to_obsidian else output_dir
+
+    if args.save_to_obsidian and args.verbose:
+        logger.info(f"Analysis will be saved to Obsidian vault: {analysis_output_dir}")
+        logger.info(f"Transcripts will be saved to: {output_dir}")
+
+    # Initialize tracking variables
+    run_uid = str(uuid.uuid4())
+    run_timestamp = datetime.datetime.now().isoformat()
+    start_time = time.time()
+
+    # Handle analyze-existing mode
+    if args.analyze_existing:
+        if args.no_analyze:
+            log_error(
+                "--no-analyze cannot be used with --analyze_existing. "
+                "The purpose of --analyze_existing is to analyze a transcript."
+            )
+            return
+
+        _run_analyze_existing_mode(
+            args.analyze_existing, args, output_dir, analysis_output_dir,
+            stats_file, run_uid, run_timestamp, start_time
+        )
+        return
+
+    if args.verbose:
+        log_section("Transcription Tool")
+        logger.info(f"Input: {args.input_source}")
+        logger.info(f"Run ID: {run_uid}")
+        logger.info(f"Timestamp: {run_timestamp}")
+
+    # Check for duplicate transcription (unless --force is used)
+    if not args.force:
+        prev_transcription = find_existing_transcription(
+            stats_file, args.input_source, output_dir
+        )
+
+        if prev_transcription:
+            # Handle non-interactive mode
+            if not is_interactive():
+                log_error(
+                    f"Duplicate detected: '{prev_transcription.video_title}' "
+                    f"was already transcribed on {prev_transcription.formatted_date}. "
+                    "Use --force to proceed anyway."
+                )
+                return
+
+            # Interactive mode: prompt user for action
+            action = prompt_duplicate_detected(prev_transcription, args.verbose)
+
+            if action == DuplicateAction.CANCEL:
+                logger.info("Operation cancelled.")
+                return
+
+            elif action == DuplicateAction.ANALYZE_EXISTING:
+                _run_analyze_existing_mode(
+                    prev_transcription.transcript_path, args, output_dir,
+                    analysis_output_dir, stats_file, run_uid, run_timestamp, start_time
+                )
+                return
+
+            elif action == DuplicateAction.RE_TRANSCRIBE:
+                logger.info("Re-transcribing video...")
+
+            elif action == DuplicateAction.FORCE_CONTINUE:
+                logger.info("Continuing with transcription...")
+
+    # Run the main transcription workflow
+    _run_transcription_workflow(
+        args, output_dir, analysis_output_dir, stats_file,
+        run_uid, run_timestamp, start_time
+    )
 
 
 if __name__ == "__main__":
