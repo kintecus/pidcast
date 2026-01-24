@@ -206,4 +206,4 @@ pyrightconfig.json
 *.wav
 
 # Claude code
-.claude/
+.claude/settings.local.json
