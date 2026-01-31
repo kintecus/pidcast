@@ -1,8 +1,7 @@
-"""Command-line interface for pidcast."""
+"Command-line interface for pidcast."
 
 import argparse
 import datetime
-import json
 import logging
 import os
 import time
@@ -10,43 +9,25 @@ import traceback
 import uuid
 from enum import Enum
 from pathlib import Path
-from typing import Any
 
-from .analysis import (
-    analyze_transcript_with_llm,
-    load_analysis_prompts,
-    render_analysis_to_terminal,
-)
 from .config import (
     DEFAULT_PROMPTS_FILE,
     DEFAULT_STATS_FILE,
     DEFAULT_TRANSCRIPTS_DIR,
     OBSIDIAN_PATH,
     WHISPER_MODEL,
-    TranscriptionStats,
-    VideoInfo,
 )
-from .download import download_audio
-from .exceptions import AnalysisError, DownloadError, FileProcessingError, TranscriptionError
-from .markdown import create_analysis_markdown_file, create_markdown_file
-from .transcription import (
-    estimate_transcription_time,
-    process_local_file,
-    run_whisper_transcription,
-)
+from .exceptions import DuplicateShowError, FeedFetchError, FeedParseError, ShowNotFoundError
 from .utils import (
-    cleanup_temp_files,
-    create_smart_filename,
     find_existing_transcription,
-    format_duration,
-    get_unique_filename,
     is_interactive,
     log_error,
     log_section,
-    log_success,
-    save_json_file,
     setup_logging,
-    validate_input_source,
+)
+from .workflow import (
+    process_input_source,
+    run_analyze_existing_mode,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,7 +75,7 @@ def prompt_duplicate_detected(
     console.print()
     console.print(
         Panel(
-            "[yellow bold]Duplicate Detected![/yellow bold]\n\n"
+            "[yellow bold]Duplicate Detected![/yellow bold]\n\n" \
             "This video was previously transcribed.",
             border_style="yellow",
         )
@@ -198,29 +179,6 @@ def _prompt_duplicate_basic(prev) -> DuplicateAction:
 
 
 # ============================================================================
-# STATISTICS
-# ============================================================================
-
-
-def save_statistics(stats_file: Path, stats: TranscriptionStats, verbose: bool = False) -> bool:
-    """Save transcription statistics to a JSON file.
-
-    Args:
-        stats_file: Path to stats file
-        stats: Statistics to save
-        verbose: Enable verbose output
-
-    Returns:
-        True if successful
-    """
-    from .utils import load_json_file
-
-    existing_stats = load_json_file(stats_file, default=[])
-    existing_stats.append(stats.to_dict())
-    return save_json_file(stats_file, existing_stats, verbose=verbose)
-
-
-# ============================================================================
 # ARGUMENT PARSING
 # ============================================================================
 
@@ -234,33 +192,61 @@ def parse_arguments() -> argparse.Namespace:
     import sys
 
     # Check if first argument is 'lib' to determine which parser to use
-    # This is necessary because argparse can't mix subparsers with positional args cleanly
     is_lib_command = len(sys.argv) > 1 and sys.argv[1] == "lib"
 
     parser = argparse.ArgumentParser(
         description="Automate audio transcription with Whisper (YouTube URL or local file).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-  # Transcription (original workflow)
+Common Workflows:
+  # Quick transcription with defaults
   %(prog)s "https://www.youtube.com/watch?v=VIDEO_ID"
-  %(prog)s "/path/to/audio/file.mp3"
-  %(prog)s "VIDEO_URL" --save_to_obsidian
-  %(prog)s --analyze_existing transcript.md --analysis_type summary
 
-  # Library management
+  # Save to Obsidian vault
+  %(prog)s "VIDEO_URL" -o
+
+  # Custom analysis type (supports fuzzy matching)
+  %(prog)s "VIDEO_URL" -o -a exec          # Matches 'executive_summary'
+  %(prog)s "VIDEO_URL" -o -a detailed -v   # Verbose output
+
+  # Choose specific model
+  %(prog)s "VIDEO_URL" -m llama33           # Matches 'llama-3.3-70b-versatile'
+
+  # Analyze existing transcript
+  %(prog)s --analyze_existing transcript.md -a summary
+
+Discovery:
+  # List available analysis types
+  %(prog)s -L
+
+  # List available models
+  %(prog)s -M
+
+Library Management:
+  # Add podcast to library
   %(prog)s lib add "https://feeds.example.com/podcast.xml"
-  %(prog)s lib add "https://feeds.example.com/podcast.xml" --preview
+
+  # Process latest episode from library
+  %(prog)s lib process "Lex Fridman" --latest
+
+  # List all shows
   %(prog)s lib list
-  %(prog)s lib show 1
-  %(prog)s lib remove 1
+
+  # Sync library and process new episodes
   %(prog)s lib sync
-  %(prog)s lib digest
+
+Short Flags:
+  -o  --save_to_obsidian    Save to Obsidian vault
+  -a  --analysis_type       Analysis type (fuzzy matching enabled)
+  -m  --groq_model          Model name (fuzzy matching enabled)
+  -f  --force               Force re-transcription
+  -v  --verbose             Verbose output
+  -L  --list-analyses       List available analysis types
+  -M  --list-models         List available models
         """,
     )
 
     # Only create subparsers if 'lib' command is used
-    # This allows URLs/files to be parsed as positional arguments in transcription mode
     if is_lib_command:
         subparsers = parser.add_subparsers(dest="mode", help="Command mode", required=False)
 
@@ -268,7 +254,7 @@ Examples:
         lib_parser = subparsers.add_parser('lib', help='Podcast library management')
         lib_subparsers = lib_parser.add_subparsers(dest='lib_command', help="Library management commands", required=True)
 
-        # Add command: add podcast to library
+        # Add command
         add_parser = lib_subparsers.add_parser("add", help="Add podcast to library")
         add_parser.add_argument("feed_url", help="RSS feed URL")
         add_parser.add_argument(
@@ -276,11 +262,35 @@ Examples:
         )
         add_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
 
-        # List command: list all shows
+        # Process command (NEW)
+        process_parser = lib_subparsers.add_parser("process", help="Process an episode from a library show")
+        process_parser.add_argument("show_query", help="Show ID or partial name")
+        process_parser.add_argument("--latest", action="store_true", help="Process the latest episode")
+        process_parser.add_argument("--match", help="Process episode matching this title string")
+        # Reuse common flags for processing
+        process_parser.add_argument("--output_dir", help="Output directory")
+        process_parser.add_argument("--save_to_obsidian", action="store_true", help="Save to Obsidian")
+        process_parser.add_argument("--whisper_model", help="Whisper model path")
+        process_parser.add_argument("--groq_api_key", help="Groq API key")
+        process_parser.add_argument("--analysis_type", default="executive_summary", help="Analysis type")
+        process_parser.add_argument("--prompts_file", help="Prompts file path")
+        process_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+        process_parser.add_argument("--force", action="store_true", help="Force reprocessing")
+        process_parser.add_argument("--output_format", default="otxt", help="Output format")
+        process_parser.add_argument("--keep_transcript", action="store_true", help="Keep transcript")
+        process_parser.add_argument("--po_token", help="PO Token")
+        process_parser.add_argument("--front_matter", default="{}", help="Front matter JSON")
+        process_parser.add_argument("--save", action="store_true", help="Save output")
+        process_parser.add_argument("--no-analyze", action="store_true", help="Skip analysis")
+        process_parser.add_argument("--skip_analysis_on_error", action="store_true", help="Skip analysis on error")
+        process_parser.add_argument("--stats_file", help="Stats file path")
+        process_parser.add_argument("--groq_model", help="Groq model")
+
+        # List command
         list_parser = lib_subparsers.add_parser("list", help="List all shows in library")
         list_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
 
-        # Show command: show details for a podcast
+        # Show command
         show_parser = lib_subparsers.add_parser("show", help="Show details for a podcast")
         show_parser.add_argument("show_id", type=int, help="Show ID")
         show_parser.add_argument(
@@ -288,85 +298,32 @@ Examples:
         )
         show_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
 
-        # Remove command: remove podcast from library
+        # Remove command
         remove_parser = lib_subparsers.add_parser("remove", help="Remove podcast from library")
         remove_parser.add_argument("show_id", type=int, help="Show ID")
         remove_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
 
-        # Sync command: sync library and process new episodes
+        # Sync command
         sync_parser = lib_subparsers.add_parser("sync", help="Sync library shows and process new episodes")
-        sync_parser.add_argument(
-            "--show",
-            type=int,
-            metavar="ID",
-            help="Sync only specific show by ID",
-        )
-        sync_parser.add_argument(
-            "--dry-run",
-            action="store_true",
-            help="Preview what would be processed without executing",
-        )
-        sync_parser.add_argument(
-            "--force",
-            action="store_true",
-            help="Reprocess episodes even if already successful",
-        )
-        sync_parser.add_argument(
-            "--backfill",
-            type=int,
-            metavar="N",
-            help="Override global backfill limit for this sync",
-        )
-        sync_parser.add_argument(
-            "--output_dir",
-            help="Output directory for transcript files (default: data/transcripts)",
-        )
-        sync_parser.add_argument(
-            "--whisper_model",
-            help=f"Path to Whisper model file (default: {WHISPER_MODEL})",
-        )
-        sync_parser.add_argument(
-            "--groq_api_key",
-            help="Groq API key for LLM analysis (default: GROQ_API_KEY env var)",
-        )
-        sync_parser.add_argument(
-            "--analysis_type",
-            default="executive_summary",
-            help="Analysis type/prompt template to use (default: executive_summary)",
-        )
-        sync_parser.add_argument(
-            "--prompts_file",
-            help=f"Path to prompts YAML file (default: {DEFAULT_PROMPTS_FILE})",
-        )
+        sync_parser.add_argument("--show", type=int, metavar="ID", help="Sync only specific show by ID")
+        sync_parser.add_argument("--dry-run", action="store_true", help="Preview only")
+        sync_parser.add_argument("--force", action="store_true", help="Reprocess episodes")
+        sync_parser.add_argument("--backfill", type=int, metavar="N", help="Override backfill limit")
+        sync_parser.add_argument("--output_dir", help="Output directory")
+        sync_parser.add_argument("--whisper_model", help="Whisper model path")
+        sync_parser.add_argument("--groq_api_key", help="Groq API key")
+        sync_parser.add_argument("--analysis_type", default="executive_summary", help="Analysis type")
+        sync_parser.add_argument("--prompts_file", help="Prompts file path")
         sync_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-        sync_parser.add_argument(
-            "--no-digest",
-            action="store_true",
-            help="Skip digest generation (only generate individual episode files)",
-        )
+        sync_parser.add_argument("--no-digest", action="store_true", help="Skip digest generation")
 
-        # Digest command: generate podcast digest from history
-        digest_parser = lib_subparsers.add_parser("digest", help="Generate podcast digest from processing history")
-        digest_parser.add_argument(
-            "--date",
-            help="Generate digest for specific date (YYYY-MM-DD)",
-        )
-        digest_parser.add_argument(
-            "--range",
-            help="Generate digest for date range (e.g., 7d, 30d)",
-        )
-        digest_parser.add_argument(
-            "--output_dir",
-            help="Output directory for digest file (default: data/transcripts)",
-        )
-        digest_parser.add_argument(
-            "--groq_api_key",
-            help="Groq API key for LLM analysis (default: GROQ_API_KEY env var)",
-        )
-        digest_parser.add_argument(
-            "--prompts_file",
-            help=f"Path to prompts YAML file (default: {DEFAULT_PROMPTS_FILE})",
-        )
+        # Digest command
+        digest_parser = lib_subparsers.add_parser("digest", help="Generate podcast digest")
+        digest_parser.add_argument("--date", help="Specific date (YYYY-MM-DD)")
+        digest_parser.add_argument("--range", help="Date range (e.g., 7d)")
+        digest_parser.add_argument("--output_dir", help="Output directory")
+        digest_parser.add_argument("--groq_api_key", help="Groq API key")
+        digest_parser.add_argument("--prompts_file", help="Prompts file path")
         digest_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
 
     # Input source group (mutually exclusive) - for original workflow
@@ -384,6 +341,7 @@ Examples:
         help=f"Output directory for Markdown files (default: {DEFAULT_TRANSCRIPTS_DIR})",
     )
     parser.add_argument(
+        "-o",
         "--save_to_obsidian",
         action="store_true",
         help=f"Save analysis files to Obsidian vault (transcripts still saved to output_dir) at: {OBSIDIAN_PATH}",
@@ -434,9 +392,10 @@ Examples:
         help="(Deprecated) Enable LLM analysis - this is now the default behavior",
     )
     analysis_group.add_argument(
+        "-a",
         "--analysis_type",
         default="executive_summary",
-        help="Analysis type/prompt template to use (default: executive_summary)",
+        help="Analysis type/prompt template to use (default: executive_summary). Use -L to list available types.",
     )
     analysis_group.add_argument(
         "--prompts_file",
@@ -456,9 +415,10 @@ Examples:
         help="Groq API key (default: GROQ_API_KEY environment variable)",
     )
     analysis_group.add_argument(
+        "-m",
         "--groq_model",
         default=None,
-        help="Groq model to use for analysis (default: from config/models.yaml)",
+        help="Groq model to use for analysis (default: from config/models.yaml). Use -M to list available models.",
     )
     analysis_group.add_argument(
         "--skip_analysis_on_error",
@@ -474,410 +434,24 @@ Examples:
         help="Save analysis output to file (default: terminal only)",
     )
 
+    # Discoverability options
+    discovery_group = parser.add_argument_group("Discovery Options")
+    discovery_group.add_argument(
+        "-L",
+        "--list-analyses",
+        action="store_true",
+        dest="list_analyses",
+        help="List available analysis types and exit",
+    )
+    discovery_group.add_argument(
+        "-M",
+        "--list-models",
+        action="store_true",
+        dest="list_models",
+        help="List available Groq models and exit",
+    )
+
     return parser.parse_args()
-
-
-# ============================================================================
-# MAIN PIPELINE
-# ============================================================================
-
-
-def parse_transcript_file(filepath: str, verbose: bool = False) -> tuple[str, VideoInfo]:
-    """Parse a transcript file and extract transcript text and metadata.
-
-    Args:
-        filepath: Path to transcript file (.md or .txt)
-        verbose: Enable verbose output
-
-    Returns:
-        Tuple of (transcript_text, video_info)
-
-    Raises:
-        FileProcessingError: If file doesn't exist, is empty, or can't be parsed
-    """
-    file_path = Path(filepath)
-
-    # Validate file exists
-    if not file_path.exists():
-        raise FileProcessingError(f"File not found: {filepath}")
-
-    # Validate extension
-    if file_path.suffix not in [".md", ".txt"]:
-        raise FileProcessingError(
-            f"Unsupported file type: {file_path.suffix}. Only .md and .txt files are supported."
-        )
-
-    # Read file content
-    try:
-        with open(file_path, encoding="utf-8") as f:
-            content = f.read()
-    except Exception as e:
-        raise FileProcessingError(f"Failed to read file: {e}") from e
-
-    # Validate not empty
-    if not content.strip():
-        raise FileProcessingError("File is empty")
-
-    if verbose:
-        logger.info(f"Parsing {file_path.suffix} file: {filepath}")
-
-    # Parse based on file type
-    if file_path.suffix == ".md":
-        # Try to parse YAML front matter
-        parts = content.split("---", 2)
-
-        if len(parts) >= 3:
-            # Has YAML front matter
-            try:
-                yaml_content = parts[1].strip()
-                transcript_text = parts[2].strip()
-
-                # Parse YAML manually (simple key: value parsing)
-                metadata: dict[str, Any] = {}
-                for line in yaml_content.split("\n"):
-                    line = line.strip()
-                    if ":" in line and not line.startswith("#"):
-                        key, value = line.split(":", 1)
-                        key = key.strip()
-                        value = value.strip().strip("'\"")
-                        metadata[key] = value
-
-                # Create VideoInfo from metadata
-                video_info = VideoInfo(
-                    title=metadata.get("title", file_path.stem),
-                    webpage_url=metadata.get("url", ""),
-                    channel=metadata.get("channel", "Unknown"),
-                    duration_string=metadata.get("duration", "Unknown"),
-                )
-
-                if verbose:
-                    logger.info(f"Extracted metadata: title='{video_info.title}'")
-
-            except Exception as e:
-                # Fallback: treat as plain text
-                if verbose:
-                    logger.warning(
-                        f"Failed to parse YAML front matter, treating as plain text: {e}"
-                    )
-                transcript_text = content
-                video_info = VideoInfo(title=file_path.stem)
-        else:
-            # No YAML front matter, treat as plain text
-            transcript_text = content
-            video_info = VideoInfo(title=file_path.stem)
-
-    else:  # .txt file
-        transcript_text = content
-        video_info = VideoInfo(title=file_path.stem)
-
-        if verbose:
-            logger.info(f"Plain text file - using filename as title: '{video_info.title}'")
-
-    # Validate transcript is not empty
-    if not transcript_text.strip():
-        raise FileProcessingError("No transcript content found in file")
-
-    return transcript_text, video_info
-
-
-def _render_analysis_to_terminal_direct(
-    result: Any,
-    video_info: VideoInfo,
-    verbose: bool = False,
-) -> None:
-    """Render analysis result directly to terminal without saving to file.
-
-    Args:
-        result: AnalysisResult from LLM analysis
-        video_info: Video metadata
-        verbose: Enable verbose output
-    """
-    try:
-        from rich.console import Console
-        from rich.markdown import Markdown
-        from rich.panel import Panel
-        from rich.table import Table
-    except ImportError:
-        # Fallback to plain text
-        print(f"Title: {video_info.title}")
-        print(f"Analysis Type: {result.analysis_name}")
-        print(f"Model: {result.model}")
-        print("-" * 60)
-        print(result.analysis_text)
-        return
-
-    console = Console()
-
-    # Build metadata table
-    table = Table(show_header=False, box=None, padding=(0, 1))
-    table.add_column(style="cyan bold", width=20)
-    table.add_column(style="white")
-
-    table.add_row("Title", video_info.title)
-    table.add_row("Analysis Type", result.analysis_name)
-    table.add_row("Model", result.model)
-    table.add_row("Tokens", str(result.tokens_total))
-
-    if result.estimated_cost:
-        table.add_row("Cost", f"${result.estimated_cost:.4f}")
-
-    if verbose:
-        table.add_row("", "")  # Blank row
-        table.add_row("Channel", video_info.channel or "Unknown")
-        table.add_row("Duration", video_info.duration_string or "Unknown")
-        table.add_row(
-            "Tokens (In/Out)",
-            f"{result.tokens_input}/{result.tokens_output}",
-        )
-        table.add_row("Truncated", "Yes" if result.truncated else "No")
-
-    # Render metadata panel
-    console.print(
-        Panel(table, title="[bold cyan]Analysis Metadata[/bold cyan]", border_style="cyan")
-    )
-    console.print()
-
-    # Render markdown content
-    md = Markdown(result.analysis_text)
-    console.print(md)
-
-
-def run_analysis(
-    markdown_file: Path | None,
-    video_info: VideoInfo,
-    output_dir: Path,
-    args: argparse.Namespace,
-    transcript_text: str | None = None,
-    save_to_file: bool = True,
-) -> tuple[Path | None, float, dict[str, Any]]:
-    """Run LLM analysis on transcript.
-
-    Args:
-        markdown_file: Path to transcript markdown file (None if using transcript_text)
-        video_info: Video metadata
-        output_dir: Output directory
-        args: Parsed arguments
-        transcript_text: Optional pre-loaded transcript text
-        save_to_file: Whether to save the analysis to a file
-
-    Returns:
-        Tuple of (analysis_file, duration, metadata)
-    """
-    log_section("Starting LLM Analysis")
-
-    # Get API key
-    groq_api_key = args.groq_api_key or os.environ.get("GROQ_API_KEY")
-    if not groq_api_key:
-        raise AnalysisError(
-            "Groq API key not found. Set GROQ_API_KEY environment variable or use --groq_api_key"
-        )
-
-    # Load prompts (use new flag or legacy flag for backward compatibility)
-    prompts_file = args.prompts_file or args.prompts_file_legacy
-    prompts_config = load_analysis_prompts(prompts_file, args.verbose)
-
-    # Get transcript text
-    if transcript_text is None:
-        if markdown_file is None:
-            raise AnalysisError("Either markdown_file or transcript_text must be provided")
-
-        # Read transcript from markdown file
-        with open(markdown_file, encoding="utf-8") as f:
-            content = f.read()
-
-        # Extract transcript (everything after front matter)
-        parts = content.split("---", 2)
-        transcript_text = parts[2].strip() if len(parts) >= 3 else content
-
-    # Analyze
-    analysis_start = time.time()
-    result = analyze_transcript_with_llm(
-        transcript_text,
-        video_info,
-        args.analysis_type,
-        prompts_config,
-        groq_api_key,
-        args.groq_model,
-        args.verbose,
-    )
-
-    analysis_duration = time.time() - analysis_start
-    metadata = {
-        "analysis_type": result.analysis_type,
-        "analysis_name": result.analysis_name,
-        "model": result.model,
-        "tokens_total": result.tokens_total,
-        "estimated_cost": result.estimated_cost,
-        "truncated": result.truncated,
-    }
-
-    analysis_file: Path | None = None
-
-    # Create analysis markdown file only if saving
-    if save_to_file:
-        # If markdown_file is None, create a placeholder filename from video title
-        source_file_for_naming = markdown_file
-        if source_file_for_naming is None:
-            # Create a smart filename for the analysis based on video title
-            smart_filename = create_smart_filename(
-                video_info.title, max_length=60, include_date=True
-            )
-            source_file_for_naming = output_dir / f"{smart_filename}.md"
-
-        analysis_file = create_analysis_markdown_file(
-            {
-                "analysis_text": result.analysis_text,
-                "analysis_type": result.analysis_type,
-                "analysis_name": result.analysis_name,
-                "model": result.model,
-                "provider": result.provider,
-                "tokens_input": result.tokens_input,
-                "tokens_output": result.tokens_output,
-                "tokens_total": result.tokens_total,
-                "estimated_cost": result.estimated_cost,
-                "duration": result.duration,
-                "truncated": result.truncated,
-                "contextual_tags": result.contextual_tags,
-            },
-            source_file_for_naming,
-            video_info,
-            output_dir,
-            args.verbose,
-        )
-
-        if not analysis_file:
-            raise AnalysisError("Failed to create analysis file")
-
-        logger.info(f"\n✓ Analysis completed in {format_duration(analysis_duration)}")
-        logger.info(f"✓ Analysis file: file://{analysis_file.absolute()}")
-
-        # Render analysis to terminal from file
-        print()  # Blank line
-        render_analysis_to_terminal(analysis_file, verbose=args.verbose)
-    else:
-        # Terminal-only output - render directly without saving
-        logger.info(f"\n✓ Analysis completed in {format_duration(analysis_duration)}")
-        print()  # Blank line
-        _render_analysis_to_terminal_direct(result, video_info, args.verbose)
-
-    if result.estimated_cost:
-        logger.info(f"\n✓ Cost: ${result.estimated_cost:.4f}")
-
-    logger.info(f"✓ Generated with: {result.model}")
-
-    return analysis_file, analysis_duration, metadata
-
-
-def _run_analyze_existing_mode(
-    transcript_path: str | Path,
-    args: argparse.Namespace,
-    output_dir: Path,
-    analysis_output_dir: Path,
-    stats_file: Path,
-    run_uid: str,
-    run_timestamp: str,
-    start_time: float,
-) -> bool:
-    """Run analysis on an existing transcript file.
-
-    This is extracted from the analyze_existing mode in main() to allow reuse
-    when the user selects "Analyze existing" from the duplicate detection prompt.
-
-    Args:
-        transcript_path: Path to the existing transcript file
-        args: Parsed command-line arguments
-        output_dir: Output directory for transcript files
-        analysis_output_dir: Output directory for analysis files (may be Obsidian vault)
-        stats_file: Path to statistics file
-        run_uid: Unique run identifier
-        run_timestamp: ISO timestamp for this run
-        start_time: Start time for duration calculation
-
-    Returns:
-        True if analysis completed successfully, False otherwise
-    """
-    transcript_path = Path(transcript_path)
-
-    if args.verbose:
-        log_section("Analyze Existing Transcript")
-        logger.info(f"Input file: {transcript_path}")
-        logger.info(f"Run ID: {run_uid}")
-        logger.info(f"Timestamp: {run_timestamp}")
-
-    try:
-        # Ensure output directories exist
-        output_dir.mkdir(parents=True, exist_ok=True)
-        analysis_output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Parse transcript file
-        transcript_text, video_info = parse_transcript_file(str(transcript_path), args.verbose)
-
-        logger.info(f"Title: {video_info.title}")
-        if video_info.channel != "Unknown":
-            logger.info(f"Channel: {video_info.channel}")
-
-        # Determine if we should save to file
-        should_save = args.save or args.save_to_obsidian
-
-        # Run analysis
-        analysis_file, analysis_duration, analysis_metadata = run_analysis(
-            None,  # No source markdown file in analyze-existing mode
-            video_info,
-            analysis_output_dir,
-            args,
-            transcript_text=transcript_text,
-            save_to_file=should_save,
-        )
-
-        # Save statistics
-        end_time = time.time()
-        duration = end_time - start_time
-
-        # Store the original transcript filename (using transcript_path since we're analyzing an existing file)
-        transcript_filename = Path(transcript_path).name
-
-        stats = TranscriptionStats(
-            run_uid=run_uid,
-            run_timestamp=run_timestamp,
-            video_title=video_info.title,
-            smart_filename=transcript_filename,
-            video_url=video_info.webpage_url or str(transcript_path),
-            run_duration=duration,
-            transcription_duration=0,
-            audio_duration=0,
-            success=True,
-            saved_to_obsidian=args.save_to_obsidian,
-            is_local_file=True,
-            analysis_only=True,
-            analysis_performed=True,
-            analysis_type=analysis_metadata.get("analysis_type"),
-            analysis_name=analysis_metadata.get("analysis_name"),
-            analysis_duration=analysis_duration,
-            analysis_model=analysis_metadata.get("model"),
-            analysis_tokens=analysis_metadata.get("tokens_total", 0),
-            analysis_cost=analysis_metadata.get("estimated_cost", 0) or 0,
-            analysis_truncated=analysis_metadata.get("truncated", False),
-            analysis_file=analysis_file.name if analysis_file else None,
-        )
-
-        save_statistics(stats_file, stats, args.verbose)
-
-        log_section("✓ Analysis completed successfully!")
-        logger.info(f"Total duration: {format_duration(duration)}")
-
-        return True
-
-    except (FileProcessingError, AnalysisError) as e:
-        log_error(str(e))
-        if args.verbose:
-            traceback.print_exc()
-        return False
-
-    except Exception as e:
-        log_error(f"An unexpected error occurred: {type(e).__name__}: {e}")
-        if args.verbose:
-            traceback.print_exc()
-        return False
 
 
 # ============================================================================
@@ -885,10 +459,124 @@ def _run_analyze_existing_mode(
 # ============================================================================
 
 
+def cmd_process(args: argparse.Namespace) -> None:
+    """Handle 'pidcast lib process' command."""
+    import uuid
+
+    from .config import DEFAULT_STATS_FILE, DEFAULT_TRANSCRIPTS_DIR, OBSIDIAN_PATH, VideoInfo
+    from .library import LibraryManager, Show
+
+    library = LibraryManager()
+
+    # Find show
+    show_query = args.show_query
+    show: Show | None = None
+
+    # Try as ID
+    try:
+        show_id = int(show_query)
+        show = library.get_show(show_id)
+    except ValueError:
+        pass
+
+    # Try as name (case insensitive partial match)
+    if not show:
+        matches = [s for s in library.list_shows() if show_query.lower() in s.title.lower()]
+        if len(matches) == 1:
+            show = matches[0]
+        elif len(matches) > 1:
+            print(f"Ambiguous show name '{show_query}'. Matches:")
+            for s in matches:
+                print(f"  {s.id}: {s.title}")
+            return
+
+    if not show:
+        log_error(f"Show '{show_query}' not found.")
+        return
+
+    # Fetch episodes
+    episodes = library.get_episodes(show.id, limit=50 if args.match else 20, verbose=args.verbose)
+
+    selected_episode = None
+
+    if args.latest:
+        selected_episode = episodes[0] if episodes else None
+    elif args.match:
+        # fuzzy match title
+        query = args.match.lower()
+        for ep in episodes:
+            if query in ep.title.lower():
+                selected_episode = ep
+                break
+        if not selected_episode:
+            log_error(f"No episode found matching '{args.match}'")
+            return
+    else:
+        # Interactive selection
+        try:
+            from rich.console import Console
+            from rich.prompt import Prompt
+            from rich.table import Table
+            console = Console()
+
+            table = Table(show_header=True)
+            table.add_column("#", style="cyan", width=4)
+            table.add_column("Date", style="yellow", width=12)
+            table.add_column("Title", style="white")
+
+            # Show top 10
+            display_episodes = episodes[:10]
+            for i, ep in enumerate(display_episodes, 1):
+                table.add_row(str(i), ep.pub_date.strftime("%Y-%m-%d"), ep.title)
+
+            console.print(table)
+
+            # Ask for selection
+            choices = [str(i) for i in range(1, len(display_episodes) + 1)]
+            choice = Prompt.ask("Select episode", choices=choices)
+            selected_episode = display_episodes[int(choice)-1]
+        except ImportError:
+            # Fallback
+            print("Rich not installed, and no selection flags used. Defaulting to latest.")
+            selected_episode = episodes[0] if episodes else None
+
+    if not selected_episode:
+        log_error("No episodes found.")
+        return
+
+    logger.info(f"\nProcessing: {selected_episode.title} ({show.title})")
+
+    # Construct override
+    video_info = VideoInfo(
+        title=selected_episode.title,
+        webpage_url=selected_episode.audio_url,
+        channel=show.title,
+        upload_date=selected_episode.pub_date.strftime("%Y%m%d"),
+        description=selected_episode.description,
+        duration=selected_episode.duration or 0
+    )
+
+    # Run workflow
+    output_dir = Path(args.output_dir) if args.output_dir else DEFAULT_TRANSCRIPTS_DIR
+    stats_file = Path(args.stats_file) if args.stats_file else DEFAULT_STATS_FILE
+    analysis_output_dir = Path(OBSIDIAN_PATH) if args.save_to_obsidian else output_dir
+
+    process_input_source(
+        selected_episode.audio_url,
+        args,
+        output_dir,
+        analysis_output_dir,
+        stats_file,
+        str(uuid.uuid4()),
+        datetime.datetime.now().isoformat(),
+        time.time(),
+        video_info_override=video_info
+    )
+
+
 def cmd_add(args: argparse.Namespace) -> None:
     """Handle 'pidcast add' command."""
     from .config_manager import ConfigManager
-    from .exceptions import DuplicateShowError, FeedFetchError, FeedParseError
     from .library import LibraryManager
     from .rss import RSSParser
 
@@ -1015,7 +703,6 @@ def cmd_list(args: argparse.Namespace) -> None:
 
 def cmd_show(args: argparse.Namespace) -> None:
     """Handle 'pidcast show' command."""
-    from .exceptions import FeedFetchError, FeedParseError, ShowNotFoundError
     from .library import LibraryManager
 
     try:
@@ -1074,7 +761,7 @@ def cmd_show(args: argparse.Namespace) -> None:
         else:
             print(f"\n{'=' * 80}")
             print(f"Show Details (ID: {show.id})")
-            print(f"{'=' * 80}")
+            print(f"{ '=' * 80}")
             print(f"Title: {show.title}")
             print(f"Author: {show.author or 'Unknown'}")
             print(f"Feed URL: {show.feed_url}")
@@ -1269,13 +956,13 @@ def cmd_sync(args: argparse.Namespace) -> None:
         # Print summary
         logger.info(f"\n{'=' * 60}")
         logger.info("Sync Complete!")
-        logger.info(f"{'=' * 60}")
+        logger.info(f"{ '=' * 60}")
         logger.info(f"Processed: {stats['processed']} episodes")
         logger.info(f"Succeeded: {stats['succeeded']}")
         logger.info(f"Failed: {stats['failed']}")
         if stats["skipped"] > 0:
             logger.info(f"Skipped: {stats['skipped']} (already processed)")
-        logger.info(f"{'=' * 60}\n")
+        logger.info(f"{ '=' * 60}\n")
 
         # Generate digest unless --no-digest flag is set
         if not args.no_digest and stats["succeeded"] > 0 and groq_api_key:
@@ -1316,252 +1003,23 @@ def cmd_sync(args: argparse.Namespace) -> None:
             traceback.print_exc()
 
 
-def _run_transcription_workflow(
-    args: argparse.Namespace,
-    output_dir: Path,
-    analysis_output_dir: Path,
-    stats_file: Path,
-    run_uid: str,
-    run_timestamp: str,
-    start_time: float,
-) -> bool:
-    """Execute the main transcription workflow."""
-    audio_file: str | None = None
-    is_local_file = False
-    video_info: VideoInfo | None = None
-    success = False
-
-    try:
-        # Validate input
-        source, is_local_file = validate_input_source(args.input_source)
-
-        if args.verbose:
-            logger.info(f"Type: {'Local File' if is_local_file else 'YouTube URL'}")
-
-        # Ensure output directories exist
-        output_dir.mkdir(parents=True, exist_ok=True)
-        analysis_output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Process input source
-        if is_local_file:
-            logger.info("Processing local file...")
-            audio_file, video_info = process_local_file(source, output_dir, args.verbose)
-            logger.info("\n✓ Local file processed successfully!")
-        else:
-            logger.info("Downloading audio from YouTube...")
-            audio_file, video_info = download_audio(
-                source, "temp_audio.%(ext)s", args.verbose, args.po_token
-            )
-            logger.info("\n✓ Audio downloaded successfully!")
-
-        logger.info(f"Title: {video_info.title}")
-
-        # Create smart filename
-        smart_filename = create_smart_filename(video_info.title, max_length=60, include_date=True)
-        if args.verbose:
-            logger.info(f"Smart filename: {smart_filename}")
-
-        # Verify audio file exists
-        if not os.path.exists(audio_file):
-            raise FileNotFoundError(f"Audio file not found: {audio_file}")
-
-        # Estimate transcription time
-        audio_duration = video_info.duration
-        estimated_time = estimate_transcription_time(stats_file, audio_duration)
-
-        # Run Whisper transcription
-        logger.info("\nTranscribing audio with Whisper...")
-        if estimated_time:
-            logger.info(
-                f"Estimated transcription time: ~{format_duration(estimated_time)} (based on historical data)"
-            )
-        elif audio_duration > 0:
-            logger.info(f"Audio duration: {format_duration(audio_duration)}")
-
-        transcription_start = time.time()
-        temp_whisper_output = output_dir / f"temp_transcript_{uuid.uuid4().hex[:8]}"
-        output_format = args.output_format.replace("o", "")
-
-        run_whisper_transcription(
-            audio_file,
-            args.whisper_model,
-            output_format,
-            str(temp_whisper_output),
-            args.verbose,
-            estimated_duration=estimated_time,
-        )
-
-        transcription_duration = time.time() - transcription_start
-
-        # Create Markdown file (transcript)
-        transcript_file = f"{temp_whisper_output}.txt"
-
-        logger.info("\nCreating Markdown file...")
-        markdown_file = get_unique_filename(output_dir, smart_filename, ".md")
-
-        try:
-            front_matter = json.loads(args.front_matter)
-        except json.JSONDecodeError as e:
-            logger.warning(f"Invalid JSON in front_matter, using empty dict: {e}")
-            front_matter = {}
-
-        if not create_markdown_file(
-            markdown_file, transcript_file, video_info, front_matter, args.verbose
-        ):
-            raise FileProcessingError("Failed to create Markdown file")
-
-        # LLM Analysis (default: enabled unless --no-analyze)
-        analysis_file: Path | None = None
-        analysis_duration = 0.0
-        analysis_performed = False
-        analysis_metadata: dict[str, Any] = {}
-
-        should_analyze = not args.no_analyze
-        should_save_analysis = args.save or args.save_to_obsidian
-
-        if should_analyze:
-            try:
-                analysis_file, analysis_duration, analysis_metadata = run_analysis(
-                    markdown_file,
-                    video_info,
-                    analysis_output_dir,
-                    args,
-                    transcript_text=None,
-                    save_to_file=should_save_analysis,
-                )
-                analysis_performed = True
-            except AnalysisError as e:
-                if args.skip_analysis_on_error:
-                    log_error(f"{e} (continuing)")
-                else:
-                    raise
-
-        # Clean up transcript file
-        transcript_path = Path(transcript_file)
-        if not args.keep_transcript and transcript_path.exists():
-            transcript_path.unlink()
-            if args.verbose:
-                logger.debug(f"Cleaned up temporary transcript file: {transcript_file}")
-        elif args.keep_transcript and transcript_path.exists():
-            if args.verbose:
-                log_success(f"Kept transcript file: {transcript_file}")
-
-        # Store statistics
-        end_time = time.time()
-        duration = end_time - start_time
-        filename_for_stats = markdown_file.name if markdown_file else ""
-
-        stats = TranscriptionStats(
-            run_uid=run_uid,
-            run_timestamp=run_timestamp,
-            video_title=video_info.title,
-            smart_filename=filename_for_stats,
-            video_url=args.input_source,
-            run_duration=duration,
-            transcription_duration=transcription_duration,
-            audio_duration=audio_duration,
-            success=True,
-            saved_to_obsidian=args.save_to_obsidian,
-            is_local_file=is_local_file,
-            analysis_performed=analysis_performed,
-            analysis_type=analysis_metadata.get("analysis_type"),
-            analysis_name=analysis_metadata.get("analysis_name"),
-            analysis_duration=analysis_duration,
-            analysis_model=analysis_metadata.get("model"),
-            analysis_tokens=analysis_metadata.get("tokens_total", 0),
-            analysis_cost=analysis_metadata.get("estimated_cost", 0) or 0,
-            analysis_truncated=analysis_metadata.get("truncated", False),
-            analysis_file=analysis_file.name if analysis_file else None,
-        )
-
-        save_statistics(stats_file, stats, args.verbose)
-
-        success = True
-        log_section("✓ Transcription completed successfully!")
-
-        # Log transcript location
-        if markdown_file:
-            logger.info(f"Transcript file: file://{markdown_file.absolute()}")
-
-        # Log analysis location if performed
-        if analysis_performed and analysis_file:
-            if args.save_to_obsidian:
-                logger.info(f"Analysis saved to Obsidian vault: file://{analysis_file.absolute()}")
-            else:
-                logger.info(f"Analysis file: file://{analysis_file.absolute()}")
-
-        logger.info(f"Total duration: {format_duration(duration)}")
-        logger.info(f"Transcription duration: {format_duration(transcription_duration)}")
-
-        if estimated_time:
-            diff = transcription_duration - estimated_time
-            diff_abs = abs(diff)
-            percentage_diff = (diff_abs / estimated_time) * 100
-            direction = "slower" if diff > 0 else "faster"
-            logger.info(
-                f"Estimation accuracy: {percentage_diff:.1f}% "
-                f"({format_duration(diff_abs)}) {direction} than estimated"
-            )
-
-        return True
-
-    except KeyboardInterrupt:
-        logger.info("\n\n✗ Process interrupted by user.")
-        return False
-
-    except (DownloadError, TranscriptionError, FileProcessingError, AnalysisError) as e:
-        log_error(str(e))
-        if args.verbose:
-            traceback.print_exc()
-        return False
-
-    except Exception as e:
-        log_error(f"An unexpected error occurred: {type(e).__name__}: {e}")
-        if args.verbose:
-            traceback.print_exc()
-        return False
-
-    finally:
-        # Clean up temporary audio files
-        if audio_file:
-            if is_local_file:
-                audio_path = Path(audio_file)
-                if audio_path.exists() and "_16k.wav" in audio_file:
-                    try:
-                        audio_path.unlink()
-                        if args.verbose:
-                            logger.debug(f"Cleaned up temporary file: {audio_file}")
-                    except Exception as e:
-                        if args.verbose:
-                            logger.warning(f"Could not remove {audio_file}: {e}")
-            else:
-                cleanup_temp_files(audio_file, args.verbose)
-
-        # Save failure statistics if needed
-        if not success and video_info:
-            end_time = time.time()
-            duration = end_time - start_time
-            stats = TranscriptionStats(
-                run_uid=run_uid,
-                run_timestamp=run_timestamp,
-                video_title=video_info.title,
-                smart_filename="",
-                video_url=args.input_source,
-                run_duration=duration,
-                transcription_duration=0,
-                audio_duration=0,
-                success=False,
-                is_local_file=is_local_file,
-            )
-            save_statistics(stats_file, stats, False)
-
-
 def main() -> None:
     """Main entry point for pidcast CLI."""
     args = parse_arguments()
 
     # Set up logging
     setup_logging(getattr(args, "verbose", False))
+
+    # Handle discovery/list commands first (they exit immediately)
+    if getattr(args, "list_analyses", False):
+        from .utils import list_available_analyses
+        list_available_analyses()
+        return
+
+    if getattr(args, "list_models", False):
+        from .utils import list_available_models
+        list_available_models()
+        return
 
     # Route to library commands if specified
     if getattr(args, "mode", None) == "lib":
@@ -1572,6 +1030,7 @@ def main() -> None:
             "remove": cmd_remove,
             "sync": cmd_sync,
             "digest": cmd_digest,
+            "process": cmd_process,
         }
         handler = lib_commands.get(args.lib_command)
         if handler:
@@ -1583,6 +1042,30 @@ def main() -> None:
         log_error("Error: Either provide a URL/file path or use a library command")
         log_error("Run 'pidcast --help' for usage information")
         return
+
+    # Resolve analysis type with fuzzy matching
+    if args.analysis_type and args.analysis_type != "executive_summary":
+        from .utils import resolve_analysis_type
+        try:
+            resolved_type = resolve_analysis_type(args.analysis_type, args.prompts_file)
+            if resolved_type != args.analysis_type and args.verbose:
+                logger.info(f"Matched '{args.analysis_type}' → '{resolved_type}'")
+            args.analysis_type = resolved_type
+        except ValueError as e:
+            log_error(str(e))
+            return
+
+    # Resolve model name with fuzzy matching
+    if args.groq_model:
+        from .utils import resolve_model_name
+        try:
+            resolved_model = resolve_model_name(args.groq_model)
+            if resolved_model != args.groq_model and args.verbose:
+                logger.info(f"Matched '{args.groq_model}' → '{resolved_model}'")
+            args.groq_model = resolved_model
+        except ValueError as e:
+            log_error(str(e))
+            return
 
     # Set defaults for paths
     output_dir = Path(args.output_dir) if args.output_dir else DEFAULT_TRANSCRIPTS_DIR
@@ -1609,7 +1092,7 @@ def main() -> None:
             )
             return
 
-        _run_analyze_existing_mode(
+        run_analyze_existing_mode(
             args.analyze_existing, args, output_dir, analysis_output_dir,
             stats_file, run_uid, run_timestamp, start_time
         )
@@ -1645,7 +1128,7 @@ def main() -> None:
                 return
 
             elif action == DuplicateAction.ANALYZE_EXISTING:
-                _run_analyze_existing_mode(
+                run_analyze_existing_mode(
                     prev_transcription.transcript_path, args, output_dir,
                     analysis_output_dir, stats_file, run_uid, run_timestamp, start_time
                 )
@@ -1658,8 +1141,8 @@ def main() -> None:
                 logger.info("Continuing with transcription...")
 
     # Run the main transcription workflow
-    _run_transcription_workflow(
-        args, output_dir, analysis_output_dir, stats_file,
+    process_input_source(
+        args.input_source, args, output_dir, analysis_output_dir, stats_file,
         run_uid, run_timestamp, start_time
     )
 
