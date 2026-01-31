@@ -6,8 +6,11 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlparse
+
+if TYPE_CHECKING:
+    from .config import PreviousTranscription, TranscriptionStats
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -35,10 +38,7 @@ def log_error_to_file(
     """
     from .config import PROJECT_ROOT
 
-    if log_dir is None:
-        log_dir = PROJECT_ROOT / "data" / "logs"
-    else:
-        log_dir = Path(log_dir)
+    log_dir = PROJECT_ROOT / "data" / "logs" if log_dir is None else Path(log_dir)
 
     # Ensure log directory exists
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -437,18 +437,22 @@ def find_existing_transcription(
         abs_path = os.path.abspath(input_source)
         for entry in reversed(stats):  # Most recent first
             entry_url = entry.get("video_url", "")
-            if entry.get("is_local_file") and os.path.abspath(entry_url) == abs_path:
-                if entry.get("success") and entry.get("smart_filename"):
-                    return PreviousTranscription(
-                        video_id="",
-                        video_title=entry.get("video_title", "Unknown"),
-                        video_url=entry_url,
-                        run_timestamp=entry.get("run_timestamp", ""),
-                        smart_filename=entry.get("smart_filename", ""),
-                        output_dir=output_dir,
-                        analysis_performed=entry.get("analysis_performed", False),
-                        analysis_type=entry.get("analysis_type"),
-                    )
+            if (
+                entry.get("is_local_file")
+                and os.path.abspath(entry_url) == abs_path
+                and entry.get("success")
+                and entry.get("smart_filename")
+            ):
+                return PreviousTranscription(
+                    video_id="",
+                    video_title=entry.get("video_title", "Unknown"),
+                    video_url=entry_url,
+                    run_timestamp=entry.get("run_timestamp", ""),
+                    smart_filename=entry.get("smart_filename", ""),
+                    output_dir=output_dir,
+                    analysis_performed=entry.get("analysis_performed", False),
+                    analysis_type=entry.get("analysis_type"),
+                )
     else:
         # YouTube URL: match by normalized video ID
         current_video_id = extract_youtube_video_id(input_source)
@@ -459,11 +463,14 @@ def find_existing_transcription(
             entry_url = entry.get("video_url", "")
             entry_video_id = extract_youtube_video_id(entry_url)
 
-            if entry_video_id == current_video_id:
-                if entry.get("success") and entry.get("smart_filename"):
-                    return PreviousTranscription(
-                        video_id=current_video_id,
-                        video_title=entry.get("video_title", "Unknown"),
+            if (
+                entry_video_id == current_video_id
+                and entry.get("success")
+                and entry.get("smart_filename")
+            ):
+                return PreviousTranscription(
+                    video_id=current_video_id,
+                    video_title=entry.get("video_title", "Unknown"),
                         video_url=entry_url,
                         run_timestamp=entry.get("run_timestamp", ""),
                         smart_filename=entry.get("smart_filename", ""),
@@ -505,3 +512,336 @@ def cleanup_temp_files(audio_file: str | Path, verbose: bool = False) -> None:
             except Exception as e:
                 if verbose:
                     log_warning(f"Could not remove {temp_file}: {e}")
+
+
+# ============================================================================
+# STATISTICS
+# ============================================================================
+
+
+def save_statistics(stats_file: Path, stats: "TranscriptionStats", verbose: bool = False) -> bool:
+    """Save transcription statistics to a JSON file.
+
+    Args:
+        stats_file: Path to stats file
+        stats: Statistics to save (TranscriptionStats object)
+        verbose: Enable verbose output
+
+    Returns:
+        True if successful
+    """
+    from .config import TranscriptionStats  # noqa: F401
+
+    existing_stats = load_json_file(stats_file, default=[])
+    existing_stats.append(stats.to_dict())
+    return save_json_file(stats_file, existing_stats, verbose=verbose)
+
+
+# ============================================================================
+# FUZZY MATCHING
+# ============================================================================
+
+
+def fuzzy_match_key(input_str: str, available_keys: list[str], normalize: bool = False) -> str | None:
+    """Fuzzy match input string against available keys.
+
+    Matching rules (in priority order):
+    1. Exact match (case-insensitive)
+    2. Key starts with input (case-insensitive)
+    3. Key contains input (case-insensitive)
+    4. If normalize=True, also match against normalized versions (removes /, -, _)
+
+    Args:
+        input_str: User input string
+        available_keys: List of valid keys to match against
+        normalize: If True, also try matching with special chars removed
+
+    Returns:
+        Matched key or None if no match found
+    """
+    input_lower = input_str.lower()
+
+    # Exact match
+    for key in available_keys:
+        if key.lower() == input_lower:
+            return key
+
+    # Starts with
+    matches = [key for key in available_keys if key.lower().startswith(input_lower)]
+    if len(matches) == 1:
+        return matches[0]
+    elif len(matches) > 1:
+        # Multiple matches - check if one is an exact prefix match
+        exact_prefix = [m for m in matches if m.lower() == input_lower]
+        if exact_prefix:
+            return exact_prefix[0]
+        # Return shortest match (most specific)
+        return min(matches, key=len)
+
+    # Contains
+    matches = [key for key in available_keys if input_lower in key.lower()]
+    if len(matches) == 1:
+        return matches[0]
+
+    # Normalized matching (for model names with slashes/hyphens)
+    if normalize:
+        def normalize_str(s: str) -> str:
+            """Remove special chars for fuzzy matching."""
+            return re.sub(r'[/\-_.]', '', s.lower())
+
+        input_norm = normalize_str(input_str)
+
+        # Try normalized exact match
+        for key in available_keys:
+            if normalize_str(key) == input_norm:
+                return key
+
+        # Try normalized contains
+        matches = [key for key in available_keys if input_norm in normalize_str(key)]
+        if len(matches) == 1:
+            return matches[0]
+
+    return None
+
+
+def suggest_closest_match(input_str: str, available_keys: list[str], threshold: int = 3) -> str | None:
+    """Suggest closest match using edit distance.
+
+    Args:
+        input_str: User input string
+        available_keys: List of valid keys
+        threshold: Maximum edit distance to suggest
+
+    Returns:
+        Suggested key or None
+    """
+    import difflib
+
+    # Use difflib for similarity matching
+    matches = difflib.get_close_matches(input_str, available_keys, n=1, cutoff=0.6)
+    return matches[0] if matches else None
+
+
+# ============================================================================
+# DISCOVERABILITY - LIST AVAILABLE OPTIONS
+# ============================================================================
+
+
+def resolve_analysis_type(user_input: str, prompts_file: Path | None = None) -> str:
+    """Resolve user input to valid analysis type with fuzzy matching.
+
+    Args:
+        user_input: User's input for analysis type
+        prompts_file: Path to prompts YAML file (uses default if None)
+
+    Returns:
+        Resolved analysis type key
+
+    Raises:
+        ValueError: If no match found
+    """
+    import yaml
+    from .config import DEFAULT_PROMPTS_FILE
+
+    prompts_file = prompts_file or DEFAULT_PROMPTS_FILE
+
+    try:
+        with open(prompts_file, encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+
+        available_keys = list(config.get("prompts", {}).keys())
+
+        # Try fuzzy match
+        matched = fuzzy_match_key(user_input, available_keys)
+        if matched:
+            return matched
+
+        # No match - suggest alternatives
+        suggestion = suggest_closest_match(user_input, available_keys)
+        if suggestion:
+            raise ValueError(
+                f"Unknown analysis type: '{user_input}'. Did you mean '{suggestion}'?\n"
+                f"Use -L to list all available types."
+            )
+        else:
+            raise ValueError(
+                f"Unknown analysis type: '{user_input}'.\n"
+                f"Use -L to list all available types."
+            )
+
+    except FileNotFoundError:
+        log_warning(f"Prompts file not found: {prompts_file}. Using input as-is.")
+        return user_input
+    except yaml.YAMLError:
+        log_warning(f"Invalid YAML in prompts file. Using input as-is.")
+        return user_input
+
+
+def resolve_model_name(user_input: str, models_file: Path | None = None) -> str:
+    """Resolve user input to valid model name with fuzzy matching.
+
+    Supports common aliases:
+    - llama33, llama3.3 -> llama-3.3-70b-versatile
+    - llama31, llama8 -> llama-3.1-8b-instant
+    - gpt120 -> openai/gpt-oss-120b
+    - gpt20 -> openai/gpt-oss-20b
+    - compound -> groq/compound
+
+    Args:
+        user_input: User's input for model name
+        models_file: Path to models YAML file (uses default if None)
+
+    Returns:
+        Resolved model name
+
+    Raises:
+        ValueError: If no match found
+    """
+    import yaml
+    from .config import DEFAULT_MODELS_FILE
+
+    models_file = models_file or DEFAULT_MODELS_FILE
+
+    try:
+        with open(models_file, encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+
+        available_keys = list(config.get("models", {}).keys())
+
+        # Common aliases for easier typing
+        ALIASES = {
+            "llama33": "llama-3.3-70b-versatile",
+            "llama3.3": "llama-3.3-70b-versatile",
+            "llama31": "llama-3.1-8b-instant",
+            "llama8": "llama-3.1-8b-instant",
+            "llama3.1": "llama-3.1-8b-instant",
+            "gpt120": "openai/gpt-oss-120b",
+            "gpt20": "openai/gpt-oss-20b",
+            "compound": "groq/compound",
+        }
+
+        input_lower = user_input.lower()
+        if input_lower in ALIASES:
+            return ALIASES[input_lower]
+
+        # Try fuzzy match with normalization (handles slashes/hyphens)
+        matched = fuzzy_match_key(user_input, available_keys, normalize=True)
+        if matched:
+            return matched
+
+        # No match - suggest alternatives
+        suggestion = suggest_closest_match(user_input, available_keys)
+        if suggestion:
+            raise ValueError(
+                f"Unknown model: '{user_input}'. Did you mean '{suggestion}'?\n"
+                f"Use -M to list all available models."
+            )
+        else:
+            raise ValueError(
+                f"Unknown model: '{user_input}'.\n"
+                f"Use -M to list all available models."
+            )
+
+    except FileNotFoundError:
+        log_warning(f"Models file not found: {models_file}. Using input as-is.")
+        return user_input
+    except yaml.YAMLError:
+        log_warning(f"Invalid YAML in models file. Using input as-is.")
+        return user_input
+
+
+def list_available_analyses(prompts_file: Path | None = None) -> None:
+    """Display available analysis types from prompts.yaml.
+
+    Args:
+        prompts_file: Path to prompts YAML file (uses default if None)
+    """
+    import yaml
+    from .config import DEFAULT_PROMPTS_FILE
+
+    prompts_file = prompts_file or DEFAULT_PROMPTS_FILE
+
+    try:
+        with open(prompts_file, encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+
+        prompts = config.get("prompts", {})
+
+        if not prompts:
+            log_error(f"No prompts found in {prompts_file}")
+            return
+
+        print("\nAvailable Analysis Types:")
+        print("=" * 70)
+
+        for key, data in prompts.items():
+            name = data.get("name", key)
+            desc = data.get("description", "No description")
+            print(f"  {key:20s} {name}")
+            print(f"  {' ' * 20} {desc}")
+            print()
+
+        print(f"Usage: pidcast URL -a TYPE")
+        print(f"Example: pidcast URL -a executive_summary")
+        print()
+
+    except FileNotFoundError:
+        log_error(f"Prompts file not found: {prompts_file}")
+    except yaml.YAMLError as e:
+        log_error(f"Invalid YAML in {prompts_file}: {e}")
+    except Exception as e:
+        log_error(f"Error reading prompts: {e}")
+
+
+def list_available_models(models_file: Path | None = None) -> None:
+    """Display available Groq models from models.yaml.
+
+    Args:
+        models_file: Path to models YAML file (uses default if None)
+    """
+    import yaml
+    from .config import DEFAULT_MODELS_FILE
+
+    models_file = models_file or DEFAULT_MODELS_FILE
+
+    try:
+        with open(models_file, encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+
+        fallback_chain = config.get("fallback_chain", [])
+        models = config.get("models", {})
+
+        if not models:
+            log_error(f"No models found in {models_file}")
+            return
+
+        print("\nAvailable Models (Quality Order):")
+        print("=" * 80)
+
+        for model_id in fallback_chain:
+            if model_id not in models:
+                continue
+
+            model = models[model_id]
+            display_name = model.get("display_name", model_id)
+            tpm = model.get("limits", {}).get("tpm", 0)
+            tpd = model.get("limits", {}).get("tpd", 0)
+
+            tpm_str = f"{tpm:,}" if tpm else "N/A"
+            tpd_str = f"{tpd:,}" if tpd else "unlimited"
+
+            print(f"  {model_id}")
+            print(f"    Name: {display_name}")
+            print(f"    Limits: {tpm_str} tokens/min, {tpd_str} tokens/day")
+            print()
+
+        print(f"Usage: pidcast URL -m MODEL")
+        print(f"Example: pidcast URL -m {fallback_chain[0] if fallback_chain else 'MODEL_ID'}")
+        print()
+
+    except FileNotFoundError:
+        log_error(f"Models file not found: {models_file}")
+    except yaml.YAMLError as e:
+        log_error(f"Invalid YAML in {models_file}: {e}")
+    except Exception as e:
+        log_error(f"Error reading models: {e}")
