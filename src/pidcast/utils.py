@@ -48,7 +48,7 @@ def log_error_to_file(
     entry = {
         "timestamp": datetime.datetime.now().isoformat(),
         "error_type": error_type,
-        **error_details
+        **error_details,
     }
 
     # Append to log file (JSONL format - one JSON object per line)
@@ -471,13 +471,13 @@ def find_existing_transcription(
                 return PreviousTranscription(
                     video_id=current_video_id,
                     video_title=entry.get("video_title", "Unknown"),
-                        video_url=entry_url,
-                        run_timestamp=entry.get("run_timestamp", ""),
-                        smart_filename=entry.get("smart_filename", ""),
-                        output_dir=output_dir,
-                        analysis_performed=entry.get("analysis_performed", False),
-                        analysis_type=entry.get("analysis_type"),
-                    )
+                    video_url=entry_url,
+                    run_timestamp=entry.get("run_timestamp", ""),
+                    smart_filename=entry.get("smart_filename", ""),
+                    output_dir=output_dir,
+                    analysis_performed=entry.get("analysis_performed", False),
+                    analysis_type=entry.get("analysis_type"),
+                )
 
     return None
 
@@ -542,7 +542,9 @@ def save_statistics(stats_file: Path, stats: "TranscriptionStats", verbose: bool
 # ============================================================================
 
 
-def fuzzy_match_key(input_str: str, available_keys: list[str], normalize: bool = False) -> str | None:
+def fuzzy_match_key(
+    input_str: str, available_keys: list[str], normalize: bool = False
+) -> str | None:
     """Fuzzy match input string against available keys.
 
     Matching rules (in priority order):
@@ -585,9 +587,10 @@ def fuzzy_match_key(input_str: str, available_keys: list[str], normalize: bool =
 
     # Normalized matching (for model names with slashes/hyphens)
     if normalize:
+
         def normalize_str(s: str) -> str:
             """Remove special chars for fuzzy matching."""
-            return re.sub(r'[/\-_.]', '', s.lower())
+            return re.sub(r"[/\-_.]", "", s.lower())
 
         input_norm = normalize_str(input_str)
 
@@ -604,7 +607,9 @@ def fuzzy_match_key(input_str: str, available_keys: list[str], normalize: bool =
     return None
 
 
-def suggest_closest_match(input_str: str, available_keys: list[str], threshold: int = 3) -> str | None:
+def suggest_closest_match(
+    input_str: str, available_keys: list[str], threshold: int = 3
+) -> str | None:
     """Suggest closest match using edit distance.
 
     Args:
@@ -641,6 +646,7 @@ def resolve_analysis_type(user_input: str, prompts_file: Path | None = None) -> 
         ValueError: If no match found
     """
     import yaml
+
     from .config import DEFAULT_PROMPTS_FILE
 
     prompts_file = prompts_file or DEFAULT_PROMPTS_FILE
@@ -665,15 +671,14 @@ def resolve_analysis_type(user_input: str, prompts_file: Path | None = None) -> 
             )
         else:
             raise ValueError(
-                f"Unknown analysis type: '{user_input}'.\n"
-                f"Use -L to list all available types."
+                f"Unknown analysis type: '{user_input}'.\nUse -L to list all available types."
             )
 
     except FileNotFoundError:
         log_warning(f"Prompts file not found: {prompts_file}. Using input as-is.")
         return user_input
     except yaml.YAMLError:
-        log_warning(f"Invalid YAML in prompts file. Using input as-is.")
+        log_warning("Invalid YAML in prompts file. Using input as-is.")
         return user_input
 
 
@@ -698,6 +703,7 @@ def resolve_model_name(user_input: str, models_file: Path | None = None) -> str:
         ValueError: If no match found
     """
     import yaml
+
     from .config import DEFAULT_MODELS_FILE
 
     models_file = models_file or DEFAULT_MODELS_FILE
@@ -709,7 +715,7 @@ def resolve_model_name(user_input: str, models_file: Path | None = None) -> str:
         available_keys = list(config.get("models", {}).keys())
 
         # Common aliases for easier typing
-        ALIASES = {
+        aliases = {
             "llama33": "llama-3.3-70b-versatile",
             "llama3.3": "llama-3.3-70b-versatile",
             "llama31": "llama-3.1-8b-instant",
@@ -721,8 +727,8 @@ def resolve_model_name(user_input: str, models_file: Path | None = None) -> str:
         }
 
         input_lower = user_input.lower()
-        if input_lower in ALIASES:
-            return ALIASES[input_lower]
+        if input_lower in aliases:
+            return aliases[input_lower]
 
         # Try fuzzy match with normalization (handles slashes/hyphens)
         matched = fuzzy_match_key(user_input, available_keys, normalize=True)
@@ -738,15 +744,14 @@ def resolve_model_name(user_input: str, models_file: Path | None = None) -> str:
             )
         else:
             raise ValueError(
-                f"Unknown model: '{user_input}'.\n"
-                f"Use -M to list all available models."
+                f"Unknown model: '{user_input}'.\nUse -M to list all available models."
             )
 
     except FileNotFoundError:
         log_warning(f"Models file not found: {models_file}. Using input as-is.")
         return user_input
     except yaml.YAMLError:
-        log_warning(f"Invalid YAML in models file. Using input as-is.")
+        log_warning("Invalid YAML in models file. Using input as-is.")
         return user_input
 
 
@@ -757,6 +762,7 @@ def list_available_analyses(prompts_file: Path | None = None) -> None:
         prompts_file: Path to prompts YAML file (uses default if None)
     """
     import yaml
+
     from .config import DEFAULT_PROMPTS_FILE
 
     prompts_file = prompts_file or DEFAULT_PROMPTS_FILE
@@ -781,8 +787,8 @@ def list_available_analyses(prompts_file: Path | None = None) -> None:
             print(f"  {' ' * 20} {desc}")
             print()
 
-        print(f"Usage: pidcast URL -a TYPE")
-        print(f"Example: pidcast URL -a executive_summary")
+        print("Usage: pidcast URL -a TYPE")
+        print("Example: pidcast URL -a executive_summary")
         print()
 
     except FileNotFoundError:
@@ -800,6 +806,7 @@ def list_available_models(models_file: Path | None = None) -> None:
         models_file: Path to models YAML file (uses default if None)
     """
     import yaml
+
     from .config import DEFAULT_MODELS_FILE
 
     models_file = models_file or DEFAULT_MODELS_FILE
@@ -835,7 +842,7 @@ def list_available_models(models_file: Path | None = None) -> None:
             print(f"    Limits: {tpm_str} tokens/min, {tpd_str} tokens/day")
             print()
 
-        print(f"Usage: pidcast URL -m MODEL")
+        print("Usage: pidcast URL -m MODEL")
         print(f"Example: pidcast URL -m {fallback_chain[0] if fallback_chain else 'MODEL_ID'}")
         print()
 
