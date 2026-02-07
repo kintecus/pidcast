@@ -1,26 +1,26 @@
-# Pidcast - YouTube Transcription Tool
+# Pidcast - Podcast & YouTube Transcription Tool
 
-YouTube transcription tool with local Whisper processing and LLM-powered analysis.
+Transcription and LLM-powered analysis tool for podcasts, YouTube videos, and local audio files. Uses whisper.cpp for local transcription and Groq for structured analysis. Outputs Obsidian-ready Markdown with YAML front matter.
 
 ## Features
 
-- 🎙️ **YouTube Audio Download** with fallback strategies and duplicate detection
-- 📝 **Whisper Transcription** using whisper.cpp (local, fast)
-- 🤖 **LLM Analysis** with Groq AI (enabled by default)
+- **Multiple input sources** - YouTube videos, podcast RSS feeds, and local audio files
+- **Whisper transcription** using whisper.cpp (local, fast)
+- **LLM analysis** with Groq AI (enabled by default)
   - Automatic model fallback and retry logic
   - Smart chunking for long transcripts with semantic boundaries
   - JSON-validated structured output
-- 📚 **Library Management** (NEW) - Manage podcast RSS feeds with persistent storage
+- **Library management** - Manage podcast RSS feeds with persistent storage
   - Add/remove shows from your library
-  - Preview episodes before adding
-  - Fetch episode metadata from RSS feeds
-- 📄 **Markdown Output** with YAML front matter and contextual tags
-- 📊 **Smart Filenames** with date prefixes
-- ⚡ **Fast Dependencies** managed with uv
+  - Sync and process new episodes automatically
+  - Generate digests from processing history
+- **Markdown output** with YAML front matter and contextual tags
+- **Smart filenames** with date prefixes
+- **Fast dependencies** managed with uv
 
 ![Pidcast example run](assets/screenshots/pidcast-example.png)
 
-## Quick Start
+## Quick start
 
 1. **Install uv**:
 
@@ -45,21 +45,23 @@ YouTube transcription tool with local Whisper processing and LLM-powered analysi
 4. **Run**:
 
    ```bash
-   # Transcribe with LLM analysis (default)
+   # Transcribe a YouTube video with analysis (default)
    uv run pidcast "https://youtube.com/watch?v=VIDEO_ID"
 
-   # Transcription only (skip analysis)
+   # Transcribe a local audio file
+   uv run pidcast "/path/to/audio/file.mp3"
+
+   # Skip LLM analysis
    uv run pidcast "VIDEO_URL" --no-analyze
 
    # Save to Obsidian vault
-   uv run pidcast "VIDEO_URL" --save_to_obsidian
+   uv run pidcast "VIDEO_URL" -o
    ```
 
-## External Dependencies
+## External dependencies
 
-The following tools must be installed separately:
+The following tools must be installed separately (all Python dependencies are handled by `uv sync`):
 
-- **yt-dlp** - YouTube audio download
 - **ffmpeg** - Audio processing
 - **whisper.cpp** - Transcription engine
 
@@ -86,9 +88,9 @@ The following tools must be installed separately:
    WHISPER_MODEL=/path/to/whisper.cpp/models/ggml-base.en.bin
    ```
 
-## Usage Examples
+## Usage examples
 
-### Single Episode Transcription
+### Single video/episode transcription
 
 ```bash
 # Basic transcription with analysis (default)
@@ -98,7 +100,7 @@ uv run pidcast "https://www.youtube.com/watch?v=VIDEO_ID"
 uv run pidcast "VIDEO_URL" --no-analyze
 
 # Different analysis type
-uv run pidcast "VIDEO_URL" --analysis_type key_points
+uv run pidcast "VIDEO_URL" -a key_points
 
 # Analyze existing transcript without re-transcribing
 uv run pidcast --analyze_existing transcript.md
@@ -107,16 +109,16 @@ uv run pidcast --analyze_existing transcript.md
 uv run pidcast "/path/to/audio/file.mp3"
 
 # Force re-transcription (skip duplicate detection)
-uv run pidcast "VIDEO_URL" --force
+uv run pidcast "VIDEO_URL" -f
 
 # Verbose output
-uv run pidcast "VIDEO_URL" --verbose
+uv run pidcast "VIDEO_URL" -v
 
-# Use PO Token for restricted videos
+# Use PO Token for restricted YouTube videos
 uv run pidcast "VIDEO_URL" --po_token "client.type+TOKEN"
 ```
 
-### Library Management (NEW)
+### Library management
 
 Manage a persistent library of podcast shows for batch processing:
 
@@ -142,15 +144,19 @@ uv run pidcast lib remove 1
 # Sync library and process new episodes
 uv run pidcast lib sync
 
+# Process a specific episode from a show
+uv run pidcast lib process "show name" --latest
+uv run pidcast lib process "show name" --match "episode title"
+
 # Generate digest from processing history
 uv run pidcast lib digest
 ```
 
 The library is stored at `~/.config/pidcast/library.yaml` (or `%APPDATA%\pidcast\library.yaml` on Windows) and is human-readable and editable.
 
-## Analysis Prompts & Configuration
+## Analysis prompts and configuration
 
-### Prompt Templates
+### Prompt templates
 
 Prompts are configured in `config/prompts.yaml`. Each prompt template defines:
 
@@ -164,7 +170,7 @@ Available analysis types:
 - `key_points` - Bulleted highlights
 - `action_items` - Actionable takeaways
 
-### Model Configuration
+### Model configuration
 
 Models and fallback chains are defined in `config/models.yaml`:
 
@@ -172,7 +178,7 @@ Models and fallback chains are defined in `config/models.yaml`:
 - Token-based model selection for long transcripts
 - Smart chunking for content exceeding context windows
 
-### Chunking Strategy
+### Chunking strategy
 
 Long transcripts are automatically chunked with:
 
@@ -182,18 +188,23 @@ Long transcripts are automatically chunked with:
 
 ## Development
 
-### Code Quality
+### Code quality
+
+Pre-commit hooks run ruff linting and formatting automatically on each commit. To set up:
 
 ```bash
-# Format code
-uv run ruff format src/
-
-# Lint code
-uv run ruff check src/
-uv run ruff check --fix src/  # Auto-fix issues
+pre-commit install
 ```
 
-### Adding Dependencies
+Manual usage:
+
+```bash
+uv run ruff format src/
+uv run ruff check src/
+uv run ruff check --fix src/
+```
+
+### Adding dependencies
 
 ```bash
 # Add runtime dependency
@@ -205,17 +216,6 @@ uv add --dev package-name
 # Update all dependencies
 uv sync --upgrade
 ```
-
-## Documentation
-
-See [CLAUDE.md](CLAUDE.md) for detailed documentation including:
-
-- Architecture overview
-- Download strategies
-- LLM analysis configuration
-- Custom prompt templates
-- File organization
-- Common patterns
 
 ## License
 
