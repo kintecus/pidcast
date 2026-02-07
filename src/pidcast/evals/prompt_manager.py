@@ -46,19 +46,15 @@ class PromptManager:
             with open(self.prompts_file) as f:
                 data = json.load(f)
         except json.JSONDecodeError as e:
-            raise ConfigurationError(f"Invalid JSON in {self.prompts_file}: {e}")
+            raise ConfigurationError(f"Invalid JSON in {self.prompts_file}: {e}") from e
 
         if "prompts" not in data:
-            raise ConfigurationError(
-                f"Missing 'prompts' key in {self.prompts_file}"
-            )
+            raise ConfigurationError(f"Missing 'prompts' key in {self.prompts_file}")
 
         # Parse prompts by type
         for prompt_type, versions in data["prompts"].items():
             if not isinstance(versions, list):
-                raise ConfigurationError(
-                    f"Prompt type '{prompt_type}' must be a list of versions"
-                )
+                raise ConfigurationError(f"Prompt type '{prompt_type}' must be a list of versions")
 
             self._prompts[prompt_type] = []
             for prompt_data in versions:
@@ -77,7 +73,7 @@ class PromptManager:
                     raise ConfigurationError(
                         f"Missing required field {e} in prompt "
                         f"'{prompt_type}' version '{prompt_data.get('version', '?')}'"
-                    )
+                    ) from e
 
     def get_prompt(self, prompt_type: str, version: str) -> EvalPrompt:
         """
@@ -96,8 +92,7 @@ class PromptManager:
         if prompt_type not in self._prompts:
             available = ", ".join(sorted(self._prompts.keys()))
             raise ConfigurationError(
-                f"Prompt type '{prompt_type}' not found. "
-                f"Available types: {available}"
+                f"Prompt type '{prompt_type}' not found. Available types: {available}"
             )
 
         for prompt in self._prompts[prompt_type]:

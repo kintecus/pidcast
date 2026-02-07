@@ -49,14 +49,10 @@ class ReferenceTranscriptManager:
             with open(self.registry_file) as f:
                 data = json.load(f)
         except json.JSONDecodeError as e:
-            raise ConfigurationError(
-                f"Invalid JSON in {self.registry_file}: {e}"
-            )
+            raise ConfigurationError(f"Invalid JSON in {self.registry_file}: {e}") from e
 
         if "transcripts" not in data:
-            raise ConfigurationError(
-                f"Missing 'transcripts' key in {self.registry_file}"
-            )
+            raise ConfigurationError(f"Missing 'transcripts' key in {self.registry_file}")
 
         # Parse transcripts
         for transcript_data in data["transcripts"]:
@@ -91,7 +87,7 @@ class ReferenceTranscriptManager:
                 raise ConfigurationError(
                     f"Missing required field {e} in reference transcript "
                     f"'{transcript_data.get('transcript_id', '?')}'"
-                )
+                ) from e
 
     def get_transcript(self, transcript_id: str) -> ReferenceTranscript:
         """
@@ -145,7 +141,7 @@ class ReferenceTranscriptManager:
         except Exception as e:
             raise FileProcessingError(
                 f"Failed to read transcript file {transcript.file_path}: {e}"
-            )
+            ) from e
 
         # Strip YAML front matter if present
         content = self._strip_yaml_front_matter(content)

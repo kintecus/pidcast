@@ -44,7 +44,7 @@ def save_eval_result(result: EvalResult, output_dir: Path) -> None:
     try:
         run_dir.mkdir(parents=True, exist_ok=True)
     except Exception as e:
-        raise FileProcessingError(f"Failed to create run directory {run_dir}: {e}")
+        raise FileProcessingError(f"Failed to create run directory {run_dir}: {e}") from e
 
     # Save result markdown
     try:
@@ -52,7 +52,7 @@ def save_eval_result(result: EvalResult, output_dir: Path) -> None:
         result_file = run_dir / "result.md"
         result_file.write_text(markdown_content)
     except Exception as e:
-        raise FileProcessingError(f"Failed to write result.md: {e}")
+        raise FileProcessingError(f"Failed to write result.md: {e}") from e
 
     # Save metadata JSON
     try:
@@ -60,7 +60,7 @@ def save_eval_result(result: EvalResult, output_dir: Path) -> None:
         metadata_file = run_dir / "metadata.json"
         metadata_file.write_text(json.dumps(metadata, indent=2))
     except Exception as e:
-        raise FileProcessingError(f"Failed to write metadata.json: {e}")
+        raise FileProcessingError(f"Failed to write metadata.json: {e}") from e
 
     # If failed, also save error.json with detailed error info
     if not result.success:
@@ -80,7 +80,7 @@ def save_eval_result(result: EvalResult, output_dir: Path) -> None:
             }
             error_file = run_dir / "error.json"
             error_file.write_text(json.dumps(error_data, indent=2))
-        except Exception as e:
+        except Exception:
             # Don't fail the whole save if error.json fails
             pass
 

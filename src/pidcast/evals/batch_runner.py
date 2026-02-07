@@ -4,11 +4,11 @@ import json
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 from pidcast.analysis import estimate_analysis_cost
 from pidcast.config import CHAR_TO_TOKEN_RATIO
@@ -186,9 +186,7 @@ class BatchRunner:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return f"{timestamp}_matrix"
 
-    def _generate_eval_tasks(
-        self, config: BatchConfig, groq_api_key: str
-    ) -> list[EvalConfig]:
+    def _generate_eval_tasks(self, config: BatchConfig, groq_api_key: str) -> list[EvalConfig]:
         """
         Generate list of EvalConfigs for all combinations.
 
@@ -237,10 +235,8 @@ class BatchRunner:
 
         for task in tasks:
             # Get transcript
-            transcript_meta = self.transcript_manager.get_transcript(task.transcript_id)
-            transcript_text = self.transcript_manager.read_transcript_content(
-                task.transcript_id
-            )
+            self.transcript_manager.get_transcript(task.transcript_id)
+            transcript_text = self.transcript_manager.read_transcript_content(task.transcript_id)
 
             # Get prompt
             prompt = self.prompt_manager.get_prompt(task.prompt_type, task.prompt_version)
@@ -280,9 +276,7 @@ class BatchRunner:
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             TimeElapsedColumn(),
         ) as progress:
-            task_progress = progress.add_task(
-                f"Running {len(tasks)} evals...", total=len(tasks)
-            )
+            task_progress = progress.add_task(f"Running {len(tasks)} evals...", total=len(tasks))
 
             with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
                 # Submit all tasks
