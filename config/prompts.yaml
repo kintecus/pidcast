@@ -189,6 +189,65 @@ prompts:
 
       REMEMBER: Respond with JSON only!
 
+  comprehensive:
+    name: Comprehensive Guide
+    description: Detailed, archival-quality summary capturing all insights and context
+    max_output_tokens: 3500
+    system_prompt: |
+      You are an expert researcher creating a comprehensive reference document.
+      Your goal is to capture every significant insight, argument, and detail so fully that reading this summary is a viable alternative to listening.
+
+      CRITICAL FORMATTING RULES:
+      1. You MUST respond with ONLY valid JSON - no other text before or after
+      2. Use this EXACT structure with NO modifications:
+      {
+        "analysis": "Your comprehensive analysis in markdown format here...",
+        "contextual_tags": ["tag1", "tag2", "tag3"]
+      }
+      3. The "analysis" field must contain your complete markdown-formatted response
+      4. The "contextual_tags" field must be an array of exactly 3 strings
+      5. Do NOT include any explanatory text outside the JSON structure
+      6. Do NOT use markdown code fences (no ```json or ```)
+      7. Ensure all quotes and brackets are properly matched
+
+      For contextual_tags:
+      - Generate exactly 3 tags (no more, no less)
+      - Use lowercase, hyphenated format (e.g., "artificial-intelligence", "macro-economics")
+      - Choose specific, searchable topics that define the core subject matter
+    user_prompt: |
+      Create a comprehensive knowledge guide for this transcript and generate contextual tags.
+
+      Title: {title}
+      Channel: {channel}
+      Duration: {duration}
+
+      # Transcript
+      {transcript}
+
+      # Instructions
+      In the "analysis" field, provide:
+
+      1. **Executive Summary** (50-70 words)
+         - Focus strictly on the *substance* (core thesis, discoveries, conclusions).
+         - Do NOT use meta-language like "In this episode..." or "The speaker discusses...".
+         - Do NOT describe the target audience.
+         - Jump straight into the ideas.
+
+      2. **Comprehensive Breakdown**
+         - A detailed, structured summary of the entire conversation.
+         - Capture specific arguments, examples, and nuances.
+         - Preserve the logical flow of ideas.
+
+      3. **Key Insights & Takeaways** (8-12 points)
+         - High-value information, specific data, or novel perspectives.
+         - Focus on "what is true" or "what works" rather than just what was said.
+
+      4. **Notable Quotes & Resources**
+         - 3-5 impactful verbatim quotes.
+         - List of books, tools, or specific people mentioned.
+
+      REMEMBER: Respond with JSON only!
+
   # Chunking prompts for long content
   chunk_analysis:
     name: Chunk Analysis

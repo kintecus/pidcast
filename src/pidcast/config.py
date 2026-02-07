@@ -298,6 +298,7 @@ class VideoInfo:
     duration_string: str = ""
     view_count: int = 0
     upload_date: str = ""
+    description: str = ""
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "VideoInfo":
@@ -311,6 +312,7 @@ class VideoInfo:
             duration_string=data.get("duration_string", ""),
             view_count=data.get("view_count", 0),
             upload_date=data.get("upload_date", ""),
+            description=data.get("description", ""),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -324,6 +326,7 @@ class VideoInfo:
             "duration_string": self.duration_string,
             "view_count": self.view_count,
             "upload_date": self.upload_date,
+            "description": self.description,
         }
 
 
