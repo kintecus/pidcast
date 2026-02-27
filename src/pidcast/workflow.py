@@ -537,6 +537,7 @@ def process_input_source(
             str(temp_whisper_output),
             args.verbose,
             estimated_duration=estimated_time,
+            language=getattr(args, "language", None),
         )
 
         transcription_duration = time.time() - transcription_start

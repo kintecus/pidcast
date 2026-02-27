@@ -39,6 +39,7 @@ PROJECT_ROOT = get_project_root()
 FFMPEG_PATH = os.environ.get("FFMPEG_PATH", "ffmpeg")
 WHISPER_CPP_PATH = os.environ.get("WHISPER_CPP_PATH")
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL")
+WHISPER_MODELS_DIR = os.environ.get("WHISPER_MODELS_DIR")
 OBSIDIAN_PATH = os.environ.get("OBSIDIAN_VAULT_PATH")
 
 
