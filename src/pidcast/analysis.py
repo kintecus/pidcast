@@ -5,9 +5,9 @@ import logging
 import re
 import time
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 import yaml
 
@@ -467,7 +467,7 @@ def _call_llm_with_fallback(
                         log_error_to_file(
                             "json_mode_exhausted_fallback",
                             {
-                                "models_tried": list(sorted(tried)),
+                                "models_tried": sorted(tried),
                                 "falling_back_to": "plain_text_two_call",
                             }
                         )

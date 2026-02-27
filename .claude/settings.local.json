@@ -23,7 +23,16 @@
       "Bash(tail:*)",
       "Skill(ideation)",
       "Bash(git checkout:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(time bun x ccusage:*)",
+      "Bash(bun x ccusage:*)",
+      "Bash(ccusage --help:*)",
+      "Bash(ccusage blocks --help:*)",
+      "Bash(ccusage blocks:*)",
+      "Bash(ccusage weekly:*)",
+      "Bash(git -C /Users/ostaps/code/personal/pidcast status)",
+      "Bash(git -C /Users/ostaps/code/personal/pidcast diff)",
+      "Bash(brew list whisper-cpp)"
     ]
   }
 }

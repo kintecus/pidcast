@@ -3,14 +3,14 @@
 import functools
 import logging
 import time
-from typing import Callable, Type
+from collections.abc import Callable
 
 from groq import APIConnectionError, APITimeoutError, RateLimitError
 
 logger = logging.getLogger(__name__)
 
 # Retryable error types (transient errors that should trigger retry)
-RETRYABLE_ERRORS: tuple[Type[Exception], ...] = (
+RETRYABLE_ERRORS: tuple[type[Exception], ...] = (
     RateLimitError,
     APIConnectionError,
     APITimeoutError,
