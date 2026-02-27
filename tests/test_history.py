@@ -5,8 +5,6 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-import pytest
-
 from pidcast.history import HistoryEntry, ProcessingHistory, ProcessingStatus
 
 
