@@ -346,7 +346,17 @@ Short Flags:
         action="store_true",
         help=f"Save analysis files to Obsidian vault (transcripts still saved to output_dir) at: {OBSIDIAN_PATH}",
     )
-    parser.add_argument("--whisper_model", default=WHISPER_MODEL, help="Path to Whisper model file")
+    parser.add_argument(
+        "--whisper_model",
+        default=WHISPER_MODEL,
+        help="Whisper model name (e.g., 'medium', 'large-v3-turbo') or path to model file",
+    )
+    parser.add_argument(
+        "-l",
+        "--language",
+        default=None,
+        help="Language code for transcription (e.g., 'uk', 'en', 'de'). Default: auto-detect.",
+    )
     parser.add_argument(
         "--output_format",
         default="otxt",
@@ -449,6 +459,13 @@ Short Flags:
         action="store_true",
         dest="list_models",
         help="List available Groq models and exit",
+    )
+    discovery_group.add_argument(
+        "-W",
+        "--list-whisper-models",
+        action="store_true",
+        dest="list_whisper_models",
+        help="List available Whisper models and exit",
     )
 
     return parser.parse_args()
@@ -555,6 +572,15 @@ def cmd_process(args: argparse.Namespace) -> None:
         description=selected_episode.description,
         duration=selected_episode.duration or 0
     )
+
+    # Resolve whisper model
+    if args.whisper_model:
+        from .transcription import resolve_whisper_model
+        try:
+            args.whisper_model = resolve_whisper_model(args.whisper_model)
+        except Exception as e:
+            log_error(str(e))
+            return
 
     # Run workflow
     output_dir = Path(args.output_dir) if args.output_dir else DEFAULT_TRANSCRIPTS_DIR
@@ -923,6 +949,14 @@ def cmd_sync(args: argparse.Namespace) -> None:
         )
         return
 
+    # Resolve model name to path
+    from .transcription import resolve_whisper_model
+    try:
+        whisper_model = resolve_whisper_model(whisper_model)
+    except Exception as e:
+        log_error(str(e))
+        return
+
     # Get Groq API key (optional)
     groq_api_key = args.groq_api_key or os.environ.get("GROQ_API_KEY")
 
@@ -1021,6 +1055,18 @@ def main() -> None:
         list_available_models()
         return
 
+    if getattr(args, "list_whisper_models", False):
+        from .transcription import list_whisper_models
+        models = list_whisper_models()
+        if not models:
+            print("No whisper models found. Set WHISPER_MODELS_DIR or WHISPER_MODEL env var.")
+        else:
+            print("Available Whisper models:\n")
+            for m in models:
+                print(f"  {m['name']:<25} {m['size']:>10}")
+            print(f"\nUsage: pidcast <input> --whisper_model {models[0]['name']}")
+        return
+
     # Route to library commands if specified
     if getattr(args, "mode", None) == "lib":
         lib_commands = {
@@ -1064,6 +1110,18 @@ def main() -> None:
                 logger.info(f"Matched '{args.groq_model}' → '{resolved_model}'")
             args.groq_model = resolved_model
         except ValueError as e:
+            log_error(str(e))
+            return
+
+    # Resolve whisper model name to path
+    if args.whisper_model and not args.analyze_existing:
+        from .transcription import resolve_whisper_model
+        try:
+            resolved = resolve_whisper_model(args.whisper_model)
+            if resolved != args.whisper_model and args.verbose:
+                logger.info(f"Whisper model: '{args.whisper_model}' -> {resolved}")
+            args.whisper_model = resolved
+        except Exception as e:
             log_error(str(e))
             return
 
