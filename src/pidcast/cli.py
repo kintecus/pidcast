@@ -256,7 +256,7 @@ Short Flags:
 
         # Add command
         add_parser = lib_subparsers.add_parser("add", help="Add podcast to library")
-        add_parser.add_argument("feed_url", help="RSS feed URL")
+        add_parser.add_argument("feed_url", help="RSS feed URL or podcast name to search for")
         add_parser.add_argument(
             "--preview", action="store_true", help="Preview episodes before adding"
         )
@@ -592,6 +592,30 @@ def cmd_add(args: argparse.Namespace) -> None:
     # Initialize config and library
     ConfigManager.init_default_config()
     library = LibraryManager()
+
+    # Resolve feed URL from name if user didn't pass a URL
+    feed_url = args.feed_url
+    if not feed_url.startswith(("http://", "https://", "feed://")):
+        from .discovery import discover_podcast, prompt_user_selection
+
+        query = feed_url
+        if has_rich:
+            Console().print(f"\nSearching for podcasts matching [bold]{query!r}[/bold]...")
+        else:
+            print(f"\nSearching for podcasts matching {query!r}...")
+
+        results = discover_podcast(query)
+        if not results:
+            log_error(f"No podcasts found for {query!r}. Try using the RSS feed URL directly.")
+            return
+
+        chosen = prompt_user_selection(results)
+        if chosen is None:
+            logger.info("Cancelled.")
+            return
+
+        feed_url = chosen["feed_url"]
+        args.feed_url = feed_url
 
     try:
         # Preview mode: show episodes before adding
