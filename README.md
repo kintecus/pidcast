@@ -1,19 +1,21 @@
 # Pidcast - Podcast & YouTube Transcription Tool
 
-Transcription and LLM-powered analysis tool for podcasts, YouTube videos, and local audio files. Uses whisper.cpp for local transcription and Groq for structured analysis. Outputs Obsidian-ready Markdown with YAML front matter.
+Transcription and LLM-powered analysis tool for podcasts, YouTube videos, and local audio files. Uses whisper.cpp for local transcription and Groq or Claude for structured analysis. Outputs Obsidian-ready Markdown with YAML front matter.
 
 ## Features
 
 - **Multiple input sources** - YouTube videos, podcast RSS feeds, and local audio files
 - **Whisper transcription** using whisper.cpp (local, fast)
-- **LLM analysis** with Groq AI (enabled by default)
+- **LLM analysis** with Groq AI or Claude (enabled by default)
   - Automatic model fallback and retry logic
   - Smart chunking for long transcripts with semantic boundaries
   - JSON-validated structured output
+  - **Shareable brief** in every analysis - punchy headline + friend-ready quick take for sharing links
 - **Library management** - Manage podcast RSS feeds with persistent storage
-  - Add/remove shows from your library
+  - Add shows by name (searches Apple Podcasts DB + iTunes API) or by RSS URL
   - Sync and process new episodes automatically
   - Generate digests from processing history
+- **Provider comparison evals** - Run the same transcript through Groq and Claude, judge quality with Opus
 - **Markdown output** with YAML front matter and contextual tags
 - **Smart filenames** with date prefixes
 - **Fast dependencies** managed with uv
@@ -118,12 +120,32 @@ uv run pidcast "VIDEO_URL" -v
 uv run pidcast "VIDEO_URL" --po_token "client.type+TOKEN"
 ```
 
+### Choosing an LLM provider
+
+By default, analysis uses Groq. Pass `--provider claude` to use your local Claude Code installation instead:
+
+```bash
+# Analyze with Claude (requires Claude Code installed and authenticated)
+uv run pidcast "VIDEO_URL" --provider claude
+
+# Choose a specific Claude model (sonnet is default)
+uv run pidcast "VIDEO_URL" --provider claude --claude_model opus
+
+# Groq is the default (no flag needed)
+uv run pidcast "VIDEO_URL" --provider groq
+```
+
+Available Claude model aliases: `sonnet` (claude-sonnet-4-6), `opus` (claude-opus-4-6), `haiku` (claude-haiku-4-5).
+
 ### Library management
 
 Manage a persistent library of podcast shows for batch processing:
 
 ```bash
-# Add a podcast to your library
+# Add a podcast by name (searches Apple Podcasts DB and iTunes)
+uv run pidcast lib add "Lex Fridman Podcast"
+
+# Add a podcast directly by RSS feed URL
 uv run pidcast lib add "https://feeds.example.com/podcast.xml"
 
 # Preview episodes before adding
@@ -152,6 +174,8 @@ uv run pidcast lib process "show name" --match "episode title"
 uv run pidcast lib digest
 ```
 
+When adding by name, pidcast first checks the local Apple Podcasts SQLite database (macOS only), then falls back to the iTunes Search API. You select from a numbered list of matches.
+
 The library is stored at `~/.config/pidcast/library.yaml` (or `%APPDATA%\pidcast\library.yaml` on Windows) and is human-readable and editable.
 
 ## Analysis prompts and configuration
@@ -167,8 +191,12 @@ Prompts are configured in `config/prompts.yaml`. Each prompt template defines:
 Available analysis types:
 
 - `executive_summary` (default) - Concise overview with key insights
+- `summary` - Comprehensive summary
 - `key_points` - Bulleted highlights
 - `action_items` - Actionable takeaways
+- `comprehensive` - Archival-quality detailed guide
+
+All analysis types include a **Shareable Brief** section at the end: a reformulated headline (≤15 words) plus a 3-5 sentence casual quick take suitable for sharing with friends.
 
 ### Model configuration
 
@@ -185,6 +213,36 @@ Long transcripts are automatically chunked with:
 - Semantic boundary detection (paragraph/sentence breaks)
 - Overlap between chunks for context preservation
 - Synthesis step to combine chunk analyses
+
+## Provider comparison evals
+
+Compare Groq and Claude summaries on the same transcript, judged by Claude Opus:
+
+```bash
+# Run comparison (requires a plain-text transcript file)
+pidcast-eval --compare groq,claude --transcript_file transcript.txt --title "Episode Title"
+
+# Use a different Claude model for analysis
+pidcast-eval --compare groq,claude --claude_model opus --transcript_file transcript.txt
+
+# Use a different judge model (default: opus)
+pidcast-eval --compare groq,claude --judge sonnet --transcript_file transcript.txt
+
+# Different analysis type
+pidcast-eval --compare groq,claude --analysis_type comprehensive --transcript_file transcript.txt
+```
+
+The judge scores each summary on accuracy, completeness, clarity, and conciseness (1-10 each) and returns a verdict with reasoning. Results are saved as markdown reports in `data/evals/comparisons/`.
+
+For matrix evals across multiple prompts, models, and reference transcripts:
+
+```bash
+# Run all combinations
+pidcast-eval --run-matrix
+
+# Subset of models
+pidcast-eval --run-matrix --models "llama-3.3-70b-versatile,mixtral-8x7b-32768"
+```
 
 ## Development
 
