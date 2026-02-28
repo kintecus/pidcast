@@ -116,10 +116,12 @@ def analyze_with_claude_cli(
 
     user_prompt = substitute_prompt_variables(
         prompt_template.user_prompt,
-        transcript=transcript,
-        title=video_info.title or "Unknown",
-        channel=video_info.channel or "Unknown",
-        duration=duration_str,
+        {
+            "transcript": transcript,
+            "title": video_info.title or "Unknown",
+            "channel": video_info.channel or "Unknown",
+            "duration": duration_str,
+        },
     )
     system_prompt = prompt_template.system_prompt
 
