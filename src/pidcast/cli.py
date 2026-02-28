@@ -425,6 +425,17 @@ Short Flags:
         action="store_true",
         help="Continue if analysis fails instead of aborting",
     )
+    analysis_group.add_argument(
+        "--provider",
+        default="groq",
+        choices=["groq", "claude"],
+        help="LLM provider for analysis: 'groq' (default) or 'claude' (uses local Claude CLI)",
+    )
+    analysis_group.add_argument(
+        "--claude_model",
+        default=None,
+        help="Claude model alias when --provider claude: 'sonnet' (default), 'opus', 'haiku'",
+    )
 
     # Output options
     output_group = parser.add_argument_group("Output Options")
