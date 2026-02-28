@@ -6,6 +6,7 @@ Requires Claude Code to be installed and authenticated.
 
 from __future__ import annotations
 
+import functools
 import logging
 import shutil
 import subprocess
@@ -26,6 +27,7 @@ CLAUDE_MODELS = {
 DEFAULT_CLAUDE_MODEL = "sonnet"
 
 
+@functools.lru_cache(maxsize=1)
 def _find_claude_cli() -> str:
     """Return path to claude CLI, raising AnalysisError if not found."""
     path = shutil.which("claude")
@@ -34,6 +36,35 @@ def _find_claude_cli() -> str:
             "claude CLI not found. Install Claude Code: https://claude.ai/code"
         )
     return path
+
+
+def run_claude_subprocess(prompt: str, model: str, timeout: int = 300) -> str:
+    """Invoke the claude CLI with a prompt and return stdout.
+
+    Raises:
+        AnalysisError: On timeout, OS error, non-zero exit, or empty output.
+    """
+    claude_bin = _find_claude_cli()
+    try:
+        proc = subprocess.run(
+            [claude_bin, "-p", prompt, "--model", model, "--output-format", "text"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise AnalysisError(f"Claude CLI timed out after {timeout} seconds") from e
+    except OSError as e:
+        raise AnalysisError(f"Failed to invoke claude CLI: {e}") from e
+
+    if proc.returncode != 0:
+        raise AnalysisError(
+            f"Claude CLI exited with code {proc.returncode}: {proc.stderr.strip()}"
+        )
+    output = proc.stdout.strip()
+    if not output:
+        raise AnalysisError("Claude CLI returned empty output")
+    return output
 
 
 def _resolve_claude_model(model: str | None) -> str:
@@ -67,7 +98,6 @@ def analyze_with_claude_cli(
     Raises:
         AnalysisError: If the CLI call fails or returns invalid JSON
     """
-    claude_bin = _find_claude_cli()
     resolved_model = _resolve_claude_model(model)
 
     if analysis_type not in prompts_config.prompts:
@@ -100,29 +130,8 @@ def analyze_with_claude_cli(
         logger.info(f"Calling Claude CLI with model {resolved_model}...")
 
     start_time = time.time()
-    try:
-        proc = subprocess.run(
-            [claude_bin, "-p", full_prompt, "--model", resolved_model, "--output-format", "text"],
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-    except subprocess.TimeoutExpired as e:
-        raise AnalysisError("Claude CLI timed out after 300 seconds") from e
-    except OSError as e:
-        raise AnalysisError(f"Failed to invoke claude CLI: {e}") from e
-
+    raw_output = run_claude_subprocess(full_prompt, resolved_model)
     duration = time.time() - start_time
-
-    if proc.returncode != 0:
-        stderr = proc.stderr.strip()
-        raise AnalysisError(
-            f"Claude CLI exited with code {proc.returncode}: {stderr}"
-        )
-
-    raw_output = proc.stdout.strip()
-    if not raw_output:
-        raise AnalysisError("Claude CLI returned empty output")
 
     if verbose:
         logger.debug(f"Claude CLI raw output ({len(raw_output)} chars)")

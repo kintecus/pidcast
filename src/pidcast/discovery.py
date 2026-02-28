@@ -27,28 +27,27 @@ def search_apple_podcasts_local(query: str) -> list[dict]:
 
     results = []
     try:
-        conn = sqlite3.connect(str(APPLE_PODCASTS_DB))
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT ZTITLE, ZFEEDURL, ZAUTHOR, ZITEMDESCRIPTION
-            FROM ZMTPODCAST
-            WHERE ZTITLE LIKE ? AND ZFEEDURL IS NOT NULL AND ZFEEDURL != ''
-            ORDER BY ZTITLE
-            LIMIT 10
-            """,
-            (f"%{query}%",),
-        )
-        for row in cur.fetchall():
-            results.append({
-                "title": row["ZTITLE"] or "",
-                "feed_url": row["ZFEEDURL"] or "",
-                "author": row["ZAUTHOR"] or "",
-                "description": (row["ZITEMDESCRIPTION"] or "")[:200],
-                "source": "local",
-            })
-        conn.close()
+        with sqlite3.connect(APPLE_PODCASTS_DB) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT ZTITLE, ZFEEDURL, ZAUTHOR, ZITEMDESCRIPTION
+                FROM ZMTPODCAST
+                WHERE ZTITLE LIKE ? AND ZFEEDURL IS NOT NULL AND ZFEEDURL != ''
+                ORDER BY ZTITLE
+                LIMIT 10
+                """,
+                (f"%{query}%",),
+            )
+            for row in cur.fetchall():
+                results.append({
+                    "title": row["ZTITLE"] or "",
+                    "feed_url": row["ZFEEDURL"] or "",
+                    "author": row["ZAUTHOR"] or "",
+                    "description": (row["ZITEMDESCRIPTION"] or "")[:200],
+                    "source": "local",
+                })
     except sqlite3.Error as e:
         logger.debug("Apple Podcasts DB query failed: %s", e)
 
@@ -96,7 +95,8 @@ def discover_podcast(query: str) -> list[dict]:
     taking precedence.
     """
     local = search_apple_podcasts_local(query)
-    remote = search_itunes_api(query)
+    # Skip network call if local DB already returned a full page of results
+    remote = [] if len(local) >= 10 else search_itunes_api(query)
 
     seen_urls: set[str] = set()
     merged: list[dict] = []
