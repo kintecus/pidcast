@@ -226,13 +226,6 @@ def run_analysis(
     """
     log_section("Starting LLM Analysis")
 
-    # Get API key
-    groq_api_key = args.groq_api_key or os.environ.get("GROQ_API_KEY")
-    if not groq_api_key:
-        raise AnalysisError(
-            "Groq API key not found. Set GROQ_API_KEY environment variable or use --groq_api_key"
-        )
-
     # Load prompts (use new flag or legacy flag for backward compatibility)
     prompts_file = args.prompts_file or args.prompts_file_legacy
     prompts_config = load_analysis_prompts(prompts_file, args.verbose)
@@ -250,17 +243,36 @@ def run_analysis(
         parts = content.split("---", 2)
         transcript_text = parts[2].strip() if len(parts) >= 3 else content
 
+    provider = getattr(args, "provider", "groq")
+
     # Analyze
     analysis_start = time.time()
-    result = analyze_transcript_with_llm(
-        transcript_text,
-        video_info,
-        args.analysis_type,
-        prompts_config,
-        groq_api_key,
-        args.groq_model,
-        args.verbose,
-    )
+    if provider == "claude":
+        from .providers.claude_provider import analyze_with_claude_cli
+
+        result = analyze_with_claude_cli(
+            transcript_text,
+            video_info,
+            args.analysis_type,
+            prompts_config,
+            model=getattr(args, "claude_model", None),
+            verbose=args.verbose,
+        )
+    else:
+        groq_api_key = args.groq_api_key or os.environ.get("GROQ_API_KEY")
+        if not groq_api_key:
+            raise AnalysisError(
+                "Groq API key not found. Set GROQ_API_KEY environment variable or use --groq_api_key"
+            )
+        result = analyze_transcript_with_llm(
+            transcript_text,
+            video_info,
+            args.analysis_type,
+            prompts_config,
+            groq_api_key,
+            args.groq_model,
+            args.verbose,
+        )
 
     analysis_duration = time.time() - analysis_start
     metadata = {

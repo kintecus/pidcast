@@ -4,6 +4,7 @@ import argparse
 import logging
 import os
 import sys
+from pathlib import Path
 
 from rich.console import Console
 
@@ -61,6 +62,36 @@ def parse_eval_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--transcripts",
         help="Comma-separated transcript IDs for matrix",
+    )
+
+    # Provider comparison mode
+    parser.add_argument(
+        "--compare",
+        help="Compare two providers, comma-separated (e.g. 'groq,claude')",
+    )
+    parser.add_argument(
+        "--judge",
+        default="opus",
+        help="Claude model alias to use as judge in --compare mode (default: opus)",
+    )
+    parser.add_argument(
+        "--claude_model",
+        default="sonnet",
+        help="Claude model alias for analysis in --compare mode (default: sonnet)",
+    )
+    parser.add_argument(
+        "--analysis_type",
+        default="executive_summary",
+        help="Analysis type for --compare mode (default: executive_summary)",
+    )
+    parser.add_argument(
+        "--transcript_file",
+        help="Path to a transcript text file for --compare mode",
+    )
+    parser.add_argument(
+        "--title",
+        default="",
+        help="Podcast title for --compare mode",
     )
 
     # Optional arguments
@@ -269,13 +300,76 @@ def run_batch_evals(args, groq_api_key: str) -> None:
     console.print(f"  Index: {comparisons_dir / 'index.md'}")
 
 
+def run_comparison_eval(args) -> None:
+    """Run a provider comparison eval."""
+    providers = [p.strip() for p in args.compare.split(",")]
+    if len(providers) != 2:
+        console.print("[red]Error:[/red] --compare requires exactly two providers (e.g. 'groq,claude')")
+        sys.exit(1)
+
+    groq_api_key = args.groq_api_key or os.getenv("GROQ_API_KEY")
+
+    if not args.transcript_file:
+        console.print("[red]Error:[/red] --transcript_file is required for --compare mode")
+        sys.exit(1)
+
+    transcript_path = Path(args.transcript_file)
+    if not transcript_path.exists():
+        console.print(f"[red]Error:[/red] Transcript file not found: {transcript_path}")
+        sys.exit(1)
+
+    transcript = transcript_path.read_text(encoding="utf-8")
+
+    from pidcast.config import VideoInfo
+
+    video_info = VideoInfo(
+        title=args.title or transcript_path.stem,
+        webpage_url=str(transcript_path),
+    )
+
+    from .provider_comparison import run_provider_comparison, save_comparison_report
+
+    comparisons_dir = PROJECT_ROOT / "data" / "evals" / "comparisons"
+
+    console.print(f"\n[bold cyan]Provider Comparison:[/bold cyan] {providers[0]} vs {providers[1]}")
+    console.print(f"  Analysis type: {args.analysis_type}")
+    console.print(f"  Judge: {args.judge}")
+    console.print()
+
+    result = run_provider_comparison(
+        transcript=transcript,
+        video_info=video_info,
+        analysis_type=args.analysis_type,
+        providers=providers,
+        groq_api_key=groq_api_key,
+        judge_model=args.judge,
+        claude_model=args.claude_model,
+        verbose=args.verbose,
+    )
+
+    report_path = save_comparison_report(result, comparisons_dir)
+
+    console.print("[bold green]✓ Comparison complete[/bold green]")
+    console.print(f"\n  Verdict: [bold]{result.verdict}[/bold]")
+    console.print(f"  Reasoning: {result.reasoning}")
+    if result.score_a and result.score_b:
+        console.print(f"\n  {providers[0].upper()} score: {result.score_a.total}/40 (avg {result.score_a.average:.1f})")
+        console.print(f"  {providers[1].upper()} score: {result.score_b.total}/40 (avg {result.score_b.average:.1f})")
+    console.print(f"\n  Report saved to: {report_path}")
+
+
 def eval_main() -> None:
     """Main entry point for pidcast-eval command."""
     args = parse_eval_arguments()
     setup_logging(args.verbose)
 
     try:
-        # Get API key
+        # Route to comparison mode
+        if args.compare:
+            run_comparison_eval(args)
+            return
+
+        # Get API key (required for non-compare modes)
         groq_api_key = args.groq_api_key or os.getenv("GROQ_API_KEY")
         if not groq_api_key:
             console.print(
