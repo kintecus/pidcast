@@ -227,7 +227,7 @@ def run_analysis(
     log_section("Starting LLM Analysis")
 
     # Load prompts (use new flag or legacy flag for backward compatibility)
-    prompts_file = args.prompts_file or args.prompts_file_legacy
+    prompts_file = args.prompts_file or getattr(args, "prompts_file_legacy", None)
     prompts_config = load_analysis_prompts(prompts_file, args.verbose)
 
     # Get transcript text
