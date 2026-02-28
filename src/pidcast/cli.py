@@ -270,7 +270,7 @@ Short Flags:
         # Reuse common flags for processing
         process_parser.add_argument("--output_dir", help="Output directory")
         process_parser.add_argument("--save_to_obsidian", action="store_true", help="Save to Obsidian")
-        process_parser.add_argument("--whisper_model", help="Whisper model path")
+        process_parser.add_argument("--whisper_model", default=WHISPER_MODEL, help="Whisper model path")
         process_parser.add_argument("--groq_api_key", help="Groq API key")
         process_parser.add_argument("-a", "--analysis_type", default="executive_summary", help="Analysis type")
         process_parser.add_argument("--prompts_file", help="Prompts file path")
@@ -314,7 +314,7 @@ Short Flags:
         sync_parser.add_argument("--force", action="store_true", help="Reprocess episodes")
         sync_parser.add_argument("--backfill", type=int, metavar="N", help="Override backfill limit")
         sync_parser.add_argument("--output_dir", help="Output directory")
-        sync_parser.add_argument("--whisper_model", help="Whisper model path")
+        sync_parser.add_argument("--whisper_model", default=WHISPER_MODEL, help="Whisper model path")
         sync_parser.add_argument("--groq_api_key", help="Groq API key")
         sync_parser.add_argument("--analysis_type", default="executive_summary", help="Analysis type")
         sync_parser.add_argument("--prompts_file", help="Prompts file path")
