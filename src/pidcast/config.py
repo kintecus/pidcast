@@ -41,6 +41,7 @@ WHISPER_CPP_PATH = os.environ.get("WHISPER_CPP_PATH")
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL")
 WHISPER_MODELS_DIR = os.environ.get("WHISPER_MODELS_DIR")
 OBSIDIAN_PATH = os.environ.get("OBSIDIAN_VAULT_PATH")
+HUGGINGFACE_TOKEN = os.environ.get("HUGGINGFACE_TOKEN")
 
 
 # ============================================================================
@@ -357,6 +358,9 @@ class TranscriptionStats:
     analysis_cost: float = 0
     analysis_truncated: bool = False
     analysis_file: str | None = None
+    # Diarization metadata
+    diarization_performed: bool = False
+    speaker_count: int | None = None
     # Fallback tracking
     json_mode_failed: bool = False
     used_plain_text_fallback: bool = False
@@ -386,6 +390,8 @@ class TranscriptionStats:
             "analysis_cost": self.analysis_cost,
             "analysis_truncated": self.analysis_truncated,
             "analysis_file": self.analysis_file,
+            "diarization_performed": self.diarization_performed,
+            "speaker_count": self.speaker_count,
             "json_mode_failed": self.json_mode_failed,
             "used_plain_text_fallback": self.used_plain_text_fallback,
             "tag_extraction_failed": self.tag_extraction_failed,
