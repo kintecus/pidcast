@@ -23,6 +23,7 @@ dependencies = [
 diarize = [
     "pyannote.audio>=3.3.0",
     "numpy<2",
+    "huggingface-hub<1.0",
 ]
 
 [project.scripts]
