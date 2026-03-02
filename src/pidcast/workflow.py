@@ -20,7 +20,13 @@ from .config import (
     VideoInfo,
 )
 from .download import download_audio
-from .exceptions import AnalysisError, DownloadError, FileProcessingError, TranscriptionError
+from .exceptions import (
+    AnalysisError,
+    DiarizationError,
+    DownloadError,
+    FileProcessingError,
+    TranscriptionError,
+)
 from .markdown import create_analysis_markdown_file, create_markdown_file
 from .transcription import (
     estimate_transcription_time,
@@ -528,7 +534,8 @@ def process_input_source(
 
         transcription_start = time.time()
         temp_whisper_output = output_dir / f"temp_transcript_{uuid.uuid4().hex[:8]}"
-        output_format = args.output_format.replace("o", "")
+        diarize = getattr(args, "diarize", False)
+        output_format = "json" if diarize else args.output_format.replace("o", "")
 
         run_whisper_transcription(
             audio_file,
@@ -542,8 +549,45 @@ def process_input_source(
 
         transcription_duration = time.time() - transcription_start
 
+        # Speaker diarization (optional)
+        speaker_count = None
+        if diarize:
+            from .config import HUGGINGFACE_TOKEN
+            from .diarization import merge_whisper_with_diarization, run_diarization
+
+            if not HUGGINGFACE_TOKEN:
+                raise DiarizationError(
+                    "HUGGINGFACE_TOKEN environment variable not set. "
+                    "Required for speaker diarization."
+                )
+
+            logger.info("\nRunning speaker diarization...")
+            diarization_segments = run_diarization(audio_file, HUGGINGFACE_TOKEN, args.verbose)
+
+            # Read whisper JSON output and merge with diarization
+            whisper_json_file = f"{temp_whisper_output}.json"
+            with open(whisper_json_file, encoding="utf-8") as f:
+                whisper_data = json.load(f)
+
+            whisper_segments = whisper_data.get("transcription", [])
+            labeled_transcript, speaker_count = merge_whisper_with_diarization(
+                whisper_segments, diarization_segments
+            )
+
+            if speaker_count > 0:
+                logger.info(f"\n✓ Diarization complete - {speaker_count} speaker(s) detected")
+            else:
+                logger.warning("Diarization returned no speaker segments, using plain transcript")
+
+            # Write labeled transcript to temp file for markdown creation
+            labeled_txt = f"{temp_whisper_output}_labeled.txt"
+            with open(labeled_txt, "w", encoding="utf-8") as f:
+                f.write(labeled_transcript)
+            transcript_file = labeled_txt
+        else:
+            transcript_file = f"{temp_whisper_output}.txt"
+
         # Create Markdown file (transcript)
-        transcript_file = f"{temp_whisper_output}.txt"
 
         logger.info("\nCreating Markdown file...")
         markdown_file = get_unique_filename(output_dir, smart_filename, ".md")
@@ -553,6 +597,10 @@ def process_input_source(
         except json.JSONDecodeError as e:
             logger.warning(f"Invalid JSON in front_matter, using empty dict: {e}")
             front_matter = {}
+
+        if diarize and speaker_count and speaker_count > 0:
+            front_matter["diarized"] = True
+            front_matter["speaker_count"] = speaker_count
 
         if not create_markdown_file(
             markdown_file,
@@ -625,6 +673,8 @@ def process_input_source(
             analysis_cost=analysis_metadata.get("estimated_cost", 0) or 0,
             analysis_truncated=analysis_metadata.get("truncated", False),
             analysis_file=analysis_file.name if analysis_file else None,
+            diarization_performed=diarize,
+            speaker_count=speaker_count,
         )
 
         save_statistics(stats_file, stats, args.verbose)
@@ -662,7 +712,13 @@ def process_input_source(
         logger.info("\n\n✗ Process interrupted by user.")
         return False
 
-    except (DownloadError, TranscriptionError, FileProcessingError, AnalysisError) as e:
+    except (
+        DownloadError,
+        TranscriptionError,
+        FileProcessingError,
+        AnalysisError,
+        DiarizationError,
+    ) as e:
         log_error(str(e))
         if args.verbose:
             traceback.print_exc()

@@ -358,6 +358,12 @@ Short Flags:
         help="Language code for transcription (e.g., 'uk', 'en', 'de'). Default: auto-detect.",
     )
     parser.add_argument(
+        "--diarize",
+        action="store_true",
+        default=False,
+        help="Run speaker diarization using pyannote.audio (requires HUGGINGFACE_TOKEN env var)",
+    )
+    parser.add_argument(
         "--output_format",
         default="otxt",
         help="Whisper output format (txt, vtt, srt, json). Prefix with 'o' for original filename.",

@@ -154,6 +154,36 @@ uv run pidcast lib digest
 
 The library is stored at `~/.config/pidcast/library.yaml` (or `%APPDATA%\pidcast\library.yaml` on Windows) and is human-readable and editable.
 
+## Speaker diarization
+
+Pidcast supports optional speaker diarization (identifying who said what) using [pyannote.audio](https://github.com/pyannote/pyannote-audio). Diarization runs locally on your machine - the HuggingFace token is only needed to download the model on first use.
+
+### Setup
+
+1. **Install diarization dependencies**:
+
+   ```bash
+   uv pip install 'pidcast[diarize]'
+   ```
+
+2. **Accept the pyannote model license** - visit [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) on HuggingFace, sign in, and accept the license terms.
+
+3. **Create a HuggingFace access token** - go to [Settings > Access Tokens](https://huggingface.co/settings/tokens), create a token with `read` scope, and add it to your `.env`:
+
+   ```bash
+   HUGGINGFACE_TOKEN=hf_your_token_here
+   ```
+
+4. **Run with diarization**:
+
+   ```bash
+   uv run pidcast "VIDEO_URL" --diarize
+   ```
+
+The first run will download the model (~1 GB). Subsequent runs use the cached version.
+
+When diarization is enabled, the transcript output includes speaker labels and the front matter includes `speaker_count` and `diarized: true`.
+
 ## Analysis prompts and configuration
 
 ### Prompt templates
