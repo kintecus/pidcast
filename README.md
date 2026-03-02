@@ -166,7 +166,7 @@ Pidcast supports optional speaker diarization (identifying who said what) using 
    uv pip install 'pidcast[diarize]'
    ```
 
-2. **Accept the pyannote model license** - visit [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) on HuggingFace, sign in, and accept the license terms.
+2. **Accept the pyannote model licenses** - visit [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) on HuggingFace, sign in, and accept the license terms. You also need to accept the license for [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0).
 
 3. **Create a HuggingFace access token** - go to [Settings > Access Tokens](https://huggingface.co/settings/tokens), create a token with `read` scope, and add it to your `.env`:
 
