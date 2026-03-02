@@ -36,8 +36,8 @@ def _load_pipeline(hf_token: str):
 
     try:
         pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-community-1",
-            token=hf_token,
+            "pyannote/speaker-diarization-3.1",
+            use_auth_token=hf_token,
         )
     except Exception as e:
         raise DiarizationError(f"Failed to load pyannote pipeline: {e}") from e
