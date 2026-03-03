@@ -163,9 +163,7 @@ def run_single_eval(args, groq_api_key: str) -> None:
     if result.success:
         console.print("[bold green]✓ Eval completed successfully[/bold green]")
         console.print(f"\n  Run ID: {result.run_id}")
-        console.print(
-            f"  Tokens: {result.tokens_input:,} input / {result.tokens_output:,} output"
-        )
+        console.print(f"  Tokens: {result.tokens_input:,} input / {result.tokens_output:,} output")
         console.print(f"  Cost: ${result.estimated_cost:.4f}")
         console.print(f"  Duration: {result.duration_seconds:.2f}s")
         console.print(f"\n  Results saved to: {results_dir / result.run_id}")
@@ -228,9 +226,7 @@ def run_batch_evals(args, groq_api_key: str) -> None:
     console.print(f"  Prompts: {', '.join(prompt_versions)}")
     console.print(f"  Models: {', '.join(models)}")
     console.print(f"  Transcripts: {', '.join(transcript_ids)}")
-    console.print(
-        f"  Total evals: {len(prompt_versions) * len(models) * len(transcript_ids)}"
-    )
+    console.print(f"  Total evals: {len(prompt_versions) * len(models) * len(transcript_ids)}")
     console.print()
 
     # Run batch

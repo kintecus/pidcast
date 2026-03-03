@@ -30,8 +30,7 @@ def _load_pipeline(hf_token: str):
         from pyannote.audio import Pipeline
     except ImportError as e:
         raise DiarizationError(
-            "pyannote.audio is not installed. "
-            "Install with: uv pip install 'pidcast[diarize]'"
+            "pyannote.audio is not installed. Install with: uv pip install 'pidcast[diarize]'"
         ) from e
 
     try:

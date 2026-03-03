@@ -129,6 +129,7 @@ class LibraryManager:
         # Determine backfill count: use provided value, then global config, then code default
         if backfill_count is None:
             from .config_manager import ConfigManager
+
             config = ConfigManager.load_config()
             backfill_count = config.get("backfill_limit", 5)
 

@@ -275,9 +275,7 @@ def run_whisper_transcription(
 
                         # Run transcription in subprocess
                         proc = subprocess.Popen(
-                            command,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.PIPE
+                            command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
                         )
 
                         # Update progress based on elapsed time
@@ -294,24 +292,32 @@ def run_whisper_transcription(
                         # Check return code
                         if proc.returncode != 0:
                             stderr = proc.stderr.read().decode() if proc.stderr else ""
-                            raise subprocess.CalledProcessError(proc.returncode, command, stderr=stderr)
+                            raise subprocess.CalledProcessError(
+                                proc.returncode, command, stderr=stderr
+                            )
 
                     else:
                         # No estimate - just show spinner
                         task = progress.add_task("transcribe", total=None)
-                        subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                        subprocess.run(
+                            command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+                        )
                         progress.update(task, completed=1)
 
             except ImportError:
                 # Fallback if rich is not installed
                 logger.info("Transcribing (install 'rich' for progress display)...")
-                subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                subprocess.run(
+                    command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+                )
         else:
             # Verbose mode or no progress
             if verbose:
                 subprocess.run(command, check=True)
             else:
-                subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                subprocess.run(
+                    command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+                )
 
         if verbose:
             logger.info("✓ Transcription completed successfully.")
