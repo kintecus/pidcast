@@ -71,9 +71,7 @@ class Summarizer:
 
             try:
                 prompt_template = self.prompts.get("one_liner_batch", {})
-                prompt = prompt_template.get("user_prompt", "").format(
-                    episodes=yaml.dump(batch)
-                )
+                prompt = prompt_template.get("user_prompt", "").format(episodes=yaml.dump(batch))
                 system_prompt = prompt_template.get("system_prompt", "")
 
                 response = self._call_groq_api(

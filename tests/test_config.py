@@ -8,6 +8,7 @@ def test_project_root_exists():
     assert PROJECT_ROOT.exists()
     assert (PROJECT_ROOT / "pyproject.toml").exists()
 
+
 def test_get_project_root():
     """Test get_project_root function."""
     root = get_project_root()

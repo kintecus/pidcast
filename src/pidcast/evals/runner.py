@@ -98,13 +98,12 @@ class EvalRunner:
         user_prompt = substitute_prompt_variables(prompt.user_prompt, variables)
 
         # Estimate tokens and cost
-        estimated_input_tokens = int(
-            (len(system_prompt) + len(user_prompt)) / CHAR_TO_TOKEN_RATIO
-        )
+        estimated_input_tokens = int((len(system_prompt) + len(user_prompt)) / CHAR_TO_TOKEN_RATIO)
         estimated_output_tokens = prompt.max_output_tokens
-        estimated_cost = estimate_analysis_cost(
-            estimated_input_tokens, estimated_output_tokens, config.model
-        ) or 0.0
+        estimated_cost = (
+            estimate_analysis_cost(estimated_input_tokens, estimated_output_tokens, config.model)
+            or 0.0
+        )
 
         if verbose:
             logger.info(

@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class LLMCallResult:
     """Result from an LLM API call."""
+
     response_text: str
     model: str
     tokens_in: int
@@ -64,9 +65,7 @@ class LLMCallResult:
 # ============================================================================
 
 
-def parse_llm_json_response(
-    response_text: str, verbose: bool = False
-) -> tuple[str, list[str]]:
+def parse_llm_json_response(response_text: str, verbose: bool = False) -> tuple[str, list[str]]:
     """Parse JSON response from LLM with robust error handling.
 
     Attempts multiple strategies to extract analysis and tags:
@@ -97,10 +96,12 @@ def parse_llm_json_response(
         # Validate contextual_tags is a list of strings
         tags = result_json.get("contextual_tags", [])
         if isinstance(tags, list):
-            contextual_tags = [str(t) for t in tags if isinstance(t, (str, int, float))]
+            contextual_tags = [str(t) for t in tags if isinstance(t, str | int | float)]
         else:
             if verbose:
-                logger.warning(f"contextual_tags is not a list (got {type(tags).__name__}), ignoring")
+                logger.warning(
+                    f"contextual_tags is not a list (got {type(tags).__name__}), ignoring"
+                )
 
         if verbose and contextual_tags:
             logger.info(f"Generated tags: {contextual_tags}")
@@ -111,8 +112,8 @@ def parse_llm_json_response(
         pass  # Try other strategies
 
     # Strategy 2: Strip markdown code fences
-    stripped = re.sub(r'^```(?:json)?\s*', '', response_text.strip(), flags=re.MULTILINE)
-    stripped = re.sub(r'\s*```$', '', stripped.strip(), flags=re.MULTILINE)
+    stripped = re.sub(r"^```(?:json)?\s*", "", response_text.strip(), flags=re.MULTILINE)
+    stripped = re.sub(r"\s*```$", "", stripped.strip(), flags=re.MULTILINE)
 
     if stripped != response_text:
         try:
@@ -123,7 +124,7 @@ def parse_llm_json_response(
 
             tags = result_json.get("contextual_tags", [])
             if isinstance(tags, list):
-                contextual_tags = [str(t) for t in tags if isinstance(t, (str, int, float))]
+                contextual_tags = [str(t) for t in tags if isinstance(t, str | int | float)]
 
             if verbose:
                 logger.info("Successfully parsed JSON after stripping markdown fences")
@@ -136,7 +137,7 @@ def parse_llm_json_response(
             pass  # Try next strategy
 
     # Strategy 3: Fix common JSON errors (trailing commas)
-    fixed = re.sub(r',\s*([}\]])', r'\1', stripped)
+    fixed = re.sub(r",\s*([}\]])", r"\1", stripped)
 
     if fixed != stripped:
         try:
@@ -147,7 +148,7 @@ def parse_llm_json_response(
 
             tags = result_json.get("contextual_tags", [])
             if isinstance(tags, list):
-                contextual_tags = [str(t) for t in tags if isinstance(t, (str, int, float))]
+                contextual_tags = [str(t) for t in tags if isinstance(t, str | int | float)]
 
             if verbose:
                 logger.info("Successfully parsed JSON after fixing trailing commas")
@@ -160,11 +161,7 @@ def parse_llm_json_response(
             pass  # Try final fallback
 
     # Strategy 4: Regex extraction fallback - try to extract analysis field
-    analysis_match = re.search(
-        r'"analysis"\s*:\s*"((?:[^"\\]|\\.)*)"',
-        response_text,
-        re.DOTALL
-    )
+    analysis_match = re.search(r'"analysis"\s*:\s*"((?:[^"\\]|\\.)*)"', response_text, re.DOTALL)
 
     if analysis_match:
         analysis_text = analysis_match.group(1)
@@ -291,7 +288,9 @@ def strip_json_formatting_rules(prompt: str) -> str:
 
     for line in lines:
         # Detect start of JSON formatting section
-        if any(marker in line for marker in ["CRITICAL FORMATTING RULES", "CRITICAL:", "JSON FORMAT"]):
+        if any(
+            marker in line for marker in ["CRITICAL FORMATTING RULES", "CRITICAL:", "JSON FORMAT"]
+        ):
             skip_section = True
             continue
 
@@ -299,10 +298,12 @@ def strip_json_formatting_rules(prompt: str) -> str:
         if skip_section:
             stripped = line.strip()
             # Continue skipping if line is a list item or part of JSON example
-            if (stripped.startswith(("1.", "2.", "3.", "4.", "5.", "-", "*")) or
-                stripped.startswith(("{", "}", '"')) or
-                "json" in stripped.lower() or
-                "contextual_tags" in stripped):
+            if (
+                stripped.startswith(("1.", "2.", "3.", "4.", "5.", "-", "*"))
+                or stripped.startswith(("{", "}", '"'))
+                or "json" in stripped.lower()
+                or "contextual_tags" in stripped
+            ):
                 continue
             # Empty line might signal end of section
             if stripped == "":
@@ -441,7 +442,7 @@ def _call_llm_with_fallback(
                         "system_prompt_preview": system_prompt[:200],
                         "user_prompt_preview": user_prompt[:200],
                         "use_json_mode": use_json_mode,
-                    }
+                    },
                 )
 
                 # Try next model in fallback chain for JSON issues
@@ -469,13 +470,18 @@ def _call_llm_with_fallback(
                             {
                                 "models_tried": sorted(tried),
                                 "falling_back_to": "plain_text_two_call",
-                            }
+                            },
                         )
 
                         # Use two-call strategy and return result with tags
                         return _analyze_with_plain_text_fallback(
-                            client, selector, system_prompt, user_prompt,
-                            max_tokens, preferred_model, verbose
+                            client,
+                            selector,
+                            system_prompt,
+                            user_prompt,
+                            max_tokens,
+                            preferred_model,
+                            verbose,
                         )
                     else:
                         # Not using JSON mode, so we can't fall back
@@ -564,7 +570,7 @@ def _analyze_with_plain_text_fallback(
             {
                 "error": str(e),
                 "error_type": type(e).__name__,
-            }
+            },
         )
         raise
 
@@ -603,13 +609,15 @@ def _analyze_with_plain_text_fallback(
         # Parse tags from response (comma-separated or newlines)
         tag_response = result2.response_text.strip()
         # Remove common prefixes like "Tags:", "Here are the tags:", etc.
-        tag_response = re.sub(r'^(tags?|here are the tags?):?\s*', '', tag_response, flags=re.IGNORECASE)
+        tag_response = re.sub(
+            r"^(tags?|here are the tags?):?\s*", "", tag_response, flags=re.IGNORECASE
+        )
         # Split by comma or newline
         raw_tags = [t.strip() for t in tag_response.replace("\n", ",").split(",") if t.strip()]
         # Clean up tags (remove quotes, bullets, numbers)
         for tag in raw_tags[:5]:  # Limit to 5
-            tag = re.sub(r'^[\d\.\-\*\)]+\s*', '', tag)  # Remove list markers
-            tag = tag.strip('"\'`')  # Remove quotes
+            tag = re.sub(r"^[\d\.\-\*\)]+\s*", "", tag)  # Remove list markers
+            tag = tag.strip("\"'`")  # Remove quotes
             if tag and len(tag) > 2:  # Skip very short tags
                 tags.append(tag)
 
@@ -624,7 +632,7 @@ def _analyze_with_plain_text_fallback(
             {
                 "error": str(e),
                 "error_type": type(e).__name__,
-            }
+            },
         )
 
     return LLMCallResult(
@@ -745,6 +753,7 @@ def _analyze_single(
 @dataclass
 class ChunkProgress:
     """Progress tracking for chunk analysis."""
+
     current: int
     total: int
     phase: str  # "chunk" or "synthesis"

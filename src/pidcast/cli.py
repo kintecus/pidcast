@@ -75,7 +75,7 @@ def prompt_duplicate_detected(
     console.print()
     console.print(
         Panel(
-            "[yellow bold]Duplicate Detected![/yellow bold]\n\n" \
+            "[yellow bold]Duplicate Detected![/yellow bold]\n\n"
             "This video was previously transcribed.",
             border_style="yellow",
         )
@@ -251,8 +251,10 @@ Short Flags:
         subparsers = parser.add_subparsers(dest="mode", help="Command mode", required=False)
 
         # Library subcommand with nested subparsers
-        lib_parser = subparsers.add_parser('lib', help='Podcast library management')
-        lib_subparsers = lib_parser.add_subparsers(dest='lib_command', help="Library management commands", required=True)
+        lib_parser = subparsers.add_parser("lib", help="Podcast library management")
+        lib_subparsers = lib_parser.add_subparsers(
+            dest="lib_command", help="Library management commands", required=True
+        )
 
         # Add command
         add_parser = lib_subparsers.add_parser("add", help="Add podcast to library")
@@ -263,26 +265,38 @@ Short Flags:
         add_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
 
         # Process command (NEW)
-        process_parser = lib_subparsers.add_parser("process", help="Process an episode from a library show")
+        process_parser = lib_subparsers.add_parser(
+            "process", help="Process an episode from a library show"
+        )
         process_parser.add_argument("show_query", help="Show ID or partial name")
-        process_parser.add_argument("--latest", action="store_true", help="Process the latest episode")
+        process_parser.add_argument(
+            "--latest", action="store_true", help="Process the latest episode"
+        )
         process_parser.add_argument("--match", help="Process episode matching this title string")
         # Reuse common flags for processing
         process_parser.add_argument("--output_dir", help="Output directory")
-        process_parser.add_argument("--save_to_obsidian", action="store_true", help="Save to Obsidian")
+        process_parser.add_argument(
+            "--save_to_obsidian", action="store_true", help="Save to Obsidian"
+        )
         process_parser.add_argument("--whisper_model", help="Whisper model path")
         process_parser.add_argument("--groq_api_key", help="Groq API key")
-        process_parser.add_argument("--analysis_type", default="executive_summary", help="Analysis type")
+        process_parser.add_argument(
+            "--analysis_type", default="executive_summary", help="Analysis type"
+        )
         process_parser.add_argument("--prompts_file", help="Prompts file path")
         process_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
         process_parser.add_argument("--force", action="store_true", help="Force reprocessing")
         process_parser.add_argument("--output_format", default="otxt", help="Output format")
-        process_parser.add_argument("--keep_transcript", action="store_true", help="Keep transcript")
+        process_parser.add_argument(
+            "--keep_transcript", action="store_true", help="Keep transcript"
+        )
         process_parser.add_argument("--po_token", help="PO Token")
         process_parser.add_argument("--front_matter", default="{}", help="Front matter JSON")
         process_parser.add_argument("--save", action="store_true", help="Save output")
         process_parser.add_argument("--no-analyze", action="store_true", help="Skip analysis")
-        process_parser.add_argument("--skip_analysis_on_error", action="store_true", help="Skip analysis on error")
+        process_parser.add_argument(
+            "--skip_analysis_on_error", action="store_true", help="Skip analysis on error"
+        )
         process_parser.add_argument("--stats_file", help="Stats file path")
         process_parser.add_argument("--groq_model", help="Groq model")
 
@@ -304,15 +318,23 @@ Short Flags:
         remove_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
 
         # Sync command
-        sync_parser = lib_subparsers.add_parser("sync", help="Sync library shows and process new episodes")
-        sync_parser.add_argument("--show", type=int, metavar="ID", help="Sync only specific show by ID")
+        sync_parser = lib_subparsers.add_parser(
+            "sync", help="Sync library shows and process new episodes"
+        )
+        sync_parser.add_argument(
+            "--show", type=int, metavar="ID", help="Sync only specific show by ID"
+        )
         sync_parser.add_argument("--dry-run", action="store_true", help="Preview only")
         sync_parser.add_argument("--force", action="store_true", help="Reprocess episodes")
-        sync_parser.add_argument("--backfill", type=int, metavar="N", help="Override backfill limit")
+        sync_parser.add_argument(
+            "--backfill", type=int, metavar="N", help="Override backfill limit"
+        )
         sync_parser.add_argument("--output_dir", help="Output directory")
         sync_parser.add_argument("--whisper_model", help="Whisper model path")
         sync_parser.add_argument("--groq_api_key", help="Groq API key")
-        sync_parser.add_argument("--analysis_type", default="executive_summary", help="Analysis type")
+        sync_parser.add_argument(
+            "--analysis_type", default="executive_summary", help="Analysis type"
+        )
         sync_parser.add_argument("--prompts_file", help="Prompts file path")
         sync_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
         sync_parser.add_argument("--no-digest", action="store_true", help="Skip digest generation")
@@ -540,6 +562,7 @@ def cmd_process(args: argparse.Namespace) -> None:
             from rich.console import Console
             from rich.prompt import Prompt
             from rich.table import Table
+
             console = Console()
 
             table = Table(show_header=True)
@@ -557,7 +580,7 @@ def cmd_process(args: argparse.Namespace) -> None:
             # Ask for selection
             choices = [str(i) for i in range(1, len(display_episodes) + 1)]
             choice = Prompt.ask("Select episode", choices=choices)
-            selected_episode = display_episodes[int(choice)-1]
+            selected_episode = display_episodes[int(choice) - 1]
         except ImportError:
             # Fallback
             print("Rich not installed, and no selection flags used. Defaulting to latest.")
@@ -576,12 +599,13 @@ def cmd_process(args: argparse.Namespace) -> None:
         channel=show.title,
         upload_date=selected_episode.pub_date.strftime("%Y%m%d"),
         description=selected_episode.description,
-        duration=selected_episode.duration or 0
+        duration=selected_episode.duration or 0,
     )
 
     # Resolve whisper model
     if args.whisper_model:
         from .transcription import resolve_whisper_model
+
         try:
             args.whisper_model = resolve_whisper_model(args.whisper_model)
         except Exception as e:
@@ -602,7 +626,7 @@ def cmd_process(args: argparse.Namespace) -> None:
         str(uuid.uuid4()),
         datetime.datetime.now().isoformat(),
         time.time(),
-        video_info_override=video_info
+        video_info_override=video_info,
     )
 
 
@@ -752,7 +776,9 @@ def cmd_show(args: argparse.Namespace) -> None:
     try:
         show = library.get_show(args.show_id)
         if not show:
-            log_error(f"Show ID {args.show_id} not found. Run 'pidcast list' to see available shows.")
+            log_error(
+                f"Show ID {args.show_id} not found. Run 'pidcast list' to see available shows."
+            )
             return
 
         # Fetch episodes
@@ -774,7 +800,9 @@ def cmd_show(args: argparse.Namespace) -> None:
             if show.last_checked:
                 info_table.add_row("Last Checked", show.last_checked.strftime("%Y-%m-%d %H:%M"))
 
-            console.print(Panel(info_table, title=f"[bold]{show.title}[/bold]", border_style="cyan"))
+            console.print(
+                Panel(info_table, title=f"[bold]{show.title}[/bold]", border_style="cyan")
+            )
 
             # Episodes
             console.print(f"\n[bold]Recent Episodes (showing {len(episodes)}):[/bold]")
@@ -793,7 +821,7 @@ def cmd_show(args: argparse.Namespace) -> None:
         else:
             print(f"\n{'=' * 80}")
             print(f"Show Details (ID: {show.id})")
-            print(f"{ '=' * 80}")
+            print(f"{'=' * 80}")
             print(f"Title: {show.title}")
             print(f"Author: {show.author or 'Unknown'}")
             print(f"Feed URL: {show.feed_url}")
@@ -957,6 +985,7 @@ def cmd_sync(args: argparse.Namespace) -> None:
 
     # Resolve model name to path
     from .transcription import resolve_whisper_model
+
     try:
         whisper_model = resolve_whisper_model(whisper_model)
     except Exception as e:
@@ -996,13 +1025,13 @@ def cmd_sync(args: argparse.Namespace) -> None:
         # Print summary
         logger.info(f"\n{'=' * 60}")
         logger.info("Sync Complete!")
-        logger.info(f"{ '=' * 60}")
+        logger.info(f"{'=' * 60}")
         logger.info(f"Processed: {stats['processed']} episodes")
         logger.info(f"Succeeded: {stats['succeeded']}")
         logger.info(f"Failed: {stats['failed']}")
         if stats["skipped"] > 0:
             logger.info(f"Skipped: {stats['skipped']} (already processed)")
-        logger.info(f"{ '=' * 60}\n")
+        logger.info(f"{'=' * 60}\n")
 
         # Generate digest unless --no-digest flag is set
         if not args.no_digest and stats["succeeded"] > 0 and groq_api_key:
@@ -1014,7 +1043,9 @@ def cmd_sync(args: argparse.Namespace) -> None:
 
             try:
                 logger.info("Generating digest...")
-                prompts_file = Path(args.prompts_file) if args.prompts_file else DEFAULT_PROMPTS_FILE
+                prompts_file = (
+                    Path(args.prompts_file) if args.prompts_file else DEFAULT_PROMPTS_FILE
+                )
                 summarizer = Summarizer(prompts_file, groq_api_key)
                 digest_generator = DigestGenerator(library, history, summarizer)
 
@@ -1053,16 +1084,19 @@ def main() -> None:
     # Handle discovery/list commands first (they exit immediately)
     if getattr(args, "list_analyses", False):
         from .utils import list_available_analyses
+
         list_available_analyses()
         return
 
     if getattr(args, "list_models", False):
         from .utils import list_available_models
+
         list_available_models()
         return
 
     if getattr(args, "list_whisper_models", False):
         from .transcription import list_whisper_models
+
         models = list_whisper_models()
         if not models:
             print("No whisper models found. Set WHISPER_MODELS_DIR or WHISPER_MODEL env var.")
@@ -1098,6 +1132,7 @@ def main() -> None:
     # Resolve analysis type with fuzzy matching
     if args.analysis_type and args.analysis_type != "executive_summary":
         from .utils import resolve_analysis_type
+
         try:
             resolved_type = resolve_analysis_type(args.analysis_type, args.prompts_file)
             if resolved_type != args.analysis_type and args.verbose:
@@ -1110,6 +1145,7 @@ def main() -> None:
     # Resolve model name with fuzzy matching
     if args.groq_model:
         from .utils import resolve_model_name
+
         try:
             resolved_model = resolve_model_name(args.groq_model)
             if resolved_model != args.groq_model and args.verbose:
@@ -1122,6 +1158,7 @@ def main() -> None:
     # Resolve whisper model name to path
     if args.whisper_model and not args.analyze_existing:
         from .transcription import resolve_whisper_model
+
         try:
             resolved = resolve_whisper_model(args.whisper_model)
             if resolved != args.whisper_model and args.verbose:
@@ -1157,8 +1194,14 @@ def main() -> None:
             return
 
         run_analyze_existing_mode(
-            args.analyze_existing, args, output_dir, analysis_output_dir,
-            stats_file, run_uid, run_timestamp, start_time
+            args.analyze_existing,
+            args,
+            output_dir,
+            analysis_output_dir,
+            stats_file,
+            run_uid,
+            run_timestamp,
+            start_time,
         )
         return
 
@@ -1170,9 +1213,7 @@ def main() -> None:
 
     # Check for duplicate transcription (unless --force is used)
     if not args.force:
-        prev_transcription = find_existing_transcription(
-            stats_file, args.input_source, output_dir
-        )
+        prev_transcription = find_existing_transcription(stats_file, args.input_source, output_dir)
 
         if prev_transcription:
             # Handle non-interactive mode
@@ -1193,8 +1234,14 @@ def main() -> None:
 
             elif action == DuplicateAction.ANALYZE_EXISTING:
                 run_analyze_existing_mode(
-                    prev_transcription.transcript_path, args, output_dir,
-                    analysis_output_dir, stats_file, run_uid, run_timestamp, start_time
+                    prev_transcription.transcript_path,
+                    args,
+                    output_dir,
+                    analysis_output_dir,
+                    stats_file,
+                    run_uid,
+                    run_timestamp,
+                    start_time,
                 )
                 return
 
@@ -1206,8 +1253,14 @@ def main() -> None:
 
     # Run the main transcription workflow
     process_input_source(
-        args.input_source, args, output_dir, analysis_output_dir, stats_file,
-        run_uid, run_timestamp, start_time
+        args.input_source,
+        args,
+        output_dir,
+        analysis_output_dir,
+        stats_file,
+        run_uid,
+        run_timestamp,
+        start_time,
     )
 
 

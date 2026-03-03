@@ -105,7 +105,6 @@ class SyncEngine:
             BarColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         ) as progress:
-
             for show in shows:
                 task = progress.add_task(f"[cyan]{show.title}", total=None)
 
@@ -119,15 +118,11 @@ class SyncEngine:
                         progress.update(task, completed=len(episodes))
                         continue
 
-                    logger.info(
-                        f"  Found {len(episodes)} new episode(s) for: {show.title}"
-                    )
+                    logger.info(f"  Found {len(episodes)} new episode(s) for: {show.title}")
 
                     for episode in episodes:
                         if dry_run:
-                            logger.info(
-                                f"    [DRY RUN] Would process: {episode.title}"
-                            )
+                            logger.info(f"    [DRY RUN] Would process: {episode.title}")
                             self.stats["processed"] += 1
                             progress.advance(task)
                             continue
@@ -150,6 +145,7 @@ class SyncEngine:
                     logger.error(f"  Error syncing {show.title}: {e}")
                     if self.verbose:
                         import traceback
+
                         traceback.print_exc()
                     continue
 
@@ -183,14 +179,9 @@ class SyncEngine:
                 logger.info(f"    Backfilling {limit} episodes for new show")
         else:
             # Existing show: filter by pub_date
-            episodes = [
-                ep for ep in episodes
-                if ep.pub_date > show.last_checked
-            ]
+            episodes = [ep for ep in episodes if ep.pub_date > show.last_checked]
             if self.verbose:
-                logger.info(
-                    f"    Found {len(episodes)} episodes since last check"
-                )
+                logger.info(f"    Found {len(episodes)} episodes since last check")
 
         # Filter out already processed (unless force)
         if not force:
@@ -203,8 +194,7 @@ class SyncEngine:
 
             if self.verbose and len(episodes) != len(unprocessed):
                 logger.info(
-                    f"    Skipping {len(episodes) - len(unprocessed)} "
-                    "already processed episodes"
+                    f"    Skipping {len(episodes) - len(unprocessed)} already processed episodes"
                 )
 
             episodes = unprocessed
@@ -267,12 +257,8 @@ class SyncEngine:
             transcript_file = f"{temp_output}.txt"
 
             # Create markdown file
-            smart_filename = create_smart_filename(
-                episode.title, max_length=60, include_date=True
-            )
-            markdown_file = get_unique_filename(
-                self.output_dir, smart_filename, ".md"
-            )
+            smart_filename = create_smart_filename(episode.title, max_length=60, include_date=True)
+            markdown_file = get_unique_filename(self.output_dir, smart_filename, ".md")
 
             # Build front matter with show metadata
             front_matter = {
@@ -302,9 +288,7 @@ class SyncEngine:
                     transcript_text = f.read()
 
                 # Load prompts
-                prompts_config = load_analysis_prompts(
-                    self.prompts_file, self.verbose
-                )
+                prompts_config = load_analysis_prompts(self.prompts_file, self.verbose)
 
                 # Run analysis
                 analysis_start = time.time()
@@ -341,9 +325,7 @@ class SyncEngine:
                     logger.warning(f"    Failed to append analysis to markdown: {e}")
 
                 if self.verbose:
-                    logger.info(
-                        f"    Analysis completed in {format_duration(analysis_duration)}"
-                    )
+                    logger.info(f"    Analysis completed in {format_duration(analysis_duration)}")
 
             # Clean up temp files
             if transcript_file and Path(transcript_file).exists():
@@ -366,6 +348,7 @@ class SyncEngine:
             logger.error(f"    ✗ {error_msg}")
             if self.verbose:
                 import traceback
+
                 traceback.print_exc()
             self.history.mark_failed(episode.guid, error_msg)
             return False
