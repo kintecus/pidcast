@@ -11,11 +11,91 @@ from .config import (
     AUDIO_SAMPLE_RATE,
     FFMPEG_PATH,
     WHISPER_CPP_PATH,
+    WHISPER_MODEL,
+    WHISPER_MODELS_DIR,
 )
 from .exceptions import TranscriptionError
-from .utils import format_duration, load_json_file
+from .utils import load_json_file
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# WHISPER MODEL RESOLUTION
+# ============================================================================
+
+
+def _get_models_dir() -> Path | None:
+    """Derive the whisper models directory from config."""
+    if WHISPER_MODELS_DIR:
+        p = Path(WHISPER_MODELS_DIR)
+        return p if p.is_dir() else None
+    if WHISPER_MODEL:
+        p = Path(WHISPER_MODEL).parent
+        return p if p.is_dir() else None
+    return None
+
+
+def list_whisper_models() -> list[dict[str, str]]:
+    """List available whisper models in the models directory.
+
+    Returns:
+        List of dicts with 'name', 'path', and 'size' keys.
+    """
+    models_dir = _get_models_dir()
+    if not models_dir:
+        return []
+
+    models = []
+    for f in sorted(models_dir.glob("ggml-*.bin")):
+        if f.name.startswith("for-tests-"):
+            continue
+        # Extract name: ggml-base.en.bin -> base.en
+        name = f.name.removeprefix("ggml-").removesuffix(".bin")
+        size_mb = f.stat().st_size / (1024 * 1024)
+        size_str = f"{size_mb / 1024:.1f} GB" if size_mb >= 1024 else f"{size_mb:.0f} MB"
+        models.append({"name": name, "path": str(f), "size": size_str})
+    return models
+
+
+def resolve_whisper_model(model_arg: str) -> str:
+    """Resolve a whisper model argument to a file path.
+
+    Accepts either a full file path or a model name (e.g., 'medium', 'large-v3-turbo').
+
+    Args:
+        model_arg: Model name or path.
+
+    Returns:
+        Absolute path to the model file.
+
+    Raises:
+        TranscriptionError: If model cannot be resolved.
+    """
+    # If it's an existing file, use it directly
+    if Path(model_arg).is_file():
+        return model_arg
+
+    # Treat as model name - look in models dir
+    models_dir = _get_models_dir()
+    if not models_dir:
+        raise TranscriptionError(
+            f"Cannot resolve model name '{model_arg}': no models directory found. "
+            "Set WHISPER_MODELS_DIR or WHISPER_MODEL environment variable."
+        )
+
+    candidate = models_dir / f"ggml-{model_arg}.bin"
+    if candidate.is_file():
+        return str(candidate)
+
+    # List available models for error message
+    available = list_whisper_models()
+    names = [m["name"] for m in available]
+    raise TranscriptionError(
+        f"Whisper model '{model_arg}' not found in {models_dir}.\n"
+        f"Available models: {', '.join(names) if names else 'none'}\n"
+        f"Download models with: {models_dir}/download-ggml-model.sh {model_arg}"
+    )
 
 
 # ============================================================================
@@ -116,6 +196,7 @@ def run_whisper_transcription(
     verbose: bool = False,
     estimated_duration: float | None = None,
     show_progress: bool = True,
+    language: str | None = None,
 ) -> bool:
     """Run whisper transcription.
 
@@ -127,6 +208,7 @@ def run_whisper_transcription(
         verbose: Enable verbose output
         estimated_duration: Estimated transcription duration for progress bar
         show_progress: Whether to show progress indicator
+        language: Language code for transcription (e.g., 'uk', 'en', 'de')
 
     Returns:
         True if successful
@@ -144,6 +226,10 @@ def run_whisper_transcription(
         "-t",
         "8",
     ]
+
+    # Add language if specified
+    if language:
+        command.extend(["-l", language])
 
     # Add output format flag
     format_flags = {
@@ -166,7 +252,13 @@ def run_whisper_transcription(
         # Run transcription with Rich progress bar
         if show_progress and not verbose:
             try:
-                from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, BarColumn
+                from rich.progress import (
+                    BarColumn,
+                    Progress,
+                    SpinnerColumn,
+                    TextColumn,
+                    TimeElapsedColumn,
+                )
 
                 with Progress(
                     SpinnerColumn(),
@@ -183,9 +275,7 @@ def run_whisper_transcription(
 
                         # Run transcription in subprocess
                         proc = subprocess.Popen(
-                            command,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.PIPE
+                            command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
                         )
 
                         # Update progress based on elapsed time
@@ -202,24 +292,32 @@ def run_whisper_transcription(
                         # Check return code
                         if proc.returncode != 0:
                             stderr = proc.stderr.read().decode() if proc.stderr else ""
-                            raise subprocess.CalledProcessError(proc.returncode, command, stderr=stderr)
+                            raise subprocess.CalledProcessError(
+                                proc.returncode, command, stderr=stderr
+                            )
 
                     else:
                         # No estimate - just show spinner
                         task = progress.add_task("transcribe", total=None)
-                        subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                        subprocess.run(
+                            command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+                        )
                         progress.update(task, completed=1)
 
             except ImportError:
                 # Fallback if rich is not installed
                 logger.info("Transcribing (install 'rich' for progress display)...")
-                subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                subprocess.run(
+                    command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+                )
         else:
             # Verbose mode or no progress
             if verbose:
                 subprocess.run(command, check=True)
             else:
-                subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                subprocess.run(
+                    command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+                )
 
         if verbose:
             logger.info("✓ Transcription completed successfully.")

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from pidcast.exceptions import FeedFetchError, FeedParseError
+from pidcast.exceptions import FeedFetchError
 from pidcast.rss import Episode, RSSParser
 
 
@@ -142,7 +142,6 @@ def test_get_feed_field():
 
 def test_parse_duration_edge_cases():
     """Test duration parsing with various edge cases."""
-    import feedparser
 
     # Mock entry
     class MockEntry:

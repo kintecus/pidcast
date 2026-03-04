@@ -5,8 +5,9 @@ Transcription and LLM-powered analysis tool for podcasts, YouTube videos, and lo
 ## Features
 
 - **Multiple input sources** - YouTube videos, podcast RSS feeds, and local audio files
-- **Whisper transcription** using whisper.cpp (local, fast)
-- **LLM analysis** with Groq AI or Claude (enabled by default)
+- **Whisper transcription** using whisper.cpp (local, fast, multi-language)
+- **Speaker diarization** - optional speaker identification via pyannote.audio
+- **LLM analysis** with Groq AI (enabled by default)
   - Automatic model fallback and retry logic
   - Smart chunking for long transcripts with semantic boundaries
   - JSON-validated structured output
@@ -41,8 +42,9 @@ Transcription and LLM-powered analysis tool for podcasts, YouTube videos, and lo
 3. **Configure** (copy `.env.example` to `.env` and set):
    - `GROQ_API_KEY` - Get free key at <https://console.groq.com/>
    - `WHISPER_CPP_PATH` - Path to whisper.cpp main binary
-   - `WHISPER_MODEL` - Path to Whisper model file
+   - `WHISPER_MODEL` - Path to Whisper model file (name like `medium` or full path)
    - `OBSIDIAN_VAULT_PATH` - (Optional) For `--save_to_obsidian`
+   - `HUGGINGFACE_TOKEN` - (Optional) For `--diarize`, see [Speaker diarization](#speaker-diarization)
 
 4. **Run**:
 
@@ -109,6 +111,12 @@ uv run pidcast --analyze_existing transcript.md
 
 # Transcribe local audio file
 uv run pidcast "/path/to/audio/file.mp3"
+
+# Specify transcription language
+uv run pidcast "VIDEO_URL" -l uk
+
+# Transcribe with speaker diarization
+uv run pidcast "VIDEO_URL" --diarize
 
 # Force re-transcription (skip duplicate detection)
 uv run pidcast "VIDEO_URL" -f
@@ -177,6 +185,36 @@ uv run pidcast lib digest
 When adding by name, pidcast first checks the local Apple Podcasts SQLite database (macOS only), then falls back to the iTunes Search API. You select from a numbered list of matches.
 
 The library is stored at `~/.config/pidcast/library.yaml` (or `%APPDATA%\pidcast\library.yaml` on Windows) and is human-readable and editable.
+
+## Speaker diarization
+
+Optional speaker identification (who said what) using [pyannote.audio](https://github.com/pyannote/pyannote-audio). Runs locally - the HuggingFace token is only needed to download the model on first use.
+
+### Setup
+
+1. **Install diarization extra**:
+
+   ```bash
+   uv pip install 'pidcast[diarize]'
+   ```
+
+2. **Get a HuggingFace token** - go to [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens), create a token with `read` scope, and add to `.env`:
+
+   ```bash
+   HUGGINGFACE_TOKEN=hf_your_token_here
+   ```
+
+3. **Accept pyannote model licenses** (one-time, both required):
+   - [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
+   - [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
+
+4. **Run**:
+
+   ```bash
+   uv run pidcast "VIDEO_URL" --diarize
+   ```
+
+First run downloads the model (~1 GB), subsequent runs use cache. Output includes `**Speaker 1**` / `**Speaker 2**` labels and front matter fields `speaker_count` and `diarized: true`.
 
 ## Analysis prompts and configuration
 
