@@ -115,14 +115,16 @@ class TestScoreRow:
 
 
 class TestJudgeSummaries:
-    JUDGE_JSON = json.dumps({
-        "scores": {
-            "A": {"accuracy": 8, "completeness": 7, "clarity": 9, "conciseness": 8},
-            "B": {"accuracy": 9, "completeness": 8, "clarity": 8, "conciseness": 7},
-        },
-        "verdict": "B",
-        "reasoning": "B was more precise.",
-    })
+    JUDGE_JSON = json.dumps(
+        {
+            "scores": {
+                "A": {"accuracy": 8, "completeness": 7, "clarity": 9, "conciseness": 8},
+                "B": {"accuracy": 9, "completeness": 8, "clarity": 8, "conciseness": 7},
+            },
+            "verdict": "B",
+            "reasoning": "B was more precise.",
+        }
+    )
 
     def test_parses_valid_judge_response(self):
         with patch(

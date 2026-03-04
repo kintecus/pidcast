@@ -299,10 +299,17 @@ Short Flags:
         )
         process_parser.add_argument("--stats_file", help="Stats file path")
         process_parser.add_argument("--groq_model", help="Groq model")
-        process_parser.add_argument("--provider", default="groq", choices=["groq", "claude"],
-                                    help="LLM provider: 'groq' (default) or 'claude'")
-        process_parser.add_argument("--claude_model", default=None,
-                                    help="Claude model alias when --provider claude: sonnet (default), opus, haiku")
+        process_parser.add_argument(
+            "--provider",
+            default="groq",
+            choices=["groq", "claude"],
+            help="LLM provider: 'groq' (default) or 'claude'",
+        )
+        process_parser.add_argument(
+            "--claude_model",
+            default=None,
+            help="Claude model alias when --provider claude: sonnet (default), opus, haiku",
+        )
 
         # List command
         list_parser = lib_subparsers.add_parser("list", help="List all shows in library")
@@ -334,7 +341,9 @@ Short Flags:
             "--backfill", type=int, metavar="N", help="Override backfill limit"
         )
         sync_parser.add_argument("--output_dir", help="Output directory")
-        sync_parser.add_argument("--whisper_model", default=WHISPER_MODEL, help="Whisper model path")
+        sync_parser.add_argument(
+            "--whisper_model", default=WHISPER_MODEL, help="Whisper model path"
+        )
         sync_parser.add_argument("--groq_api_key", help="Groq API key")
         sync_parser.add_argument(
             "--analysis_type", default="executive_summary", help="Analysis type"

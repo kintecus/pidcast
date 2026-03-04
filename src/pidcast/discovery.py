@@ -11,8 +11,14 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-APPLE_PODCASTS_DB = Path.home() / "Library" / "Group Containers" / \
-    "243LU875E5.groups.com.apple.podcasts" / "Documents" / "MTLibrary.sqlite"
+APPLE_PODCASTS_DB = (
+    Path.home()
+    / "Library"
+    / "Group Containers"
+    / "243LU875E5.groups.com.apple.podcasts"
+    / "Documents"
+    / "MTLibrary.sqlite"
+)
 
 ITUNES_SEARCH_URL = "https://itunes.apple.com/search"
 
@@ -41,13 +47,15 @@ def search_apple_podcasts_local(query: str) -> list[dict]:
                 (f"%{query}%",),
             )
             for row in cur.fetchall():
-                results.append({
-                    "title": row["ZTITLE"] or "",
-                    "feed_url": row["ZFEEDURL"] or "",
-                    "author": row["ZAUTHOR"] or "",
-                    "description": (row["ZITEMDESCRIPTION"] or "")[:200],
-                    "source": "local",
-                })
+                results.append(
+                    {
+                        "title": row["ZTITLE"] or "",
+                        "feed_url": row["ZFEEDURL"] or "",
+                        "author": row["ZAUTHOR"] or "",
+                        "description": (row["ZITEMDESCRIPTION"] or "")[:200],
+                        "source": "local",
+                    }
+                )
     except sqlite3.Error as e:
         logger.debug("Apple Podcasts DB query failed: %s", e)
 
@@ -56,12 +64,14 @@ def search_apple_podcasts_local(query: str) -> list[dict]:
 
 def search_itunes_api(query: str, limit: int = 10) -> list[dict]:
     """Search the iTunes Search API for podcasts matching query."""
-    params = urllib.parse.urlencode({
-        "term": query,
-        "media": "podcast",
-        "entity": "podcast",
-        "limit": limit,
-    })
+    params = urllib.parse.urlencode(
+        {
+            "term": query,
+            "media": "podcast",
+            "entity": "podcast",
+            "limit": limit,
+        }
+    )
     url = f"{ITUNES_SEARCH_URL}?{params}"
 
     try:
@@ -77,13 +87,15 @@ def search_itunes_api(query: str, limit: int = 10) -> list[dict]:
         feed_url = item.get("feedUrl", "")
         if not feed_url:
             continue
-        results.append({
-            "title": item.get("collectionName", ""),
-            "feed_url": feed_url,
-            "author": item.get("artistName", ""),
-            "description": item.get("description", "")[:200],
-            "source": "itunes",
-        })
+        results.append(
+            {
+                "title": item.get("collectionName", ""),
+                "feed_url": feed_url,
+                "author": item.get("artistName", ""),
+                "description": item.get("description", "")[:200],
+                "source": "itunes",
+            }
+        )
     return results
 
 

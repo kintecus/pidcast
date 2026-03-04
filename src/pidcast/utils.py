@@ -353,9 +353,7 @@ def validate_input_source(source: str) -> tuple[str, bool]:
     if source.startswith(("http://", "https://")):
         return source, False
 
-    raise ValueError(
-        f"Invalid input: '{source}' is neither a local file nor a valid URL"
-    )
+    raise ValueError(f"Invalid input: '{source}' is neither a local file nor a valid URL")
 
 
 def extract_youtube_video_id(url: str) -> str | None:

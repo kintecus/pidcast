@@ -32,9 +32,7 @@ def _find_claude_cli() -> str:
     """Return path to claude CLI, raising AnalysisError if not found."""
     path = shutil.which("claude")
     if not path:
-        raise AnalysisError(
-            "claude CLI not found. Install Claude Code: https://claude.ai/code"
-        )
+        raise AnalysisError("claude CLI not found. Install Claude Code: https://claude.ai/code")
     return path
 
 
@@ -58,9 +56,7 @@ def run_claude_subprocess(prompt: str, model: str, timeout: int = 300) -> str:
         raise AnalysisError(f"Failed to invoke claude CLI: {e}") from e
 
     if proc.returncode != 0:
-        raise AnalysisError(
-            f"Claude CLI exited with code {proc.returncode}: {proc.stderr.strip()}"
-        )
+        raise AnalysisError(f"Claude CLI exited with code {proc.returncode}: {proc.stderr.strip()}")
     output = proc.stdout.strip()
     if not output:
         raise AnalysisError("Claude CLI returned empty output")
@@ -102,9 +98,7 @@ def analyze_with_claude_cli(
 
     if analysis_type not in prompts_config.prompts:
         available = ", ".join(prompts_config.prompts.keys())
-        raise AnalysisError(
-            f"Analysis type '{analysis_type}' not found. Available: {available}"
-        )
+        raise AnalysisError(f"Analysis type '{analysis_type}' not found. Available: {available}")
 
     prompt_template = prompts_config.prompts[analysis_type]
 
