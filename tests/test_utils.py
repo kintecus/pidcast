@@ -195,6 +195,20 @@ class TestValidateInputSource:
         with pytest.raises(ValueError, match="Invalid input"):
             validate_input_source("random string that is not a file or url")
 
+    def test_direct_audio_url_accepted(self):
+        source, is_local = validate_input_source("https://cdn.example.com/episode.mp3")
+        assert source == "https://cdn.example.com/episode.mp3"
+        assert is_local is False
+
+    def test_podcast_cdn_url_with_redirect_accepted(self):
+        url = "https://op3.dev/e/https://pscrb.fm/rss/p/https://cdn.changelog.com/uploads/podcast/678/the-changelog-678.mp3"
+        source, is_local = validate_input_source(url)
+        assert is_local is False
+
+    def test_http_url_accepted(self):
+        source, is_local = validate_input_source("http://feeds.example.com/audio.m4a")
+        assert is_local is False
+
 
 # ============================================================================
 # fuzzy_match_key
