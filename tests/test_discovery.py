@@ -31,7 +31,12 @@ class TestSearchApplePodcastsLocal:
         )
         conn.execute(
             "INSERT INTO ZMTPODCAST VALUES (?, ?, ?, ?)",
-            ("The Changelog", "https://feeds.changelog.com/podcast.xml", "Changelog", "Dev podcast"),
+            (
+                "The Changelog",
+                "https://feeds.changelog.com/podcast.xml",
+                "Changelog",
+                "Dev podcast",
+            ),
         )
         conn.commit()
         conn.close()
@@ -52,8 +57,12 @@ class TestSearchApplePodcastsLocal:
             "CREATE TABLE ZMTPODCAST "
             "(ZTITLE TEXT, ZFEEDURL TEXT, ZAUTHOR TEXT, ZITEMDESCRIPTION TEXT)"
         )
-        conn.execute("INSERT INTO ZMTPODCAST VALUES (?, ?, ?, ?)", ("No Feed", "", "Author", "Desc"))
-        conn.execute("INSERT INTO ZMTPODCAST VALUES (?, ?, ?, ?)", ("No Feed2", None, "Author", "Desc"))
+        conn.execute(
+            "INSERT INTO ZMTPODCAST VALUES (?, ?, ?, ?)", ("No Feed", "", "Author", "Desc")
+        )
+        conn.execute(
+            "INSERT INTO ZMTPODCAST VALUES (?, ?, ?, ?)", ("No Feed2", None, "Author", "Desc")
+        )
         conn.commit()
         conn.close()
 
@@ -139,7 +148,6 @@ class TestSearchItunesApi:
         assert found == []
 
     def test_returns_empty_on_timeout(self):
-
         with patch("urllib.request.urlopen", side_effect=TimeoutError("timed out")):
             found = search_itunes_api("anything")
 
@@ -153,10 +161,30 @@ class TestSearchItunesApi:
 
 class TestDiscoverPodcast:
     def test_merges_and_deduplicates_by_feed_url(self):
-        local = [{"title": "Show A", "feed_url": "https://feed.example.com/rss", "author": "A", "description": "", "source": "local"}]
+        local = [
+            {
+                "title": "Show A",
+                "feed_url": "https://feed.example.com/rss",
+                "author": "A",
+                "description": "",
+                "source": "local",
+            }
+        ]
         remote = [
-            {"title": "Show A", "feed_url": "https://feed.example.com/rss/", "author": "A", "description": "", "source": "itunes"},
-            {"title": "Show B", "feed_url": "https://other.example.com/rss", "author": "B", "description": "", "source": "itunes"},
+            {
+                "title": "Show A",
+                "feed_url": "https://feed.example.com/rss/",
+                "author": "A",
+                "description": "",
+                "source": "itunes",
+            },
+            {
+                "title": "Show B",
+                "feed_url": "https://other.example.com/rss",
+                "author": "B",
+                "description": "",
+                "source": "itunes",
+            },
         ]
         with (
             patch("pidcast.discovery.search_apple_podcasts_local", return_value=local),
@@ -170,8 +198,24 @@ class TestDiscoverPodcast:
         assert "Show B" in titles
 
     def test_local_results_take_precedence_in_dedup(self):
-        local = [{"title": "Local Show", "feed_url": "https://feed.example.com/rss", "author": "L", "description": "", "source": "local"}]
-        remote = [{"title": "Remote Show", "feed_url": "https://feed.example.com/rss", "author": "R", "description": "", "source": "itunes"}]
+        local = [
+            {
+                "title": "Local Show",
+                "feed_url": "https://feed.example.com/rss",
+                "author": "L",
+                "description": "",
+                "source": "local",
+            }
+        ]
+        remote = [
+            {
+                "title": "Remote Show",
+                "feed_url": "https://feed.example.com/rss",
+                "author": "R",
+                "description": "",
+                "source": "itunes",
+            }
+        ]
         with (
             patch("pidcast.discovery.search_apple_podcasts_local", return_value=local),
             patch("pidcast.discovery.search_itunes_api", return_value=remote),
@@ -183,7 +227,13 @@ class TestDiscoverPodcast:
 
     def test_skips_itunes_when_local_has_10_results(self):
         local = [
-            {"title": f"Show {i}", "feed_url": f"https://feed{i}.example.com/rss", "author": "", "description": "", "source": "local"}
+            {
+                "title": f"Show {i}",
+                "feed_url": f"https://feed{i}.example.com/rss",
+                "author": "",
+                "description": "",
+                "source": "local",
+            }
             for i in range(10)
         ]
         with (
@@ -196,8 +246,24 @@ class TestDiscoverPodcast:
         assert len(result) == 10
 
     def test_calls_itunes_when_local_has_fewer_than_10(self):
-        local = [{"title": "Show 1", "feed_url": "https://feed1.example.com/rss", "author": "", "description": "", "source": "local"}]
-        remote = [{"title": "Show 2", "feed_url": "https://feed2.example.com/rss", "author": "", "description": "", "source": "itunes"}]
+        local = [
+            {
+                "title": "Show 1",
+                "feed_url": "https://feed1.example.com/rss",
+                "author": "",
+                "description": "",
+                "source": "local",
+            }
+        ]
+        remote = [
+            {
+                "title": "Show 2",
+                "feed_url": "https://feed2.example.com/rss",
+                "author": "",
+                "description": "",
+                "source": "itunes",
+            }
+        ]
         with (
             patch("pidcast.discovery.search_apple_podcasts_local", return_value=local),
             patch("pidcast.discovery.search_itunes_api", return_value=remote),
@@ -215,7 +281,12 @@ class TestDiscoverPodcast:
 class TestPromptUserSelection:
     RESULTS = [
         {"title": "Show A", "feed_url": "https://a.com/rss", "author": "Auth A", "source": "local"},
-        {"title": "Show B", "feed_url": "https://b.com/rss", "author": "Auth B", "source": "itunes"},
+        {
+            "title": "Show B",
+            "feed_url": "https://b.com/rss",
+            "author": "Auth B",
+            "source": "itunes",
+        },
     ]
 
     def test_returns_selected_item(self):

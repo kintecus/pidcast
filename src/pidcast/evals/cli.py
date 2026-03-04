@@ -300,7 +300,9 @@ def run_comparison_eval(args) -> None:
     """Run a provider comparison eval."""
     providers = [p.strip() for p in args.compare.split(",")]
     if len(providers) != 2:
-        console.print("[red]Error:[/red] --compare requires exactly two providers (e.g. 'groq,claude')")
+        console.print(
+            "[red]Error:[/red] --compare requires exactly two providers (e.g. 'groq,claude')"
+        )
         sys.exit(1)
 
     groq_api_key = args.groq_api_key or os.getenv("GROQ_API_KEY")
@@ -349,8 +351,12 @@ def run_comparison_eval(args) -> None:
     console.print(f"\n  Verdict: [bold]{result.verdict}[/bold]")
     console.print(f"  Reasoning: {result.reasoning}")
     if result.score_a and result.score_b:
-        console.print(f"\n  {providers[0].upper()} score: {result.score_a.total}/40 (avg {result.score_a.average:.1f})")
-        console.print(f"  {providers[1].upper()} score: {result.score_b.total}/40 (avg {result.score_b.average:.1f})")
+        console.print(
+            f"\n  {providers[0].upper()} score: {result.score_a.total}/40 (avg {result.score_a.average:.1f})"
+        )
+        console.print(
+            f"  {providers[1].upper()} score: {result.score_b.total}/40 (avg {result.score_b.average:.1f})"
+        )
     console.print(f"\n  Report saved to: {report_path}")
 
 

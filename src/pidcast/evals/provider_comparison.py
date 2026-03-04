@@ -190,13 +190,22 @@ def run_provider_comparison(
             if not groq_api_key:
                 raise AnalysisError("GROQ_API_KEY required for groq provider")
             results[provider] = analyze_transcript_with_llm(
-                transcript, video_info, analysis_type, prompts_config, groq_api_key,
-                model=None, verbose=verbose,
+                transcript,
+                video_info,
+                analysis_type,
+                prompts_config,
+                groq_api_key,
+                model=None,
+                verbose=verbose,
             )
         elif provider == "claude":
             results[provider] = analyze_with_claude_cli(
-                transcript, video_info, analysis_type, prompts_config,
-                model=claude_model, verbose=verbose,
+                transcript,
+                video_info,
+                analysis_type,
+                prompts_config,
+                model=claude_model,
+                verbose=verbose,
             )
         else:
             raise AnalysisError(f"Unknown provider: {provider}")

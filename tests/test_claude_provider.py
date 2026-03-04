@@ -35,7 +35,12 @@ def _make_prompts_config(analysis_type: str = "executive_summary"):
 
 
 def _make_video_info(**kwargs):
-    defaults = {"title": "Test Episode", "webpage_url": "https://example.com", "channel": "Test Show", "duration": 3600.0}
+    defaults = {
+        "title": "Test Episode",
+        "webpage_url": "https://example.com",
+        "channel": "Test Show",
+        "duration": 3600.0,
+    }
     defaults.update(kwargs)
     return VideoInfo(**defaults)
 
@@ -108,7 +113,9 @@ class TestRunClaudeSubprocess:
     def test_raises_on_nonzero_exit(self):
         with (
             patch("pidcast.providers.claude_provider._find_claude_cli", return_value="/bin/claude"),
-            patch("subprocess.run", return_value=self._mock_proc(returncode=1, stderr="auth error")),
+            patch(
+                "subprocess.run", return_value=self._mock_proc(returncode=1, stderr="auth error")
+            ),
             pytest.raises(AnalysisError, match="exited with code 1"),
         ):
             run_claude_subprocess("prompt", "claude-sonnet-4-6")
@@ -124,7 +131,9 @@ class TestRunClaudeSubprocess:
     def test_raises_on_timeout(self):
         with (
             patch("pidcast.providers.claude_provider._find_claude_cli", return_value="/bin/claude"),
-            patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=300)),
+            patch(
+                "subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=300)
+            ),
             pytest.raises(AnalysisError, match="timed out"),
         ):
             run_claude_subprocess("prompt", "claude-sonnet-4-6")
