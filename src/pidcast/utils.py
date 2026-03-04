@@ -349,13 +349,13 @@ def validate_input_source(source: str) -> tuple[str, bool]:
             )
         return source, True
 
-    # Check if it's a YouTube URL
-    if not YOUTUBE_URL_PATTERN.match(source):
-        raise ValueError(
-            f"Invalid input: '{source}' is neither a local file nor a valid YouTube URL"
-        )
+    # Accept any HTTP/HTTPS URL (YouTube, direct audio, podcast CDNs, etc.)
+    if source.startswith(("http://", "https://")):
+        return source, False
 
-    return source, False
+    raise ValueError(
+        f"Invalid input: '{source}' is neither a local file nor a valid URL"
+    )
 
 
 def extract_youtube_video_id(url: str) -> str | None:

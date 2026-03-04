@@ -5,7 +5,7 @@ prompts:
   executive_summary:
     name: Executive Summary
     description: Concise summary with key points for quick content triage
-    max_output_tokens: 1500
+    max_output_tokens: 1700
     system_prompt: |
       You are an expert at distilling video content into actionable briefs.
       Create summaries that help viewers decide if content is worth their time.
@@ -52,14 +52,16 @@ prompts:
          - Concrete takeaways
          - Notable quotes or data points
 
-      Keep the summary brief enough to share via text message or Discord.
+      3. **Shareable Brief**
+         - **Headline** (1 sentence, max 15 words): Reformulate the title into something punchy and click-worthy. Casual, direct language. Not a copy of the original title.
+         - **Quick take** (3-5 sentences, ~60-80 words): What this is about and why it matters. Written as if recommending to a friend - casual tone, no jargon, no filler. Should make someone want to open the link.
 
       REMEMBER: Respond with JSON only!
 
   summary:
     name: Summary
     description: Generate a concise summary of the transcript
-    max_output_tokens: 2000
+    max_output_tokens: 2200
     system_prompt: |
       You are an expert at summarizing video transcripts.
       Create clear, concise summaries that capture the main points and key insights.
@@ -98,6 +100,10 @@ prompts:
       2. Key points (3-7 bullet points)
       3. Main takeaways or conclusions
 
+      4. **Shareable Brief**
+         - **Headline** (1 sentence, max 15 words): Reformulate the title into something punchy and click-worthy. Casual, direct language. Not a copy of the original title.
+         - **Quick take** (3-5 sentences, ~60-80 words): What this is about and why it matters. Written as if recommending to a friend - casual tone, no jargon, no filler. Should make someone want to open the link.
+
       Be specific and use concrete details from the transcript.
 
       REMEMBER: Respond with JSON only!
@@ -105,7 +111,7 @@ prompts:
   key_points:
     name: Key Points Extraction
     description: Extract main ideas and important points
-    max_output_tokens: 2500
+    max_output_tokens: 2700
     system_prompt: |
       You are an expert at analyzing content and extracting key insights.
       Focus on identifying the most important ideas, facts, and actionable takeaways.
@@ -144,12 +150,16 @@ prompts:
       3. Notable Quotes: 2-3 memorable or impactful quotes
       4. Actionable Insights: Any practical advice or takeaways
 
+      5. **Shareable Brief**
+         - **Headline** (1 sentence, max 15 words): Reformulate the title into something punchy and click-worthy. Casual, direct language. Not a copy of the original title.
+         - **Quick take** (3-5 sentences, ~60-80 words): What this is about and why it matters. Written as if recommending to a friend - casual tone, no jargon, no filler. Should make someone want to open the link.
+
       REMEMBER: Respond with JSON only!
 
   action_items:
     name: Action Items & Recommendations
     description: Extract actionable recommendations and next steps
-    max_output_tokens: 2000
+    max_output_tokens: 2200
     system_prompt: |
       You are an expert at identifying actionable advice and practical recommendations.
       Focus on what viewers can do with this information.
@@ -187,12 +197,16 @@ prompts:
       3. Best Practices: Any guidelines or principles discussed
       4. Implementation Tips: How to apply these insights
 
+      5. **Shareable Brief**
+         - **Headline** (1 sentence, max 15 words): Reformulate the title into something punchy and click-worthy. Casual, direct language. Not a copy of the original title.
+         - **Quick take** (3-5 sentences, ~60-80 words): What this is about and why it matters. Written as if recommending to a friend - casual tone, no jargon, no filler. Should make someone want to open the link.
+
       REMEMBER: Respond with JSON only!
 
   comprehensive:
     name: Comprehensive Guide
     description: Detailed, archival-quality summary capturing all insights and context
-    max_output_tokens: 3500
+    max_output_tokens: 3700
     system_prompt: |
       You are an expert researcher creating a comprehensive reference document.
       Your goal is to capture every significant insight, argument, and detail so fully that reading this summary is a viable alternative to listening.
@@ -245,6 +259,10 @@ prompts:
       4. **Notable Quotes & Resources**
          - 3-5 impactful verbatim quotes.
          - List of books, tools, or specific people mentioned.
+
+      5. **Shareable Brief**
+         - **Headline** (1 sentence, max 15 words): Reformulate the title into something punchy and click-worthy. Casual, direct language. Not a copy of the original title.
+         - **Quick take** (3-5 sentences, ~60-80 words): What this is about and why it matters. Written as if recommending to a friend - casual tone, no jargon, no filler. Should make someone want to open the link.
 
       REMEMBER: Respond with JSON only!
 
