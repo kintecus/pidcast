@@ -3,14 +3,14 @@
 import functools
 import logging
 import time
-from typing import Callable, Type
+from collections.abc import Callable
 
 from groq import APIConnectionError, APITimeoutError, RateLimitError
 
 logger = logging.getLogger(__name__)
 
 # Retryable error types (transient errors that should trigger retry)
-RETRYABLE_ERRORS: tuple[Type[Exception], ...] = (
+RETRYABLE_ERRORS: tuple[type[Exception], ...] = (
     RateLimitError,
     APIConnectionError,
     APITimeoutError,
@@ -83,9 +83,7 @@ def with_retry(
                         )
                         time.sleep(delay)
                     else:
-                        logger.error(
-                            f"{func.__name__} failed after {max_retries + 1} attempts"
-                        )
+                        logger.error(f"{func.__name__} failed after {max_retries + 1} attempts")
                         raise
 
                 except Exception as e:
@@ -100,8 +98,7 @@ def with_retry(
 
                     # Unknown error - don't retry to be safe
                     logger.error(
-                        f"{func.__name__} failed with unexpected error: "
-                        f"{type(e).__name__}: {e}"
+                        f"{func.__name__} failed with unexpected error: {type(e).__name__}: {e}"
                     )
                     raise
 

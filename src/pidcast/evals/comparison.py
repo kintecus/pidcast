@@ -1,6 +1,5 @@
 """Generate side-by-side comparison markdown files."""
 
-import json
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -152,9 +151,7 @@ class ComparisonGenerator:
         if comparison_type == ComparisonType.PROMPT:
             yaml_lines.append(f"transcript: {first.transcript_id}")
             yaml_lines.append(f"model: {first.model}")
-            yaml_lines.append(
-                f"prompts_compared: [{', '.join(r.prompt_version for r in results)}]"
-            )
+            yaml_lines.append(f"prompts_compared: [{', '.join(r.prompt_version for r in results)}]")
         else:  # MODEL comparison
             yaml_lines.append(f"transcript: {first.transcript_id}")
             yaml_lines.append(f"prompt_version: {first.prompt_version}")
@@ -205,9 +202,7 @@ class ComparisonGenerator:
 
         return "\n".join(yaml_lines + content_lines)
 
-    def _create_comparison_index(
-        self, comparison_files: list[Path], index_file: Path
-    ) -> None:
+    def _create_comparison_index(self, comparison_files: list[Path], index_file: Path) -> None:
         """
         Generate index.md listing all comparisons.
 

@@ -59,7 +59,9 @@ class EvalValidator:
 
         # Check API key
         if not groq_api_key:
-            errors.append("GROQ_API_KEY not configured. Set environment variable or use --groq_api_key")
+            errors.append(
+                "GROQ_API_KEY not configured. Set environment variable or use --groq_api_key"
+            )
 
         # Check prompt versions exist
         for version in config.prompt_versions:
@@ -101,9 +103,7 @@ class EvalValidator:
                 f"Recommended: at least {min_space_mb}MB"
             )
 
-        return ValidationResult(
-            is_valid=len(errors) == 0, errors=errors, warnings=warnings
-        )
+        return ValidationResult(is_valid=len(errors) == 0, errors=errors, warnings=warnings)
 
     def _get_all_versions(self) -> str:
         """Get comma-separated list of all available versions."""

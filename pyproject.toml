@@ -19,6 +19,13 @@ dependencies = [
     "requests-cache>=1.0.0",
 ]
 
+[project.optional-dependencies]
+diarize = [
+    "pyannote.audio>=3.3.0",
+    "numpy<2",
+    "huggingface-hub<1.0",
+]
+
 [project.scripts]
 pidcast = "pidcast.cli:main"
 yt-transcribe = "pidcast.cli:main"

@@ -219,7 +219,6 @@ def test_library_persistence(temp_library_path, sample_feed_path):
 
 def test_show_to_dict():
     """Test Show.to_dict() method."""
-    from datetime import datetime
 
     show = Show(
         id=1,

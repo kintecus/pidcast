@@ -97,10 +97,10 @@ class ConfigManager:
                 f.write("# Number of recent episodes to process when adding a new show\n")
                 f.write(f"backfill_limit: {config['backfill_limit']}\n\n")
                 f.write("# Directory for transcript output\n")
-                f.write(f"output_dir: \"{config['output_dir']}\"\n\n")
+                f.write(f'output_dir: "{config["output_dir"]}"\n\n')
                 f.write("# Obsidian vault path (optional)\n")
-                if config['obsidian_vault']:
-                    f.write(f"obsidian_vault: \"{config['obsidian_vault']}\"\n\n")
+                if config["obsidian_vault"]:
+                    f.write(f'obsidian_vault: "{config["obsidian_vault"]}"\n\n')
                 else:
                     f.write("obsidian_vault: null\n\n")
                 f.write("# RSS feed cache duration (hours)\n")

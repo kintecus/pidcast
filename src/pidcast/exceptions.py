@@ -65,3 +65,9 @@ class DuplicateShowError(LibraryError):
     """Show already exists in library."""
 
     pass
+
+
+class DiarizationError(PidcastError):
+    """Speaker diarization failed."""
+
+    pass

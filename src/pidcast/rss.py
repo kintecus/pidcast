@@ -124,7 +124,9 @@ class RSSParser:
                 episodes.append(episode)
             except Exception as e:
                 if verbose:
-                    logger.warning(f"Failed to parse episode '{entry.get('title', 'Unknown')}': {e}")
+                    logger.warning(
+                        f"Failed to parse episode '{entry.get('title', 'Unknown')}': {e}"
+                    )
                 continue
 
         if not episodes:

@@ -1,13 +1,11 @@
 """Unit tests for digest generation."""
 
-import tempfile
 from datetime import datetime, timedelta
-from pathlib import Path
-from unittest.mock import MagicMock, Mock
+from unittest.mock import Mock
 
 import pytest
 
-from pidcast.digest import DigestData, DigestFormatter, DigestGenerator, ShowRollup, TopicCluster
+from pidcast.digest import DigestData, DigestFormatter, DigestGenerator, ShowRollup
 from pidcast.history import HistoryEntry, ProcessingHistory, ProcessingStatus
 from pidcast.library import LibraryManager, Show
 
