@@ -207,3 +207,6 @@ pyrightconfig.json
 
 # Claude code
 .claude/settings.local.json
+
+# Worktrees
+.worktrees/
