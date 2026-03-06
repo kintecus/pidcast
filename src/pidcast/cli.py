@@ -179,6 +179,40 @@ def _prompt_duplicate_basic(prev) -> DuplicateAction:
 
 
 # ============================================================================
+# PRESET APPLICATION
+# ============================================================================
+
+
+def apply_preset(
+    args: argparse.Namespace,
+    explicitly_set: set[str] | None = None,
+) -> None:
+    """Apply a named preset to args, without overriding explicitly set flags.
+
+    Args:
+        args: Parsed arguments namespace
+        explicitly_set: Set of arg names that were explicitly provided on CLI
+    """
+    from .config_manager import ConfigManager
+
+    if explicitly_set is None:
+        explicitly_set = set()
+
+    preset_values = ConfigManager.load_preset(args.preset)
+
+    for key, value in preset_values.items():
+        if not hasattr(args, key):
+            logger.warning(f"Unknown preset key '{key}', skipping")
+            continue
+        if key in explicitly_set:
+            continue
+        setattr(args, key, value)
+
+    if getattr(args, "verbose", False):
+        logger.info(f"Applied preset '{args.preset}': {preset_values}")
+
+
+# ============================================================================
 # ARGUMENT PARSING
 # ============================================================================
 
@@ -1145,6 +1179,46 @@ def main() -> None:
 
     # Set up logging
     setup_logging(getattr(args, "verbose", False))
+
+    # Handle --list-presets
+    if getattr(args, "list_presets", False):
+        from .config_manager import ConfigManager
+
+        presets = ConfigManager.list_presets()
+        if not presets:
+            print("No presets defined. Add presets to ~/.config/pidcast/config.yaml")
+            print("\nExample:")
+            print("  presets:")
+            print("    daily:")
+            print("      whisper_model: large-v3")
+            print("      language: uk")
+            print("      diarize: true")
+            print("      no_analyze: true")
+        else:
+            print("Available presets:\n")
+            for name, flags in presets.items():
+                flag_str = ", ".join(f"{k}={v}" for k, v in flags.items())
+                print(f"  {name}: {flag_str}")
+            print("\nUsage: pidcast <input> -p <preset>")
+        return
+
+    # Apply preset if specified
+    if getattr(args, "preset", None):
+        import sys
+
+        # Determine which args were explicitly set on CLI
+        explicitly_set = set()
+        for arg in vars(args):
+            if any(
+                a in (f"--{arg}", f"-{arg}", f"--{arg.replace('_', '-')}")
+                for a in sys.argv[1:]
+            ):
+                explicitly_set.add(arg)
+        try:
+            apply_preset(args, explicitly_set=explicitly_set)
+        except ValueError as e:
+            log_error(str(e))
+            return
 
     # Handle discovery/list commands first (they exit immediately)
     if getattr(args, "list_analyses", False):
