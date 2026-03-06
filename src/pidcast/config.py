@@ -8,10 +8,6 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-# Load environment variables from .env file if it exists
-load_dotenv()
-
-
 # ============================================================================
 # PATH RESOLUTION
 # ============================================================================
@@ -30,6 +26,9 @@ def get_project_root() -> Path:
 
 
 PROJECT_ROOT = get_project_root()
+
+# Load environment variables from project .env file
+load_dotenv(PROJECT_ROOT / ".env")
 
 
 # ============================================================================

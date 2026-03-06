@@ -35,5 +35,8 @@
       "Bash(brew list whisper-cpp)",
       "Bash(bash:*)"
     ]
+  },
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true
   }
 }
