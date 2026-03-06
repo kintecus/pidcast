@@ -1,5 +1,6 @@
 """Model selection and fallback logic for LLM analysis."""
 
+import datetime
 import logging
 import random
 import time
@@ -50,6 +51,7 @@ class ModelsConfig:
     default_model: str
     fallback_chain: list[str]
     models: dict[str, ModelConfig]
+    pricing_last_updated: str | None = None
 
     def get_model(self, name: str) -> ModelConfig | None:
         """Get model config by name."""
@@ -108,6 +110,7 @@ def load_models_config(config_path: Path) -> ModelsConfig:
 
     default_model = data.get("default_model", "llama-3.3-70b-versatile")
     fallback_chain = data.get("fallback_chain", list(models.keys()))
+    pricing_last_updated = data.get("pricing_last_updated")
 
     # Validate default_model exists
     if default_model not in models:
@@ -124,11 +127,26 @@ def load_models_config(config_path: Path) -> ModelsConfig:
             f"Available models: {list(models.keys())}"
         )
 
-    return ModelsConfig(
+    config = ModelsConfig(
         default_model=default_model,
         fallback_chain=fallback_chain,
         models=models,
+        pricing_last_updated=pricing_last_updated,
     )
+
+    if pricing_last_updated:
+        try:
+            updated_date = datetime.date.fromisoformat(pricing_last_updated)
+            days_old = (datetime.date.today() - updated_date).days
+            if days_old > 10:
+                logger.info(
+                    f"Model pricing data is {days_old} days old. "
+                    f"Review config/models.yaml for accuracy."
+                )
+        except ValueError:
+            logger.warning(f"Invalid pricing_last_updated date: {pricing_last_updated}")
+
+    return config
 
 
 # ============================================================================
