@@ -292,3 +292,121 @@ class TestModelSelector:
         selector.mark_tried("large-model")
         selector.reset()
         assert len(selector.get_tried_models()) == 0
+
+
+# ============================================================================
+# Pricing Last Updated
+# ============================================================================
+
+
+class TestPricingLastUpdated:
+    def test_load_config_parses_pricing_last_updated(self, tmp_path):
+        config_file = tmp_path / "models.yaml"
+        config_file.write_text("""
+pricing_last_updated: "2026-03-06"
+default_model: model-a
+fallback_chain:
+  - model-a
+models:
+  model-a:
+    display_name: Model A
+    provider: groq
+    context_window: 32768
+    pricing:
+      input: 0.1
+      output: 0.2
+    limits:
+      rpm: 30
+      rpd: 1000
+      tpm: 10000
+      tpd: 100000
+""")
+        config = load_models_config(config_file)
+        assert config.pricing_last_updated == "2026-03-06"
+
+    def test_load_config_missing_pricing_last_updated(self, tmp_path):
+        config_file = tmp_path / "models.yaml"
+        config_file.write_text("""
+default_model: model-a
+fallback_chain:
+  - model-a
+models:
+  model-a:
+    display_name: Model A
+    provider: groq
+    context_window: 32768
+    pricing:
+      input: 0.1
+      output: 0.2
+    limits:
+      rpm: 30
+      rpd: 1000
+      tpm: 10000
+      tpd: 100000
+""")
+        config = load_models_config(config_file)
+        assert config.pricing_last_updated is None
+
+    @patch("pidcast.model_selector.datetime")
+    def test_staleness_warning_when_old(self, mock_dt, tmp_path, caplog):
+        import datetime as real_datetime
+
+        mock_dt.date.today.return_value = real_datetime.date(2026, 3, 20)
+        mock_dt.date.fromisoformat = real_datetime.date.fromisoformat
+        config_file = tmp_path / "models.yaml"
+        config_file.write_text("""
+pricing_last_updated: "2026-03-01"
+default_model: model-a
+fallback_chain:
+  - model-a
+models:
+  model-a:
+    display_name: Model A
+    provider: groq
+    context_window: 32768
+    pricing:
+      input: 0.1
+      output: 0.2
+    limits:
+      rpm: 30
+      rpd: 1000
+      tpm: 10000
+      tpd: 100000
+""")
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="pidcast.model_selector"):
+            load_models_config(config_file)
+        assert any("pricing data is" in msg.lower() for msg in caplog.messages)
+
+    @patch("pidcast.model_selector.datetime")
+    def test_no_staleness_warning_when_fresh(self, mock_dt, tmp_path, caplog):
+        import datetime as real_datetime
+
+        mock_dt.date.today.return_value = real_datetime.date(2026, 3, 8)
+        mock_dt.date.fromisoformat = real_datetime.date.fromisoformat
+        config_file = tmp_path / "models.yaml"
+        config_file.write_text("""
+pricing_last_updated: "2026-03-06"
+default_model: model-a
+fallback_chain:
+  - model-a
+models:
+  model-a:
+    display_name: Model A
+    provider: groq
+    context_window: 32768
+    pricing:
+      input: 0.1
+      output: 0.2
+    limits:
+      rpm: 30
+      rpd: 1000
+      tpm: 10000
+      tpd: 100000
+""")
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="pidcast.model_selector"):
+            load_models_config(config_file)
+        assert not any("pricing data is" in msg.lower() for msg in caplog.messages)
