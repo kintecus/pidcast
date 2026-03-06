@@ -113,6 +113,46 @@ class ConfigManager:
             return False
 
     @staticmethod
+    def load_preset(name: str) -> dict[str, Any]:
+        """Load a named preset from config.
+
+        Args:
+            name: Preset name
+
+        Returns:
+            Dictionary of flag overrides
+
+        Raises:
+            ValueError: If preset not found or no presets defined
+        """
+        config = ConfigManager.load_config()
+        presets = config.get("presets")
+        if not presets:
+            raise ValueError(
+                "No presets defined in config. "
+                f"Add presets to {CONFIG_FILE}"
+            )
+        if name not in presets:
+            available = ", ".join(sorted(presets.keys()))
+            raise ValueError(
+                f"Unknown preset '{name}'. Available: {available}"
+            )
+        return dict(presets[name])
+
+    @staticmethod
+    def list_presets() -> dict[str, dict[str, Any]]:
+        """List all defined presets.
+
+        Returns:
+            Dictionary of preset names to their flag overrides
+        """
+        config = ConfigManager.load_config()
+        presets = config.get("presets")
+        if not presets:
+            return {}
+        return {name: dict(flags) for name, flags in presets.items()}
+
+    @staticmethod
     def _default_config() -> dict[str, Any]:
         """Default configuration.
 
