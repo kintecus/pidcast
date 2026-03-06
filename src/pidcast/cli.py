@@ -520,6 +520,23 @@ Short Flags:
         help="List available Whisper models and exit",
     )
 
+    # Preset options
+    preset_group = parser.add_argument_group("Preset Options")
+    preset_group.add_argument(
+        "-p",
+        "--preset",
+        default=None,
+        help="Use a named preset from config.yaml (e.g., 'daily', 'meeting'). "
+        "Explicit flags override preset values. Use -P to list presets.",
+    )
+    preset_group.add_argument(
+        "-P",
+        "--list-presets",
+        action="store_true",
+        dest="list_presets",
+        help="List available presets and exit",
+    )
+
     return parser.parse_args()
 
 
