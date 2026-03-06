@@ -128,15 +128,10 @@ class ConfigManager:
         config = ConfigManager.load_config()
         presets = config.get("presets")
         if not presets:
-            raise ValueError(
-                "No presets defined in config. "
-                f"Add presets to {CONFIG_FILE}"
-            )
+            raise ValueError(f"No presets defined in config. Add presets to {CONFIG_FILE}")
         if name not in presets:
             available = ", ".join(sorted(presets.keys()))
-            raise ValueError(
-                f"Unknown preset '{name}'. Available: {available}"
-            )
+            raise ValueError(f"Unknown preset '{name}'. Available: {available}")
         return dict(presets[name])
 
     @staticmethod

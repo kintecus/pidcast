@@ -1210,8 +1210,7 @@ def main() -> None:
         explicitly_set = set()
         for arg in vars(args):
             if any(
-                a in (f"--{arg}", f"-{arg}", f"--{arg.replace('_', '-')}")
-                for a in sys.argv[1:]
+                a in (f"--{arg}", f"-{arg}", f"--{arg.replace('_', '-')}") for a in sys.argv[1:]
             ):
                 explicitly_set.add(arg)
         try:
