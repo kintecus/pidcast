@@ -325,6 +325,22 @@ Short Flags:
             "--keep_transcript", action="store_true", help="Keep transcript"
         )
         process_parser.add_argument("--po_token", help="PO Token")
+        process_parser.add_argument(
+            "--cookies-from-browser",
+            default=None,
+            help="Browser to extract cookies from (e.g., 'chrome', 'firefox', 'safari')",
+        )
+        process_parser.add_argument(
+            "--cookies",
+            default=None,
+            help="Path to Netscape format cookies file",
+        )
+        process_parser.add_argument(
+            "--chrome-profile",
+            default=None,
+            dest="chrome_profile",
+            help="Chrome profile for cookie extraction (display name or directory name)",
+        )
         process_parser.add_argument("--front_matter", default="{}", help="Front matter JSON")
         process_parser.add_argument("--save", action="store_true", help="Save output")
         process_parser.add_argument("--no-analyze", action="store_true", help="Skip analysis")
@@ -455,6 +471,22 @@ Short Flags:
         default=None,
         help="PO Token for bypassing YouTube restrictions (format: 'client.type+TOKEN')",
     )
+    parser.add_argument(
+        "--cookies-from-browser",
+        default=None,
+        help="Browser to extract cookies from (e.g., 'chrome', 'firefox', 'safari')",
+    )
+    parser.add_argument(
+        "--cookies",
+        default=None,
+        help="Path to Netscape format cookies file",
+    )
+    parser.add_argument(
+        "--chrome-profile",
+        default=None,
+        dest="chrome_profile",
+        help="Chrome profile for cookie extraction (display name or directory name)",
+    )
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
     parser.add_argument(
         "--force",
@@ -552,6 +584,12 @@ Short Flags:
         action="store_true",
         dest="list_whisper_models",
         help="List available Whisper models and exit",
+    )
+    discovery_group.add_argument(
+        "--list-chrome-profiles",
+        action="store_true",
+        dest="list_chrome_profiles",
+        help="List available Chrome profiles for cookie extraction and exit",
     )
 
     # Preset options
@@ -1219,6 +1257,15 @@ def main() -> None:
             log_error(str(e))
             return
 
+    # Load chrome_profile from config if not explicitly set
+    if not getattr(args, "chrome_profile", None):
+        from .config_manager import ConfigManager
+
+        config = ConfigManager.load_config()
+        chrome_profile = config.get("chrome_profile")
+        if chrome_profile:
+            args.chrome_profile = chrome_profile
+
     # Handle discovery/list commands first (they exit immediately)
     if getattr(args, "list_analyses", False):
         from .utils import list_available_analyses
@@ -1243,6 +1290,22 @@ def main() -> None:
             for m in models:
                 print(f"  {m['name']:<25} {m['size']:>10}")
             print(f"\nUsage: pidcast <input> --whisper_model {models[0]['name']}")
+        return
+
+    if getattr(args, "list_chrome_profiles", False):
+        from .cookies import list_chrome_profiles
+
+        profiles = list_chrome_profiles()
+        if not profiles:
+            print("No Chrome profiles found.")
+        else:
+            print("Available Chrome profiles:\n")
+            print(f"  {'Display Name':<25} {'Directory':<20} {'Config Value'}")
+            print(f"  {'-' * 25} {'-' * 20} {'-' * 30}")
+            for dir_name, meta in profiles.items():
+                print(f"  {meta['display_name']:<25} {dir_name:<20} {dir_name}")
+            print(f"\nUsage: pidcast <input> --chrome-profile \"{list(profiles.keys())[0]}\"")
+            print("   Or: Set 'chrome_profile' in ~/.config/pidcast/config.yaml")
         return
 
     # Route to library commands if specified
