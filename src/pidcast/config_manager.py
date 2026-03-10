@@ -104,7 +104,10 @@ class ConfigManager:
                 else:
                     f.write("obsidian_vault: null\n\n")
                 f.write("# RSS feed cache duration (hours)\n")
-                f.write(f"feed_cache_hours: {config['feed_cache_hours']}\n")
+                f.write(f"feed_cache_hours: {config['feed_cache_hours']}\n\n")
+                f.write("# Chrome profile for cookie extraction (display name or directory name)\n")
+                f.write("# Run 'pidcast --list-chrome-profiles' to see available profiles\n")
+                f.write("chrome_profile: null\n")
 
             logger.info(f"Created default config at {CONFIG_FILE}")
             return True
@@ -159,4 +162,5 @@ class ConfigManager:
             "output_dir": str(DEFAULT_TRANSCRIPTS_DIR),
             "obsidian_vault": OBSIDIAN_PATH,
             "feed_cache_hours": DEFAULT_FEED_CACHE_HOURS,
+            "chrome_profile": None,
         }

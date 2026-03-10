@@ -507,7 +507,13 @@ def process_input_source(
         else:
             logger.info("Downloading audio from YouTube...")
             audio_file, video_info = download_audio(
-                source, "temp_audio.%(ext)s", args.verbose, args.po_token
+                source,
+                "temp_audio.%(ext)s",
+                args.verbose,
+                args.po_token,
+                cookies_from_browser=getattr(args, "cookies_from_browser", None),
+                cookies=getattr(args, "cookies", None),
+                chrome_profile=getattr(args, "chrome_profile", None),
             )
             logger.info("\n✓ Audio downloaded successfully!")
 

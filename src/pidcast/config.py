@@ -98,6 +98,8 @@ LIBRARY_FILE = CONFIG_DIR / "library.yaml"
 CONFIG_FILE = CONFIG_DIR / "config.yaml"
 HISTORY_FILE = CONFIG_DIR / "history.json"
 SYNC_LOGS_DIR = CONFIG_DIR / "logs"
+COOKIE_CACHE_DIR = CONFIG_DIR / "cache"
+COOKIE_CACHE_MAX_AGE_HOURS = 24
 
 # Library defaults
 DEFAULT_BACKFILL_LIMIT = 5
