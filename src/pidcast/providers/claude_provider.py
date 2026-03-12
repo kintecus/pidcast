@@ -71,6 +71,91 @@ def _resolve_claude_model(model: str | None) -> str:
     return CLAUDE_MODELS.get(model, model)
 
 
+class ClaudeProvider:
+    """Analysis provider that shells out to the local Claude CLI."""
+
+    def __init__(self, model: str | None = None) -> None:
+        self._model = _resolve_claude_model(model)
+
+    def analyze(
+        self,
+        transcript: str,
+        video_info: VideoInfo,
+        analysis_type: str,
+        prompts_config: PromptsConfig,
+        verbose: bool = False,
+    ) -> AnalysisResult:
+        """Analyze transcript using the local Claude CLI."""
+        if analysis_type not in prompts_config.prompts:
+            available = ", ".join(prompts_config.prompts.keys())
+            raise AnalysisError(
+                f"Analysis type '{analysis_type}' not found. Available: {available}"
+            )
+
+        prompt_template = prompts_config.prompts[analysis_type]
+
+        duration_str = (
+            f"{int(video_info.duration // 60)}:{int(video_info.duration % 60):02d}"
+            if video_info.duration
+            else "unknown"
+        )
+
+        user_prompt = substitute_prompt_variables(
+            prompt_template.user_prompt,
+            {
+                "transcript": transcript,
+                "title": video_info.title or "Unknown",
+                "channel": video_info.channel or "Unknown",
+                "duration": duration_str,
+            },
+        )
+        system_prompt = prompt_template.system_prompt
+
+        # Build full prompt: system + user combined (claude CLI -p takes a single prompt)
+        full_prompt = f"{system_prompt}\n\n{user_prompt}"
+
+        if verbose:
+            logger.info(f"Calling Claude CLI with model {self._model}...")
+
+        start_time = time.time()
+        raw_output = run_claude_subprocess(full_prompt, self._model)
+        duration = time.time() - start_time
+
+        if verbose:
+            logger.debug(f"Claude CLI raw output ({len(raw_output)} chars)")
+
+        analysis_text, contextual_tags = parse_llm_json_response(raw_output)
+
+        # Rough token estimate (no usage data from CLI)
+        estimated_tokens_in = len(full_prompt) // 4
+        estimated_tokens_out = len(raw_output) // 4
+
+        # Estimate cost from models config (best-effort)
+        estimated_cost = None
+        try:
+            models_config = load_models_config(DEFAULT_MODELS_FILE)
+            model_cfg = models_config.get_model(self._model)
+            if model_cfg:
+                estimated_cost = model_cfg.estimate_cost(estimated_tokens_in, estimated_tokens_out)
+        except Exception:
+            pass  # Cost estimation is best-effort
+
+        return AnalysisResult(
+            analysis_text=analysis_text,
+            analysis_type=analysis_type,
+            analysis_name=prompt_template.name,
+            model=self._model,
+            provider="claude",
+            tokens_input=estimated_tokens_in,
+            tokens_output=estimated_tokens_out,
+            tokens_total=estimated_tokens_in + estimated_tokens_out,
+            estimated_cost=estimated_cost,
+            duration=duration,
+            truncated=False,
+            contextual_tags=contextual_tags,
+        )
+
+
 def analyze_with_claude_cli(
     transcript: str,
     video_info: VideoInfo,
@@ -81,85 +166,8 @@ def analyze_with_claude_cli(
 ) -> AnalysisResult:
     """Analyze transcript using the local Claude CLI.
 
-    Args:
-        transcript: Full transcript text
-        video_info: Video metadata
-        analysis_type: Which prompt template to use
-        prompts_config: Loaded prompts configuration
-        model: Claude model alias ('sonnet', 'opus', 'haiku') or full model ID
-        verbose: Enable verbose output
-
-    Returns:
-        AnalysisResult with analysis data
-
-    Raises:
-        AnalysisError: If the CLI call fails or returns invalid JSON
+    Convenience wrapper around ClaudeProvider for backward compatibility.
     """
-    resolved_model = _resolve_claude_model(model)
-
-    if analysis_type not in prompts_config.prompts:
-        available = ", ".join(prompts_config.prompts.keys())
-        raise AnalysisError(f"Analysis type '{analysis_type}' not found. Available: {available}")
-
-    prompt_template = prompts_config.prompts[analysis_type]
-
-    duration_str = (
-        f"{int(video_info.duration // 60)}:{int(video_info.duration % 60):02d}"
-        if video_info.duration
-        else "unknown"
-    )
-
-    user_prompt = substitute_prompt_variables(
-        prompt_template.user_prompt,
-        {
-            "transcript": transcript,
-            "title": video_info.title or "Unknown",
-            "channel": video_info.channel or "Unknown",
-            "duration": duration_str,
-        },
-    )
-    system_prompt = prompt_template.system_prompt
-
-    # Build full prompt: system + user combined (claude CLI -p takes a single prompt)
-    full_prompt = f"{system_prompt}\n\n{user_prompt}"
-
-    if verbose:
-        logger.info(f"Calling Claude CLI with model {resolved_model}...")
-
-    start_time = time.time()
-    raw_output = run_claude_subprocess(full_prompt, resolved_model)
-    duration = time.time() - start_time
-
-    if verbose:
-        logger.debug(f"Claude CLI raw output ({len(raw_output)} chars)")
-
-    analysis_text, contextual_tags = parse_llm_json_response(raw_output)
-
-    # Rough token estimate (no usage data from CLI)
-    estimated_tokens_in = len(full_prompt) // 4
-    estimated_tokens_out = len(raw_output) // 4
-
-    # Estimate cost from models config (best-effort)
-    estimated_cost = None
-    try:
-        models_config = load_models_config(DEFAULT_MODELS_FILE)
-        model_cfg = models_config.get_model(resolved_model)
-        if model_cfg:
-            estimated_cost = model_cfg.estimate_cost(estimated_tokens_in, estimated_tokens_out)
-    except Exception:
-        pass  # Cost estimation is best-effort
-
-    return AnalysisResult(
-        analysis_text=analysis_text,
-        analysis_type=analysis_type,
-        analysis_name=prompt_template.name,
-        model=resolved_model,
-        provider="claude",
-        tokens_input=estimated_tokens_in,
-        tokens_output=estimated_tokens_out,
-        tokens_total=estimated_tokens_in + estimated_tokens_out,
-        estimated_cost=estimated_cost,
-        duration=duration,
-        truncated=False,
-        contextual_tags=contextual_tags,
+    return ClaudeProvider(model=model).analyze(
+        transcript, video_info, analysis_type, prompts_config, verbose
     )

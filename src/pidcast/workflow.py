@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 from .analysis import (
-    analyze_transcript_with_llm,
     load_analysis_prompts,
     render_analysis_to_terminal,
 )
@@ -249,36 +248,32 @@ def run_analysis(
         parts = content.split("---", 2)
         transcript_text = parts[2].strip() if len(parts) >= 3 else content
 
-    provider = getattr(args, "provider", "groq")
+    # Build provider
+    provider_name = getattr(args, "provider", "groq")
 
-    # Analyze
-    analysis_start = time.time()
-    if provider == "claude":
-        from .providers.claude_provider import analyze_with_claude_cli
+    if provider_name == "claude":
+        from .providers.claude_provider import ClaudeProvider
 
-        result = analyze_with_claude_cli(
-            transcript_text,
-            video_info,
-            args.analysis_type,
-            prompts_config,
-            model=getattr(args, "claude_model", None),
-            verbose=args.verbose,
-        )
+        analysis_provider = ClaudeProvider(model=getattr(args, "claude_model", None))
     else:
+        from .providers.groq_provider import GroqProvider
+
         groq_api_key = args.groq_api_key or os.environ.get("GROQ_API_KEY")
         if not groq_api_key:
             raise AnalysisError(
                 "Groq API key not found. Set GROQ_API_KEY environment variable or use --groq_api_key"
             )
-        result = analyze_transcript_with_llm(
-            transcript_text,
-            video_info,
-            args.analysis_type,
-            prompts_config,
-            groq_api_key,
-            args.groq_model,
-            args.verbose,
-        )
+        analysis_provider = GroqProvider(api_key=groq_api_key, model=args.groq_model)
+
+    # Analyze
+    analysis_start = time.time()
+    result = analysis_provider.analyze(
+        transcript_text,
+        video_info,
+        args.analysis_type,
+        prompts_config,
+        args.verbose,
+    )
 
     analysis_duration = time.time() - analysis_start
     metadata = {
