@@ -175,7 +175,7 @@ class TestAnalyzeWithClaudeCli:
         assert result.contextual_tags == ["ai", "tech", "open-source"]
         assert result.provider == "claude"
         assert result.analysis_type == "executive_summary"
-        assert result.estimated_cost is None
+        assert result.estimated_cost is not None
 
     def test_formats_duration_correctly(self):
         prompts = _make_prompts_config()
@@ -220,3 +220,43 @@ class TestAnalyzeWithClaudeCli:
         assert result.tokens_input > 0
         assert result.tokens_output > 0
         assert result.tokens_total == result.tokens_input + result.tokens_output
+
+
+# ============================================================================
+# analyze_with_claude_cli - cost estimation
+# ============================================================================
+
+
+class TestAnalyzeWithClaudeCliCost:
+    VALID_JSON = '{"analysis": "Great episode.", "contextual_tags": ["ai"]}'
+
+    def test_estimated_cost_is_computed_when_model_known(self):
+        """Cost should be non-None for known Claude models."""
+        prompts = _make_prompts_config()
+        video = _make_video_info()
+
+        with patch(
+            "pidcast.providers.claude_provider.run_claude_subprocess",
+            return_value=self.VALID_JSON,
+        ):
+            result = analyze_with_claude_cli(
+                "a" * 4000, video, "executive_summary", prompts, model="sonnet"
+            )
+
+        assert result.estimated_cost is not None
+        assert result.estimated_cost > 0
+
+    def test_estimated_cost_is_none_for_unknown_model(self):
+        """Cost should be None for models not in config."""
+        prompts = _make_prompts_config()
+        video = _make_video_info()
+
+        with patch(
+            "pidcast.providers.claude_provider.run_claude_subprocess",
+            return_value=self.VALID_JSON,
+        ):
+            result = analyze_with_claude_cli(
+                "a" * 4000, video, "executive_summary", prompts, model="claude-custom-999"
+            )
+
+        assert result.estimated_cost is None

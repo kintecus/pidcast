@@ -13,8 +13,9 @@ import subprocess
 import time
 
 from pidcast.analysis import parse_llm_json_response, substitute_prompt_variables
-from pidcast.config import AnalysisResult, PromptsConfig, VideoInfo
+from pidcast.config import DEFAULT_MODELS_FILE, AnalysisResult, PromptsConfig, VideoInfo
 from pidcast.exceptions import AnalysisError
+from pidcast.model_selector import load_models_config
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +139,16 @@ def analyze_with_claude_cli(
     estimated_tokens_in = len(full_prompt) // 4
     estimated_tokens_out = len(raw_output) // 4
 
+    # Estimate cost from models config (best-effort)
+    estimated_cost = None
+    try:
+        models_config = load_models_config(DEFAULT_MODELS_FILE)
+        model_cfg = models_config.get_model(resolved_model)
+        if model_cfg:
+            estimated_cost = model_cfg.estimate_cost(estimated_tokens_in, estimated_tokens_out)
+    except Exception:
+        pass  # Cost estimation is best-effort
+
     return AnalysisResult(
         analysis_text=analysis_text,
         analysis_type=analysis_type,
@@ -147,7 +158,7 @@ def analyze_with_claude_cli(
         tokens_input=estimated_tokens_in,
         tokens_output=estimated_tokens_out,
         tokens_total=estimated_tokens_in + estimated_tokens_out,
-        estimated_cost=None,  # Claude subscription - no per-token cost
+        estimated_cost=estimated_cost,
         duration=duration,
         truncated=False,
         contextual_tags=contextual_tags,
