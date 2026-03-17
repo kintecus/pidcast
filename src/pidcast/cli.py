@@ -467,6 +467,11 @@ Short Flags:
         help="Keep the .txt transcript file alongside the .md file",
     )
     parser.add_argument(
+        "--keep_audio",
+        action="store_true",
+        help="Save the converted WAV audio file to the output directory",
+    )
+    parser.add_argument(
         "--po_token",
         default=None,
         help="PO Token for bypassing YouTube restrictions (format: 'client.type+TOKEN')",

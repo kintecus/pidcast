@@ -4,6 +4,7 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import time
 import traceback
 import uuid
@@ -718,6 +719,12 @@ def process_input_source(
                 f"Estimation accuracy: {percentage_diff:.1f}% "
                 f"({format_duration(diff_abs)}) {direction} than estimated"
             )
+
+        # Save audio file if requested
+        if getattr(args, "keep_audio", False) and audio_file and Path(audio_file).exists():
+            saved_audio = output_dir / f"{smart_filename}.wav"
+            shutil.copy2(audio_file, saved_audio)
+            logger.info(f"Audio saved to: file://{saved_audio.absolute()}")
 
         return True
 
