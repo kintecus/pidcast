@@ -25,6 +25,9 @@ diarize = [
     "numpy<2",
     "huggingface-hub<1.0",
 ]
+elevenlabs = [
+    "elevenlabs>=2.0.0",
+]
 
 [project.scripts]
 pidcast = "pidcast.cli:main"
