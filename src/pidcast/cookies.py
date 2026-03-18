@@ -19,7 +19,11 @@ logger = logging.getLogger(__name__)
 _CHROME_LOCAL_STATE_PATHS = {
     "Darwin": Path.home() / "Library" / "Application Support" / "Google" / "Chrome" / "Local State",
     "Linux": Path.home() / ".config" / "google-chrome" / "Local State",
-    "Windows": Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "User Data" / "Local State",
+    "Windows": Path(os.environ.get("LOCALAPPDATA", ""))
+    / "Google"
+    / "Chrome"
+    / "User Data"
+    / "Local State",
 }
 
 
@@ -46,7 +50,9 @@ def get_cached_cookies(browser: str, profile: str | None = None) -> Path | None:
 
     age_hours = (time.time() - cache_path.stat().st_mtime) / 3600
     if age_hours > COOKIE_CACHE_MAX_AGE_HOURS:
-        logger.info(f"Cookie cache expired ({age_hours:.1f}h old, max {COOKIE_CACHE_MAX_AGE_HOURS}h)")
+        logger.info(
+            f"Cookie cache expired ({age_hours:.1f}h old, max {COOKIE_CACHE_MAX_AGE_HOURS}h)"
+        )
         return None
 
     logger.info(f"Using cached cookies ({age_hours:.1f}h old)")
@@ -75,7 +81,11 @@ def extract_and_cache_cookies(browser: str, profile: str | None = None) -> Path:
             + ". macOS may prompt for Keychain access - please allow it."
         )
     else:
-        logger.info(f"Extracting cookies from {browser}" + (f" (profile: {profile})" if profile else "") + "...")
+        logger.info(
+            f"Extracting cookies from {browser}"
+            + (f" (profile: {profile})" if profile else "")
+            + "..."
+        )
 
     try:
         jar = extract_cookies_from_browser(browser, profile=profile)
@@ -164,8 +174,6 @@ def resolve_chrome_profile(profile_input: str | None) -> str | None:
         if profile_input.lower() in meta["display_name"].lower():
             return dir_name
 
-    available = ", ".join(
-        "{} ({})".format(m["display_name"], d) for d, m in profiles.items()
-    )
+    available = ", ".join("{} ({})".format(m["display_name"], d) for d, m in profiles.items())
     logger.warning(f"Chrome profile '{profile_input}' not found. Available: {available}")
     return profile_input  # Pass through as-is, let yt-dlp handle it

@@ -1309,7 +1309,7 @@ def main() -> None:
             print(f"  {'-' * 25} {'-' * 20} {'-' * 30}")
             for dir_name, meta in profiles.items():
                 print(f"  {meta['display_name']:<25} {dir_name:<20} {dir_name}")
-            print(f"\nUsage: pidcast <input> --chrome-profile \"{list(profiles.keys())[0]}\"")
+            print(f'\nUsage: pidcast <input> --chrome-profile "{list(profiles.keys())[0]}"')
             print("   Or: Set 'chrome_profile' in ~/.config/pidcast/config.yaml")
         return
 
