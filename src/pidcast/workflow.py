@@ -31,7 +31,6 @@ from .markdown import create_analysis_markdown_file, create_markdown_file
 from .transcription import (
     estimate_transcription_time,
     process_local_file,
-    run_whisper_transcription,
 )
 from .utils import (
     cleanup_temp_files,
@@ -537,69 +536,55 @@ def process_input_source(
         audio_duration = video_info.duration
         estimated_time = estimate_transcription_time(stats_file, audio_duration)
 
-        # Run Whisper transcription
-        logger.info("\nTranscribing audio with Whisper...")
-        if estimated_time:
-            logger.info(
-                f"Estimated transcription time: ~{format_duration(estimated_time)} (based on historical data)"
-            )
-        elif audio_duration > 0:
-            logger.info(f"Audio duration: {format_duration(audio_duration)}")
-
-        transcription_start = time.time()
-        temp_whisper_output = output_dir / f"temp_transcript_{uuid.uuid4().hex[:8]}"
+        # Run transcription
+        transcription_provider_name = getattr(args, "transcription_provider", "whisper")
         diarize = getattr(args, "diarize", False)
-        output_format = "json" if diarize else args.output_format.replace("o", "")
 
-        run_whisper_transcription(
-            audio_file,
-            args.whisper_model,
-            output_format,
-            str(temp_whisper_output),
-            args.verbose,
-            estimated_duration=estimated_time,
+        if transcription_provider_name == "elevenlabs":
+            from .config import ELEVENLABS_API_KEY
+            from .providers.elevenlabs_provider import ElevenLabsTranscriptionProvider
+
+            logger.info("\nTranscribing audio with ElevenLabs Scribe v2...")
+            transcription_provider = ElevenLabsTranscriptionProvider(
+                api_key=ELEVENLABS_API_KEY,
+            )
+        else:
+            from .providers.whisper_provider import WhisperTranscriptionProvider
+
+            logger.info("\nTranscribing audio with Whisper...")
+            if estimated_time:
+                logger.info(
+                    f"Estimated transcription time: ~{format_duration(estimated_time)} "
+                    "(based on historical data)"
+                )
+            elif audio_duration > 0:
+                logger.info(f"Audio duration: {format_duration(audio_duration)}")
+
+            transcription_provider = WhisperTranscriptionProvider(
+                whisper_model=args.whisper_model,
+                output_format=args.output_format.replace("o", ""),
+                output_dir=output_dir,
+                estimated_duration=estimated_time,
+            )
+
+        transcription_result = transcription_provider.transcribe(
+            audio_file=audio_file,
             language=getattr(args, "language", None),
+            diarize=diarize,
+            verbose=args.verbose,
         )
 
-        transcription_duration = time.time() - transcription_start
+        transcription_duration = transcription_result.duration
+        speaker_count = transcription_result.speaker_count
 
-        # Speaker diarization (optional)
-        speaker_count = None
-        if diarize:
-            from .config import HUGGINGFACE_TOKEN
-            from .diarization import merge_whisper_with_diarization, run_diarization
+        if diarize and speaker_count and speaker_count > 0:
+            logger.info(f"\n✓ Diarization complete - {speaker_count} speaker(s) detected")
+        elif diarize:
+            logger.warning("Diarization returned no speaker segments, using plain transcript")
 
-            if not HUGGINGFACE_TOKEN:
-                raise DiarizationError(
-                    "HUGGINGFACE_TOKEN environment variable not set. "
-                    "Required for speaker diarization."
-                )
-
-            logger.info("\nRunning speaker diarization...")
-            diarization_segments = run_diarization(audio_file, HUGGINGFACE_TOKEN, args.verbose)
-
-            # Read whisper JSON output and merge with diarization
-            whisper_json_file = f"{temp_whisper_output}.json"
-            with open(whisper_json_file, encoding="utf-8") as f:
-                whisper_data = json.load(f)
-
-            whisper_segments = whisper_data.get("transcription", [])
-            labeled_transcript, speaker_count = merge_whisper_with_diarization(
-                whisper_segments, diarization_segments
-            )
-
-            if speaker_count > 0:
-                logger.info(f"\n✓ Diarization complete - {speaker_count} speaker(s) detected")
-            else:
-                logger.warning("Diarization returned no speaker segments, using plain transcript")
-
-            # Write labeled transcript to temp file for markdown creation
-            labeled_txt = f"{temp_whisper_output}_labeled.txt"
-            with open(labeled_txt, "w", encoding="utf-8") as f:
-                f.write(labeled_transcript)
-            transcript_file = labeled_txt
-        else:
-            transcript_file = f"{temp_whisper_output}.txt"
+        # Write transcript to temp file for markdown creation
+        transcript_file = str(output_dir / f"temp_transcript_{uuid.uuid4().hex[:8]}.txt")
+        Path(transcript_file).write_text(transcription_result.text, encoding="utf-8")
 
         # Create Markdown file (transcript)
 
@@ -612,9 +597,9 @@ def process_input_source(
             logger.warning(f"Invalid JSON in front_matter, using empty dict: {e}")
             front_matter = {}
 
-        if diarize and speaker_count and speaker_count > 0:
+        if transcription_result.diarized and transcription_result.speaker_count:
             front_matter["diarized"] = True
-            front_matter["speaker_count"] = speaker_count
+            front_matter["speaker_count"] = transcription_result.speaker_count
 
         if not create_markdown_file(
             markdown_file,
@@ -688,6 +673,7 @@ def process_input_source(
             analysis_truncated=analysis_metadata.get("truncated", False),
             analysis_file=analysis_file.name if analysis_file else None,
             diarization_performed=diarize,
+            transcription_provider=transcription_provider_name,
             speaker_count=speaker_count,
         )
 
