@@ -166,7 +166,11 @@ def create_smart_filename(title: str, max_length: int = 60, include_date: bool =
     Returns:
         Sanitized filename string
     """
-    cleaned_title = title
+    # Detect and preserve a leading YYYY-MM-DD date prefix before filler stripping
+    date_prefix_match = re.match(r"^(\d{4}[-_]\d{2}[-_]\d{2})[\s_-]*(.*)", title)
+    existing_date_prefix = date_prefix_match.group(1) if date_prefix_match else None
+    cleaned_title = date_prefix_match.group(2) if date_prefix_match else title
+
     for pattern in TITLE_FILLER_PATTERNS:
         cleaned_title = re.sub(pattern, "", cleaned_title, flags=re.IGNORECASE)
 
@@ -206,7 +210,9 @@ def create_smart_filename(title: str, max_length: int = 60, include_date: bool =
     filename = re.sub(r"[^\w\s-]", "", filename)
     filename = re.sub(r"[-\s]+", "_", filename)
 
-    if include_date:
+    if existing_date_prefix:
+        filename = f"{existing_date_prefix}_{filename}"
+    elif include_date:
         date_prefix = datetime.datetime.now().strftime("%Y-%m-%d")
         filename = f"{date_prefix}_{filename}"
 
