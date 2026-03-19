@@ -1,5 +1,6 @@
 """Tests for pidcast.utils module."""
 
+import re
 from unittest.mock import patch
 
 import pytest
@@ -74,6 +75,20 @@ class TestCreateSmartFilename:
     def test_filler_words_stripped(self):
         result = create_smart_filename("EP.5 - Interview", include_date=False)
         assert "EP" not in result
+
+    def test_skips_date_when_title_already_has_date(self):
+        result = create_smart_filename("2024-03-15 file name", include_date=True)
+        # Should NOT double-prefix with today's date
+        assert result.startswith("2024")
+        # Should not contain two date-like patterns
+        dates = re.findall(r"\d{4}[\-_]\d{2}[\-_]\d{2}", result)
+        assert len(dates) == 1
+
+    def test_skips_date_when_title_has_underscore_date(self):
+        result = create_smart_filename("2024_03_15 file name", include_date=True)
+        assert result.startswith("2024")
+        dates = re.findall(r"\d{4}[\-_]\d{2}[\-_]\d{2}", result)
+        assert len(dates) == 1
 
 
 # ============================================================================
