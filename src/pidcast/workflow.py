@@ -15,6 +15,7 @@ from .analysis import (
     load_analysis_prompts,
     render_analysis_to_terminal,
 )
+from .apple_podcasts import is_apple_podcasts_url, resolve_apple_podcasts_url
 from .config import (
     TranscriptionStats,
     VideoInfo,
@@ -22,6 +23,7 @@ from .config import (
 from .download import download_audio
 from .exceptions import (
     AnalysisError,
+    ApplePodcastsResolutionError,
     DiarizationError,
     DownloadError,
     FileProcessingError,
@@ -489,7 +491,13 @@ def process_input_source(
         source, is_local_file = validate_input_source(input_source)
 
         if args.verbose:
-            logger.info(f"Type: {'Local File' if is_local_file else 'YouTube URL'}")
+            if is_local_file:
+                source_type = "Local File"
+            elif is_apple_podcasts_url(source):
+                source_type = "Apple Podcasts URL"
+            else:
+                source_type = "YouTube URL"
+            logger.info(f"Type: {source_type}")
 
         # Ensure output directories exist
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -500,6 +508,13 @@ def process_input_source(
             logger.info("Processing local file...")
             audio_file, video_info = process_local_file(source, output_dir, args.verbose)
             logger.info("\n✓ Local file processed successfully!")
+        elif is_apple_podcasts_url(source):
+            logger.info("Resolving Apple Podcasts URL...")
+            audio_url, video_info = resolve_apple_podcasts_url(source, args.verbose)
+            logger.info(f"Found: {video_info.title}")
+            logger.info("Downloading podcast audio...")
+            audio_file, _ = download_audio(audio_url, "temp_audio.%(ext)s", args.verbose)
+            logger.info("\n✓ Audio downloaded successfully!")
         else:
             logger.info("Downloading audio from YouTube...")
             audio_file, video_info = download_audio(
@@ -738,6 +753,7 @@ def process_input_source(
         FileProcessingError,
         AnalysisError,
         DiarizationError,
+        ApplePodcastsResolutionError,
     ) as e:
         log_error(str(e))
         if args.verbose:

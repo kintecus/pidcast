@@ -71,3 +71,9 @@ class DiarizationError(PidcastError):
     """Speaker diarization failed."""
 
     pass
+
+
+class ApplePodcastsResolutionError(PidcastError):
+    """Failed to resolve Apple Podcasts URL to audio."""
+
+    pass
