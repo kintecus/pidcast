@@ -26,14 +26,10 @@ class TestIsApplePodcastsUrl:
         )
 
     def test_no_country(self):
-        assert is_apple_podcasts_url(
-            "https://podcasts.apple.com/podcast/id123456?i=789"
-        )
+        assert is_apple_podcasts_url("https://podcasts.apple.com/podcast/id123456?i=789")
 
     def test_itunes_domain(self):
-        assert is_apple_podcasts_url(
-            "https://itunes.apple.com/us/podcast/id123456?i=789"
-        )
+        assert is_apple_podcasts_url("https://itunes.apple.com/us/podcast/id123456?i=789")
 
     def test_youtube_url(self):
         assert not is_apple_podcasts_url("https://www.youtube.com/watch?v=abc")
@@ -82,7 +78,9 @@ class TestParseApplePodcastsUrl:
 # ---------------------------------------------------------------------------
 
 
-def _make_episode(title: str, pub_date: datetime, audio_url: str = "https://cdn.example.com/ep.mp3") -> Episode:
+def _make_episode(
+    title: str, pub_date: datetime, audio_url: str = "https://cdn.example.com/ep.mp3"
+) -> Episode:
     return Episode(
         guid=f"guid-{title}",
         title=title,
@@ -181,7 +179,9 @@ class TestResolveApplePodcastsUrl:
 
         # Mock RSS feed
         episodes = [
-            _make_episode("Great Episode", datetime(2024, 5, 1), "https://cdn.example.com/great.mp3"),
+            _make_episode(
+                "Great Episode", datetime(2024, 5, 1), "https://cdn.example.com/great.mp3"
+            ),
         ]
         mock_parse.return_value = ({"title": "Test Podcast"}, episodes)
 
@@ -196,6 +196,4 @@ class TestResolveApplePodcastsUrl:
 
     def test_show_level_url_raises(self):
         with pytest.raises(ApplePodcastsResolutionError, match="show-level URL"):
-            resolve_apple_podcasts_url(
-                "https://podcasts.apple.com/us/podcast/show-name/id123456"
-            )
+            resolve_apple_podcasts_url("https://podcasts.apple.com/us/podcast/show-name/id123456")

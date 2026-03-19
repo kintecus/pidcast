@@ -45,9 +45,7 @@ def parse_apple_podcasts_url(url: str) -> tuple[str, str | None]:
     # Extract collection ID from path segment like "id1234567890"
     match = re.search(r"/id(\d+)", parsed.path)
     if not match:
-        raise ApplePodcastsResolutionError(
-            f"Could not extract podcast ID from URL: {url}"
-        )
+        raise ApplePodcastsResolutionError(f"Could not extract podcast ID from URL: {url}")
     collection_id = match.group(1)
 
     # Extract track (episode) ID from query param ?i=
@@ -67,9 +65,7 @@ def _itunes_fetch(params: dict) -> list[dict]:
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode())
     except Exception as e:
-        raise ApplePodcastsResolutionError(
-            f"iTunes Lookup API request failed: {e}"
-        ) from e
+        raise ApplePodcastsResolutionError(f"iTunes Lookup API request failed: {e}") from e
 
     return data.get("results", [])
 
@@ -100,16 +96,13 @@ def lookup_itunes(collection_id: str, track_id: str | None) -> dict:
 
     if not collection_info.get("feedUrl"):
         raise ApplePodcastsResolutionError(
-            "No RSS feed URL found for this podcast. "
-            "The podcast may not have a public feed."
+            "No RSS feed URL found for this podcast. The podcast may not have a public feed."
         )
 
     # Step 2: optionally look up episode metadata by collection+track ID
     episode_info: dict = {}
     if track_id:
-        ep_results = _itunes_fetch(
-            {"id": collection_id, "entity": "podcastEpisode"}
-        )
+        ep_results = _itunes_fetch({"id": collection_id, "entity": "podcastEpisode"})
         for r in ep_results:
             if (
                 r.get("wrapperType") == "track"
@@ -133,9 +126,7 @@ def _normalize(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
-def find_episode_in_feed(
-    feed_url: str, itunes_meta: dict, verbose: bool = False
-) -> Episode:
+def find_episode_in_feed(feed_url: str, itunes_meta: dict, verbose: bool = False) -> Episode:
     """Parse the podcast RSS feed and find the episode matching *itunes_meta*.
 
     Matching strategy:
@@ -148,9 +139,7 @@ def find_episode_in_feed(
     try:
         _, episodes = RSSParser.parse_feed(feed_url, verbose=verbose)
     except Exception as e:
-        raise ApplePodcastsResolutionError(
-            f"Failed to fetch/parse podcast RSS feed: {e}"
-        ) from e
+        raise ApplePodcastsResolutionError(f"Failed to fetch/parse podcast RSS feed: {e}") from e
 
     # Primary: match by title
     target_title = itunes_meta.get("trackName", "")
@@ -164,9 +153,7 @@ def find_episode_in_feed(
     release_date_str = itunes_meta.get("releaseDate", "")
     if release_date_str:
         try:
-            release_date = datetime.fromisoformat(
-                release_date_str.replace("Z", "+00:00")
-            ).date()
+            release_date = datetime.fromisoformat(release_date_str.replace("Z", "+00:00")).date()
             for ep in episodes:
                 if ep.pub_date.date() == release_date:
                     return ep
@@ -179,9 +166,7 @@ def find_episode_in_feed(
     )
 
 
-def resolve_apple_podcasts_url(
-    url: str, verbose: bool = False
-) -> tuple[str, VideoInfo]:
+def resolve_apple_podcasts_url(url: str, verbose: bool = False) -> tuple[str, VideoInfo]:
     """Resolve an Apple Podcasts URL to (audio_url, VideoInfo).
 
     Orchestrates: parse URL -> iTunes Lookup -> RSS parse -> episode match.
@@ -212,7 +197,9 @@ def resolve_apple_podcasts_url(
     feed_url = itunes_meta.get("feedUrl", "")
 
     if verbose:
-        logger.info(f"iTunes lookup: {itunes_meta.get('collectionName', 'Unknown')} - {itunes_meta.get('trackName', 'Unknown')}")
+        logger.info(
+            f"iTunes lookup: {itunes_meta.get('collectionName', 'Unknown')} - {itunes_meta.get('trackName', 'Unknown')}"
+        )
         logger.info(f"Feed URL: {feed_url}")
 
     episode = find_episode_in_feed(feed_url, itunes_meta, verbose=verbose)
