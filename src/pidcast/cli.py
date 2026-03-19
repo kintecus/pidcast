@@ -443,10 +443,16 @@ Short Flags:
         help="Language code for transcription (e.g., 'uk', 'en', 'de'). Default: auto-detect.",
     )
     parser.add_argument(
+        "--transcription_provider",
+        choices=["whisper", "elevenlabs"],
+        default="whisper",
+        help="Transcription backend: whisper (local) or elevenlabs (cloud). Default: whisper.",
+    )
+    parser.add_argument(
         "--diarize",
         action="store_true",
         default=False,
-        help="Run speaker diarization using pyannote.audio (requires HUGGINGFACE_TOKEN env var)",
+        help="Run speaker diarization (whisper: pyannote.audio + HUGGINGFACE_TOKEN, elevenlabs: built-in)",
     )
     parser.add_argument(
         "--output_format",

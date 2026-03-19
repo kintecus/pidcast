@@ -41,6 +41,7 @@ WHISPER_MODEL = os.environ.get("WHISPER_MODEL")
 WHISPER_MODELS_DIR = os.environ.get("WHISPER_MODELS_DIR")
 OBSIDIAN_PATH = os.environ.get("OBSIDIAN_VAULT_PATH")
 HUGGINGFACE_TOKEN = os.environ.get("HUGGINGFACE_TOKEN")
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
 
 
 # ============================================================================
@@ -362,6 +363,7 @@ class TranscriptionStats:
     # Diarization metadata
     diarization_performed: bool = False
     speaker_count: int | None = None
+    transcription_provider: str | None = None
     # Fallback tracking
     json_mode_failed: bool = False
     used_plain_text_fallback: bool = False
@@ -393,6 +395,7 @@ class TranscriptionStats:
             "analysis_file": self.analysis_file,
             "diarization_performed": self.diarization_performed,
             "speaker_count": self.speaker_count,
+            "transcription_provider": self.transcription_provider,
             "json_mode_failed": self.json_mode_failed,
             "used_plain_text_fallback": self.used_plain_text_fallback,
             "tag_extraction_failed": self.tag_extraction_failed,
