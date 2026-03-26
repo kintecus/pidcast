@@ -4,9 +4,9 @@ Transcription and LLM-powered analysis tool for podcasts, YouTube videos, and lo
 
 ## Features
 
-- **Multiple input sources** - YouTube videos, podcast RSS feeds, and local audio files
-- **Whisper transcription** using whisper.cpp (local, fast, multi-language)
-- **Speaker diarization** - optional speaker identification via pyannote.audio
+- **Multiple input sources** - YouTube videos, Apple Podcasts URLs, podcast RSS feeds, and local audio files
+- **Transcription providers** - whisper.cpp (local) or ElevenLabs Scribe v2 (cloud API)
+- **Speaker diarization** - optional speaker identification via pyannote.audio (whisper) or built-in (ElevenLabs)
 - **LLM analysis** with Groq AI (enabled by default)
   - Automatic model fallback and retry logic
   - Smart chunking for long transcripts with semantic boundaries
@@ -43,8 +43,9 @@ Transcription and LLM-powered analysis tool for podcasts, YouTube videos, and lo
    - `GROQ_API_KEY` - Get free key at <https://console.groq.com/>
    - `WHISPER_CPP_PATH` - Path to whisper.cpp main binary
    - `WHISPER_MODEL` - Path to Whisper model file (name like `medium` or full path)
+   - `ELEVENLABS_API_KEY` - (Optional) For `--transcription_provider elevenlabs`, get key at <https://elevenlabs.io/>
    - `OBSIDIAN_VAULT_PATH` - (Optional) For `--save_to_obsidian`
-   - `HUGGINGFACE_TOKEN` - (Optional) For `--diarize`, see [Speaker diarization](#speaker-diarization)
+   - `HUGGINGFACE_TOKEN` - (Optional) For `--diarize` with whisper, see [Speaker diarization](#speaker-diarization)
 
 4. **Run**:
 
@@ -52,8 +53,14 @@ Transcription and LLM-powered analysis tool for podcasts, YouTube videos, and lo
    # Transcribe a YouTube video with analysis (default)
    uv run pidcast "https://youtube.com/watch?v=VIDEO_ID"
 
+   # Transcribe an Apple Podcasts episode
+   uv run pidcast "https://podcasts.apple.com/podcast/id123456?i=789"
+
    # Transcribe a local audio file
    uv run pidcast "/path/to/audio/file.mp3"
+
+   # Use ElevenLabs for transcription (cloud, faster)
+   uv run pidcast "VIDEO_URL" --transcription_provider elevenlabs
 
    # Skip LLM analysis
    uv run pidcast "VIDEO_URL" --no-analyze
@@ -67,7 +74,7 @@ Transcription and LLM-powered analysis tool for podcasts, YouTube videos, and lo
 The following tools must be installed separately (all Python dependencies are handled by `uv sync`):
 
 - **ffmpeg** - Audio processing
-- **whisper.cpp** - Transcription engine
+- **whisper.cpp** - Transcription engine (not needed if using ElevenLabs provider)
 
 ### Installing whisper.cpp
 
@@ -127,6 +134,23 @@ uv run pidcast "VIDEO_URL" -v
 # Use PO Token for restricted YouTube videos
 uv run pidcast "VIDEO_URL" --po_token "client.type+TOKEN"
 ```
+
+### Choosing a transcription provider
+
+By default, transcription uses local whisper.cpp. Pass `--transcription_provider elevenlabs` to use the ElevenLabs Scribe v2 cloud API instead:
+
+```bash
+# Local whisper.cpp (default)
+uv run pidcast "VIDEO_URL"
+
+# ElevenLabs cloud transcription (faster, requires ELEVENLABS_API_KEY)
+uv run pidcast "VIDEO_URL" --transcription_provider elevenlabs
+
+# ElevenLabs with built-in speaker diarization
+uv run pidcast "VIDEO_URL" --transcription_provider elevenlabs --diarize
+```
+
+ElevenLabs Scribe v2 includes built-in speaker diarization (no HuggingFace token needed). Transcription time estimates adapt per-provider based on historical run data.
 
 ### Choosing an LLM provider
 
