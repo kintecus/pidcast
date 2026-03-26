@@ -141,13 +141,29 @@ def build_ffmpeg_audio_conversion_command(
 
 
 def estimate_transcription_time(
-    stats_file: str | Path, audio_duration: float, max_records: int = 100
+    stats_file: str | Path,
+    audio_duration: float,
+    provider: str = "whisper",
+    whisper_model: str | None = None,
+    diarize: bool = False,
+    max_records: int = 100,
 ) -> float | None:
-    """Estimate transcription time based on historical data.
+    """Estimate transcription time based on historical data, filtered by provider.
+
+    Uses tiered filtering with fallback to provide the most relevant estimate:
+    1. Provider + whisper_model + diarization (if whisper with model specified)
+    2. Provider + diarization
+    3. Provider only
+    4. All records (cold-start fallback)
+
+    Each tier requires >= 3 records to be used.
 
     Args:
         stats_file: Path to statistics JSON file
         audio_duration: Duration of audio in seconds
+        provider: Transcription provider ("whisper" or "elevenlabs")
+        whisper_model: Whisper model name (e.g. "large-v3") for model-specific estimates
+        diarize: Whether diarization is enabled (affects whisper speed significantly)
         max_records: Maximum historical records to consider
 
     Returns:
@@ -169,18 +185,53 @@ def estimate_transcription_time(
 
     recent_runs = successful_runs[-max_records:]
 
+    min_records = 3
+
+    # Tier 1: provider + whisper_model + diarization (most specific)
+    if provider == "whisper" and whisper_model:
+        tier1 = [
+            r
+            for r in recent_runs
+            if (r.get("transcription_provider") or "whisper") == provider
+            and r.get("whisper_model") == whisper_model
+            and r.get("diarization_performed", False) == diarize
+        ]
+        if len(tier1) >= min_records:
+            return _avg_ratio(tier1, audio_duration)
+
+    # Tier 2: provider + diarization
+    tier2 = [
+        r
+        for r in recent_runs
+        if (r.get("transcription_provider") or "whisper") == provider
+        and r.get("diarization_performed", False) == diarize
+    ]
+    if len(tier2) >= min_records:
+        return _avg_ratio(tier2, audio_duration)
+
+    # Tier 3: provider only
+    tier3 = [
+        r
+        for r in recent_runs
+        if (r.get("transcription_provider") or "whisper") == provider
+    ]
+    if len(tier3) >= min_records:
+        return _avg_ratio(tier3, audio_duration)
+
+    # Tier 4: all records (cold-start fallback)
+    return _avg_ratio(recent_runs, audio_duration)
+
+
+def _avg_ratio(runs: list[dict], audio_duration: float) -> float | None:
+    """Compute estimated transcription time from average ratio of historical runs."""
     ratios = []
-    for run in recent_runs:
-        trans_duration = run["transcription_duration"]
+    for run in runs:
         audio_dur = run["audio_duration"]
         if audio_dur > 0:
-            ratios.append(trans_duration / audio_dur)
-
+            ratios.append(run["transcription_duration"] / audio_dur)
     if not ratios:
         return None
-
-    avg_ratio = sum(ratios) / len(ratios)
-    return audio_duration * avg_ratio
+    return audio_duration * (sum(ratios) / len(ratios))
 
 
 # ============================================================================
