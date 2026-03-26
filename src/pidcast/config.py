@@ -364,6 +364,7 @@ class TranscriptionStats:
     diarization_performed: bool = False
     speaker_count: int | None = None
     transcription_provider: str | None = None
+    whisper_model: str | None = None
     # Fallback tracking
     json_mode_failed: bool = False
     used_plain_text_fallback: bool = False
@@ -396,6 +397,7 @@ class TranscriptionStats:
             "diarization_performed": self.diarization_performed,
             "speaker_count": self.speaker_count,
             "transcription_provider": self.transcription_provider,
+            "whisper_model": self.whisper_model,
             "json_mode_failed": self.json_mode_failed,
             "used_plain_text_fallback": self.used_plain_text_fallback,
             "tag_extraction_failed": self.tag_extraction_failed,

@@ -49,6 +49,16 @@ from .utils import (
 logger = logging.getLogger(__name__)
 
 
+def _extract_whisper_model_name(model_path: str | None) -> str | None:
+    """Extract clean model name from whisper model path.
+
+    Example: '/path/to/ggml-large-v3.bin' -> 'large-v3'
+    """
+    if not model_path:
+        return None
+    return Path(model_path).stem.removeprefix("ggml-")
+
+
 def parse_transcript_file(filepath: str, verbose: bool = False) -> tuple[str, VideoInfo]:
     """Parse a transcript file and extract transcript text and metadata.
 
@@ -547,13 +557,30 @@ def process_input_source(
         if not os.path.exists(audio_file):
             raise FileNotFoundError(f"Audio file not found: {audio_file}")
 
-        # Estimate transcription time
-        audio_duration = video_info.duration
-        estimated_time = estimate_transcription_time(stats_file, audio_duration)
-
-        # Run transcription
+        # Resolve provider and diarization settings
         transcription_provider_name = getattr(args, "transcription_provider", "whisper")
         diarize = getattr(args, "diarize", False)
+        whisper_model_path = getattr(args, "whisper_model", None)
+        whisper_model_name = _extract_whisper_model_name(whisper_model_path)
+
+        # Estimate transcription time (filtered by provider/model/diarization)
+        audio_duration = video_info.duration
+        estimated_time = estimate_transcription_time(
+            stats_file,
+            audio_duration,
+            provider=transcription_provider_name,
+            whisper_model=whisper_model_name if transcription_provider_name == "whisper" else None,
+            diarize=diarize,
+        )
+
+        # Run transcription
+        if estimated_time:
+            logger.info(
+                f"Estimated transcription time: ~{format_duration(estimated_time)} "
+                "(based on historical data)"
+            )
+        elif audio_duration > 0:
+            logger.info(f"Audio duration: {format_duration(audio_duration)}")
 
         if transcription_provider_name == "elevenlabs":
             from .config import ELEVENLABS_API_KEY
@@ -567,14 +594,6 @@ def process_input_source(
             from .providers.whisper_provider import WhisperTranscriptionProvider
 
             logger.info("\nTranscribing audio with Whisper...")
-            if estimated_time:
-                logger.info(
-                    f"Estimated transcription time: ~{format_duration(estimated_time)} "
-                    "(based on historical data)"
-                )
-            elif audio_duration > 0:
-                logger.info(f"Audio duration: {format_duration(audio_duration)}")
-
             transcription_provider = WhisperTranscriptionProvider(
                 whisper_model=args.whisper_model,
                 output_format=args.output_format.replace("o", ""),
@@ -689,6 +708,7 @@ def process_input_source(
             analysis_file=analysis_file.name if analysis_file else None,
             diarization_performed=diarize,
             transcription_provider=transcription_provider_name,
+            whisper_model=whisper_model_name if transcription_provider_name == "whisper" else None,
             speaker_count=speaker_count,
         )
 
