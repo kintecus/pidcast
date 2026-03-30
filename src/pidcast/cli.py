@@ -1367,8 +1367,9 @@ def main() -> None:
             log_error(str(e))
             return
 
-    # Resolve whisper model name to path
-    if args.whisper_model and not args.analyze_existing:
+    # Resolve whisper model name to path (only needed for whisper provider)
+    transcription_provider = getattr(args, "transcription_provider", "whisper")
+    if args.whisper_model and not args.analyze_existing and transcription_provider == "whisper":
         from .transcription import resolve_whisper_model
 
         try:
