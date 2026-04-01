@@ -24,6 +24,7 @@ from .download import download_audio
 from .exceptions import (
     AnalysisError,
     ApplePodcastsResolutionError,
+    ConfigurationError,
     DiarizationError,
     DownloadError,
     FileProcessingError,
@@ -731,10 +732,25 @@ def process_input_source(
                 video_info.duration_string = format_duration(video_info.duration)
 
         # Resolve provider and diarization settings
+        from .config import ELEVENLABS_API_KEY, WHISPER_CPP_PATH
+
         transcription_provider_name = getattr(args, "transcription_provider", "whisper")
         diarize = getattr(args, "diarize", False)
         whisper_model_path = getattr(args, "whisper_model", None)
         whisper_model_name = _extract_whisper_model_name(whisper_model_path)
+
+        # Auto-select provider if whisper isn't configured
+        if transcription_provider_name == "whisper" and not WHISPER_CPP_PATH:
+            if ELEVENLABS_API_KEY:
+                logger.info("Whisper not configured, using ElevenLabs provider")
+                transcription_provider_name = "elevenlabs"
+            else:
+                raise ConfigurationError(
+                    "No transcription provider configured.\n"
+                    "  Run 'pidcast setup' to get started, or configure:\n"
+                    "  - WHISPER_CPP_PATH in .env (for local transcription)\n"
+                    "  - ELEVENLABS_API_KEY in .env (for cloud transcription)"
+                )
 
         # Estimate transcription time (filtered by provider/model/diarization)
         audio_duration = video_info.duration
@@ -856,6 +872,16 @@ def process_input_source(
         analysis_metadata: dict[str, Any] = {}
 
         should_analyze = not args.no_analyze
+        # Auto-skip analysis if no API key configured
+        if should_analyze:
+            groq_key = os.environ.get("GROQ_API_KEY") or getattr(args, "groq_api_key", None)
+            provider_name = getattr(args, "provider", "groq")
+            if provider_name == "groq" and not groq_key:
+                logger.info(
+                    "Skipping analysis (GROQ_API_KEY not set). "
+                    "Get a free key at: https://console.groq.com/"
+                )
+                should_analyze = False
         should_save_analysis = args.save or args.save_to_obsidian
 
         if should_analyze:
@@ -992,6 +1018,7 @@ def process_input_source(
         return False
 
     except (
+        ConfigurationError,
         DownloadError,
         TranscriptionError,
         FileProcessingError,

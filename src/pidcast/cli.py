@@ -1288,8 +1288,168 @@ def cmd_sync(args: argparse.Namespace) -> None:
             traceback.print_exc()
 
 
+def cmd_doctor() -> None:
+    """Run health checks and display configuration status."""
+    from .setup import determine_status, run_all_checks
+
+    print("\npidcast doctor")
+    print("=" * 40)
+
+    checks = run_all_checks()
+    max_name = max(len(c.name) for c in checks)
+
+    for check in checks:
+        dots = "." * (max_name + 6 - len(check.name))
+        if check.ok:
+            print(f"  {check.name} {dots} {check.detail}")
+        else:
+            label = "MISSING" if check.required else "not set"
+            msg = check.detail if check.detail != "not set" else label
+            print(f"  {check.name} {dots} {msg}")
+            if check.hint:
+                print(f"    -> {check.hint}")
+
+    status, tip = determine_status(checks)
+    print(f"\n  Status: {status}")
+    if tip:
+        print(f"  Tip: {tip}")
+    print()
+
+
+def cmd_setup() -> None:
+    """Interactive setup wizard for first-time users."""
+
+    from .setup import (
+        ENV_FILE,
+        check_env_var,
+        check_ffmpeg,
+        check_whisper,
+        check_whisper_model,
+        write_env_var,
+    )
+
+    print("\npidcast setup")
+    print("=" * 40)
+
+    # Step 1: System dependencies
+    print("\nStep 1/3: Checking system dependencies...\n")
+
+    ffmpeg = check_ffmpeg()
+    if ffmpeg.ok:
+        print(f"  ffmpeg: {ffmpeg.detail}")
+    else:
+        print("  ffmpeg: not found")
+        print("    Install: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)")
+        print("    Then re-run: pidcast setup")
+        return
+
+    whisper = check_whisper()
+    whisper_model = check_whisper_model()
+    use_elevenlabs = False
+
+    if whisper.ok and whisper_model.ok:
+        print(f"  whisper.cpp: {whisper.detail}")
+        print(f"  whisper model: {whisper_model.detail}")
+    else:
+        print("  whisper.cpp: not configured")
+        print("\n  whisper.cpp is needed for local (private) transcription.")
+        print("  You can skip it and use ElevenLabs (cloud) instead.\n")
+        print("  [1] I'll set up whisper.cpp myself (see README for instructions)")
+        print("  [2] Skip - use ElevenLabs cloud transcription")
+        try:
+            choice = input("\n  > ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n  Setup cancelled.")
+            return
+        if choice == "2":
+            use_elevenlabs = True
+        else:
+            print("\n  To set up whisper.cpp:")
+            print("    1. git clone https://github.com/ggerganov/whisper.cpp.git")
+            print("    2. cd whisper.cpp && make")
+            print("    3. bash models/download-ggml-model.sh base.en")
+            print("    4. Set in .env: WHISPER_CPP_PATH=/path/to/whisper.cpp/build/bin/whisper-cli")
+            print("    5. Set in .env: WHISPER_MODEL=/path/to/whisper.cpp/models/ggml-base.en.bin")
+            print("    6. Re-run: pidcast setup")
+            return
+
+    # Step 2: API keys
+    print("\nStep 2/3: API keys\n")
+
+    # Groq (for analysis)
+    groq = check_env_var("GROQ_API_KEY", "GROQ_API_KEY")
+    if groq.ok:
+        print(f"  GROQ_API_KEY: {groq.detail}")
+    else:
+        print("  GROQ_API_KEY: not set (needed for AI analysis)")
+        print("  Get a free key at: https://console.groq.com/")
+        try:
+            key = input("  Paste your key (or press Enter to skip): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            key = ""
+        if key:
+            write_env_var("GROQ_API_KEY", key)
+            print("  Saved to .env")
+        else:
+            print("  Skipped - transcription will work, but AI analysis will be disabled")
+
+    # ElevenLabs (if chosen or if no whisper)
+    if use_elevenlabs:
+        el = check_env_var("ELEVENLABS_API_KEY", "ELEVENLABS_API_KEY")
+        if el.ok:
+            print(f"  ELEVENLABS_API_KEY: {el.detail}")
+        else:
+            print("\n  ELEVENLABS_API_KEY: not set (needed for cloud transcription)")
+            print("  Get a key at: https://elevenlabs.io/")
+            try:
+                key = input("  Paste your key: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                key = ""
+            if key:
+                write_env_var("ELEVENLABS_API_KEY", key)
+                print("  Saved to .env")
+            else:
+                print("  Without this key, transcription won't work.")
+                print("  Add it to .env later: ELEVENLABS_API_KEY=your_key")
+                return
+
+    # Step 3: Summary
+    print("\nStep 3/3: Ready!\n")
+
+    if not ENV_FILE.exists():
+        print(f"  Note: .env file created at {ENV_FILE}")
+
+    if use_elevenlabs:
+        print("  Provider: ElevenLabs (cloud)")
+        print("\n  Try it:")
+        print('    pidcast "https://youtube.com/watch?v=VIDEO_ID"')
+    else:
+        print("  Provider: whisper.cpp (local)")
+        print("\n  Try it:")
+        print('    pidcast "https://youtube.com/watch?v=VIDEO_ID"')
+
+    print()
+
+
 def main() -> None:
     """Main entry point for pidcast CLI."""
+    import sys
+
+    # Handle setup/doctor subcommands before arg parsing
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "doctor":
+            from dotenv import load_dotenv
+
+            load_dotenv()
+            cmd_doctor()
+            return
+        if sys.argv[1] == "setup":
+            from dotenv import load_dotenv
+
+            load_dotenv()
+            cmd_setup()
+            return
+
     args = parse_arguments()
 
     # Set up logging
@@ -1407,8 +1567,11 @@ def main() -> None:
         and not args.analyze_existing
         and not getattr(args, "diarize_existing", None)
     ):
-        log_error("Error: Either provide a URL/file path or use a library command")
-        log_error("Run 'pidcast --help' for usage information")
+        log_error("No input provided.")
+        logger.info('  Usage: pidcast "https://youtube.com/watch?v=VIDEO_ID"')
+        logger.info("         pidcast /path/to/audio.mp3")
+        logger.info("  First time? Run: pidcast setup")
+        logger.info("  Full help: pidcast --help")
         return
 
     # Resolve analysis type with fuzzy matching

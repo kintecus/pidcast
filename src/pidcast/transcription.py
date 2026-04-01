@@ -430,8 +430,10 @@ def run_whisper_transcription(
 
     except FileNotFoundError as e:
         raise TranscriptionError(
-            f"Whisper binary not found at: {WHISPER_CPP_PATH}. "
-            "Please check the WHISPER_CPP_PATH configuration."
+            f"Whisper binary not found at: {WHISPER_CPP_PATH}\n"
+            "  Fix: Set WHISPER_CPP_PATH in .env to your whisper-cli binary path.\n"
+            "  Or use cloud transcription: pidcast <input> --transcription-provider elevenlabs\n"
+            "  Run 'pidcast doctor' to check your setup."
         ) from e
 
 

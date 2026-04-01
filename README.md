@@ -25,79 +25,58 @@ Transcription and LLM-powered analysis tool for podcasts, YouTube videos, and lo
 
 ## Quick start
 
-1. **Install uv**:
+### Path A: Cloud transcription (fastest - 5 min setup)
 
-   ```bash
-   curl -LsSf https://astral.sh/uv/install.sh | sh
-   ```
+No local models needed. Uses [ElevenLabs Scribe v2](https://elevenlabs.io/) for transcription.
 
-2. **Clone and setup**:
+```bash
+# 1. Install uv (Python package manager)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-   ```bash
-   git clone https://github.com/kintecus/pidcast
-   cd pidcast
-   uv sync
-   ```
+# 2. Clone and install
+git clone https://github.com/kintecus/pidcast && cd pidcast && uv sync
 
-3. **Configure** (copy `.env.example` to `.env` and set):
-   - `GROQ_API_KEY` - Get free key at <https://console.groq.com/>
-   - `WHISPER_CPP_PATH` - Path to whisper.cpp main binary
-   - `WHISPER_MODEL` - Path to Whisper model file (name like `medium` or full path)
-   - `ELEVENLABS_API_KEY` - (Optional) For `--transcription-provider elevenlabs`, get key at <https://elevenlabs.io/>
-   - `OBSIDIAN_VAULT_PATH` - (Optional) For `--save-to-obsidian`
-   - `HUGGINGFACE_TOKEN` - (Optional) For `--diarize` with whisper, see [Speaker diarization](#speaker-diarization)
+# 3. Run guided setup (will ask for your ElevenLabs API key)
+uv run pidcast setup
 
-4. **Run**:
+# 4. Transcribe!
+uv run pidcast "https://youtube.com/watch?v=VIDEO_ID"
+```
 
-   ```bash
-   # Transcribe a YouTube video with analysis (default)
-   uv run pidcast "https://youtube.com/watch?v=VIDEO_ID"
+### Path B: Local transcription (private - no audio leaves your machine)
 
-   # Transcribe an Apple Podcasts episode
-   uv run pidcast "https://podcasts.apple.com/podcast/id123456?i=789"
+Uses [whisper.cpp](https://github.com/ggerganov/whisper.cpp) locally. Requires ffmpeg and building whisper.cpp.
 
-   # Transcribe a local audio file
-   uv run pidcast "/path/to/audio/file.mp3"
+```bash
+# 1. Install uv and ffmpeg
+curl -LsSf https://astral.sh/uv/install.sh | sh
+brew install ffmpeg  # macOS, or: apt install ffmpeg
 
-   # Use ElevenLabs for transcription (cloud, faster)
-   uv run pidcast "VIDEO_URL" --transcription-provider elevenlabs
+# 2. Clone and install
+git clone https://github.com/kintecus/pidcast && cd pidcast && uv sync
 
-   # Skip LLM analysis
-   uv run pidcast "VIDEO_URL" --no-analyze
+# 3. Run guided setup (will walk you through whisper.cpp)
+uv run pidcast setup
 
-   # Save to Obsidian vault
-   uv run pidcast "VIDEO_URL" -o
-   ```
+# 4. Transcribe!
+uv run pidcast "https://youtube.com/watch?v=VIDEO_ID"
+```
 
-## External dependencies
+### Troubleshooting
 
-The following tools must be installed separately (all Python dependencies are handled by `uv sync`):
+Run `pidcast doctor` at any time to check your configuration:
 
-- **ffmpeg** - Audio processing
-- **whisper.cpp** - Transcription engine (not needed if using ElevenLabs provider)
+```bash
+uv run pidcast doctor
+```
 
-### Installing whisper.cpp
+### Optional configuration
 
-1. Clone and build [whisper.cpp](https://github.com/ggerganov/whisper.cpp):
+Set these in `.env` for additional features:
 
-   ```bash
-   git clone https://github.com/ggerganov/whisper.cpp.git
-   cd whisper.cpp
-   make
-   ```
-
-2. Download a Whisper model:
-
-   ```bash
-   bash ./models/download-ggml-model.sh base.en
-   ```
-
-3. Configure paths in `.env`:
-
-   ```bash
-   WHISPER_CPP_PATH=/path/to/whisper.cpp/main
-   WHISPER_MODEL=/path/to/whisper.cpp/models/ggml-base.en.bin
-   ```
+- `GROQ_API_KEY` - AI-powered analysis of transcripts (free at <https://console.groq.com/>)
+- `OBSIDIAN_VAULT_PATH` - Save analysis to Obsidian vault (`-o` flag)
+- `HUGGINGFACE_TOKEN` - Speaker diarization with whisper (`--diarize` flag)
 
 ## Usage examples
 
