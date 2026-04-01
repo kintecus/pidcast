@@ -104,7 +104,11 @@ def resolve_whisper_model(model_arg: str) -> str:
 
 
 def build_ffmpeg_audio_conversion_command(
-    input_file: str, output_file: str, overwrite: bool = False
+    input_file: str,
+    output_file: str,
+    overwrite: bool = False,
+    start_offset: float | None = None,
+    max_duration: float | None = None,
 ) -> list[str]:
     """Build FFmpeg command for audio conversion to 16kHz mono WAV.
 
@@ -112,6 +116,8 @@ def build_ffmpeg_audio_conversion_command(
         input_file: Path to input audio file
         output_file: Path to output WAV file
         overwrite: Whether to overwrite existing output file
+        start_offset: Start time in seconds (seek before decoding)
+        max_duration: Maximum duration in seconds to extract
 
     Returns:
         FFmpeg command as list of arguments
@@ -119,10 +125,13 @@ def build_ffmpeg_audio_conversion_command(
     command = [FFMPEG_PATH]
     if overwrite:
         command.append("-y")
+    command.extend(["-i", input_file])
+    if start_offset is not None and start_offset > 0:
+        command.extend(["-ss", str(start_offset)])
+    if max_duration is not None:
+        command.extend(["-t", str(max_duration)])
     command.extend(
         [
-            "-i",
-            input_file,
             "-ar",
             AUDIO_SAMPLE_RATE,
             "-ac",
@@ -210,11 +219,7 @@ def estimate_transcription_time(
         return _avg_ratio(tier2, audio_duration)
 
     # Tier 3: provider only
-    tier3 = [
-        r
-        for r in recent_runs
-        if (r.get("transcription_provider") or "whisper") == provider
-    ]
+    tier3 = [r for r in recent_runs if (r.get("transcription_provider") or "whisper") == provider]
     if len(tier3) >= min_records:
         return _avg_ratio(tier3, audio_duration)
 
@@ -232,6 +237,47 @@ def _avg_ratio(runs: list[dict], audio_duration: float) -> float | None:
     if not ratios:
         return None
     return audio_duration * (sum(ratios) / len(ratios))
+
+
+# ============================================================================
+# AUDIO SEGMENT EXTRACTION
+# ============================================================================
+
+
+def extract_audio_segment(
+    audio_file: str | Path,
+    output_file: str | Path,
+    start_offset: float = 0,
+    max_duration: float = 120,
+    verbose: bool = False,
+) -> str:
+    """Extract a segment from an audio file using ffmpeg.
+
+    Args:
+        audio_file: Path to input audio file
+        output_file: Path to output WAV file
+        start_offset: Start time in seconds
+        max_duration: Duration in seconds to extract
+        verbose: Enable verbose output
+
+    Returns:
+        Path to the extracted segment file
+    """
+    command = build_ffmpeg_audio_conversion_command(
+        str(audio_file),
+        str(output_file),
+        overwrite=True,
+        start_offset=start_offset,
+        max_duration=max_duration,
+    )
+
+    if verbose:
+        logger.info(f"Extracting segment: offset={start_offset}s, duration={max_duration}s")
+        subprocess.run(command, check=True)
+    else:
+        subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+    return str(output_file)
 
 
 # ============================================================================
@@ -393,6 +439,8 @@ def process_local_file(
     input_file: str | Path,
     output_dir: str | Path,
     verbose: bool = False,
+    start_offset: float | None = None,
+    max_duration: float | None = None,
 ) -> tuple[str, dict]:
     """Process a local audio file for transcription.
 
@@ -400,6 +448,8 @@ def process_local_file(
         input_file: Path to local audio file
         output_dir: Directory to store processed files
         verbose: Enable verbose output
+        start_offset: Start time in seconds for segment extraction
+        max_duration: Maximum duration in seconds for segment extraction
 
     Returns:
         Tuple of (audio_file_path, info_dict)
@@ -454,6 +504,12 @@ def process_local_file(
         if verbose:
             logger.warning(f"Could not determine duration: {e}")
 
+    # Clamp duration for segment extraction
+    if max_duration is not None and info.duration > 0:
+        offset = start_offset or 0
+        info.duration = min(info.duration - offset, max_duration)
+        info.duration_string = fmt_dur(info.duration)
+
     # Convert to 16kHz mono WAV if needed
     output_wav = output_dir / f"{name}_16k.wav"
 
@@ -462,7 +518,11 @@ def process_local_file(
 
     try:
         command = build_ffmpeg_audio_conversion_command(
-            str(input_file), str(output_wav), overwrite=True
+            str(input_file),
+            str(output_wav),
+            overwrite=True,
+            start_offset=start_offset,
+            max_duration=max_duration,
         )
 
         if verbose:

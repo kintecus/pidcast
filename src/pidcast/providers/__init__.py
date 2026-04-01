@@ -32,6 +32,7 @@ class TranscriptionResult:
     provider: str
     language: str | None
     diarized: bool
+    whisper_json_path: Path | None = None
 
 
 @runtime_checkable

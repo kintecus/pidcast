@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -26,11 +27,13 @@ class WhisperTranscriptionProvider:
         output_format: str,
         output_dir: str | Path,
         estimated_duration: float | None = None,
+        save_whisper_json_to: Path | None = None,
     ) -> None:
         self._whisper_model = whisper_model
         self._output_format = output_format
         self._output_dir = Path(output_dir)
         self._estimated_duration = estimated_duration
+        self._save_whisper_json_to = save_whisper_json_to
 
     def transcribe(
         self,
@@ -41,7 +44,9 @@ class WhisperTranscriptionProvider:
     ) -> TranscriptionResult:
         """Transcribe audio using whisper.cpp."""
         temp_output = self._output_dir / f"temp_transcript_{uuid.uuid4().hex[:8]}"
-        output_format = "json" if diarize else self._output_format
+        # Always output JSON when we need to save whisper data or diarize
+        need_json = diarize or self._save_whisper_json_to is not None
+        output_format = "json" if need_json else self._output_format
 
         if diarize and not HUGGINGFACE_TOKEN:
             raise DiarizationError(
@@ -66,17 +71,39 @@ class WhisperTranscriptionProvider:
 
         duration = time.time() - start_time
 
+        # Save whisper JSON before diarization (so it survives diarization failures)
+        whisper_json_path = None
+        json_file = Path(f"{temp_output}.json")
+        if self._save_whisper_json_to and json_file.exists():
+            shutil.copy2(json_file, self._save_whisper_json_to)
+            whisper_json_path = self._save_whisper_json_to
+            if verbose:
+                logger.info(f"Saved whisper JSON: {whisper_json_path}")
+
         # Handle diarization
         speaker_count = None
         if diarize:
             text, speaker_count = self._run_diarization(audio_file, temp_output, verbose)
             diarized = speaker_count is not None and speaker_count > 0
         else:
-            txt_file = Path(f"{temp_output}.txt")
-            try:
-                text = txt_file.read_text(encoding="utf-8")
-            except FileNotFoundError as e:
-                raise TranscriptionError(f"Whisper output file not found: {txt_file}") from e
+            # When we forced JSON for saving, also read plain text from it
+            if need_json:
+                try:
+                    with open(json_file, encoding="utf-8") as f:
+                        whisper_data = json.load(f)
+                    text = "\n".join(
+                        seg["text"].strip()
+                        for seg in whisper_data.get("transcription", [])
+                        if seg["text"].strip()
+                    )
+                except FileNotFoundError as e:
+                    raise TranscriptionError(f"Whisper JSON output not found: {json_file}") from e
+            else:
+                txt_file = Path(f"{temp_output}.txt")
+                try:
+                    text = txt_file.read_text(encoding="utf-8")
+                except FileNotFoundError as e:
+                    raise TranscriptionError(f"Whisper output file not found: {txt_file}") from e
             diarized = False
 
         # Clean up temp files
@@ -89,6 +116,7 @@ class WhisperTranscriptionProvider:
             provider="whisper",
             language=language,
             diarized=diarized,
+            whisper_json_path=whisper_json_path,
         )
 
     def _run_diarization(

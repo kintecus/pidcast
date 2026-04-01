@@ -14,8 +14,11 @@ YouTube transcription and analysis tool using Whisper and Groq. Generates Obsidi
 **Transcription:**
 
 - **Run tool:** `uv run pidcast "URL_OR_PATH"`
-- **Save to Obsidian:** `uv run pidcast "URL" --save_to_obsidian` (saves analysis only)
-- **Analyze existing:** `uv run pidcast --analyze_existing transcript.md`
+- **Save to Obsidian:** `uv run pidcast "URL" --save-to-obsidian` (saves analysis only)
+- **Analyze existing:** `uv run pidcast --analyze-existing transcript.md`
+- **Test segment:** `uv run pidcast "URL" --test-segment --diarize` (test settings on first 2 min)
+- **Test from offset:** `uv run pidcast "URL" --test-segment 3 --start-at 10` (3 min from 10:00)
+- **Re-diarize:** `uv run pidcast --diarize-existing transcript.md` (retry diarization without re-transcribing)
 
 **Library Management:**
 
