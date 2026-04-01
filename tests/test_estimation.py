@@ -104,15 +104,31 @@ class TestTieredFallback:
     def test_falls_back_from_diarize_to_provider_only(self):
         records = [
             # Only 1 diarized whisper record (< 3 threshold)
-            _make_stats(provider="whisper", diarization_performed=True,
-                        audio_duration=100, transcription_duration=300),
+            _make_stats(
+                provider="whisper",
+                diarization_performed=True,
+                audio_duration=100,
+                transcription_duration=300,
+            ),
             # 3 non-diarized whisper records (ratio = 1.0)
-            _make_stats(provider="whisper", diarization_performed=False,
-                        audio_duration=100, transcription_duration=100),
-            _make_stats(provider="whisper", diarization_performed=False,
-                        audio_duration=200, transcription_duration=200),
-            _make_stats(provider="whisper", diarization_performed=False,
-                        audio_duration=300, transcription_duration=300),
+            _make_stats(
+                provider="whisper",
+                diarization_performed=False,
+                audio_duration=100,
+                transcription_duration=100,
+            ),
+            _make_stats(
+                provider="whisper",
+                diarization_performed=False,
+                audio_duration=200,
+                transcription_duration=200,
+            ),
+            _make_stats(
+                provider="whisper",
+                diarization_performed=False,
+                audio_duration=300,
+                transcription_duration=300,
+            ),
         ]
         stats_file = _write_stats(records)
 
@@ -125,19 +141,43 @@ class TestTieredFallback:
     def test_whisper_model_tier1_used_when_enough_records(self):
         records = [
             # 3 records for large-v3 with diarize=False, ratio = 2.0
-            _make_stats(provider="whisper", whisper_model="large-v3",
-                        audio_duration=100, transcription_duration=200),
-            _make_stats(provider="whisper", whisper_model="large-v3",
-                        audio_duration=200, transcription_duration=400),
-            _make_stats(provider="whisper", whisper_model="large-v3",
-                        audio_duration=300, transcription_duration=600),
+            _make_stats(
+                provider="whisper",
+                whisper_model="large-v3",
+                audio_duration=100,
+                transcription_duration=200,
+            ),
+            _make_stats(
+                provider="whisper",
+                whisper_model="large-v3",
+                audio_duration=200,
+                transcription_duration=400,
+            ),
+            _make_stats(
+                provider="whisper",
+                whisper_model="large-v3",
+                audio_duration=300,
+                transcription_duration=600,
+            ),
             # 3 records for base, ratio = 0.5
-            _make_stats(provider="whisper", whisper_model="base",
-                        audio_duration=100, transcription_duration=50),
-            _make_stats(provider="whisper", whisper_model="base",
-                        audio_duration=200, transcription_duration=100),
-            _make_stats(provider="whisper", whisper_model="base",
-                        audio_duration=300, transcription_duration=150),
+            _make_stats(
+                provider="whisper",
+                whisper_model="base",
+                audio_duration=100,
+                transcription_duration=50,
+            ),
+            _make_stats(
+                provider="whisper",
+                whisper_model="base",
+                audio_duration=200,
+                transcription_duration=100,
+            ),
+            _make_stats(
+                provider="whisper",
+                whisper_model="base",
+                audio_duration=300,
+                transcription_duration=150,
+            ),
         ]
         stats_file = _write_stats(records)
 
@@ -149,15 +189,31 @@ class TestTieredFallback:
     def test_whisper_model_falls_back_when_insufficient(self):
         records = [
             # Only 1 record for large-v3 (< 3 threshold)
-            _make_stats(provider="whisper", whisper_model="large-v3",
-                        audio_duration=100, transcription_duration=200),
+            _make_stats(
+                provider="whisper",
+                whisper_model="large-v3",
+                audio_duration=100,
+                transcription_duration=200,
+            ),
             # 3 records for base (ratio = 0.5)
-            _make_stats(provider="whisper", whisper_model="base",
-                        audio_duration=100, transcription_duration=50),
-            _make_stats(provider="whisper", whisper_model="base",
-                        audio_duration=200, transcription_duration=100),
-            _make_stats(provider="whisper", whisper_model="base",
-                        audio_duration=300, transcription_duration=150),
+            _make_stats(
+                provider="whisper",
+                whisper_model="base",
+                audio_duration=100,
+                transcription_duration=50,
+            ),
+            _make_stats(
+                provider="whisper",
+                whisper_model="base",
+                audio_duration=200,
+                transcription_duration=100,
+            ),
+            _make_stats(
+                provider="whisper",
+                whisper_model="base",
+                audio_duration=300,
+                transcription_duration=150,
+            ),
         ]
         stats_file = _write_stats(records)
 
