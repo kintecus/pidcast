@@ -43,8 +43,8 @@ Transcription and LLM-powered analysis tool for podcasts, YouTube videos, and lo
    - `GROQ_API_KEY` - Get free key at <https://console.groq.com/>
    - `WHISPER_CPP_PATH` - Path to whisper.cpp main binary
    - `WHISPER_MODEL` - Path to Whisper model file (name like `medium` or full path)
-   - `ELEVENLABS_API_KEY` - (Optional) For `--transcription_provider elevenlabs`, get key at <https://elevenlabs.io/>
-   - `OBSIDIAN_VAULT_PATH` - (Optional) For `--save_to_obsidian`
+   - `ELEVENLABS_API_KEY` - (Optional) For `--transcription-provider elevenlabs`, get key at <https://elevenlabs.io/>
+   - `OBSIDIAN_VAULT_PATH` - (Optional) For `--save-to-obsidian`
    - `HUGGINGFACE_TOKEN` - (Optional) For `--diarize` with whisper, see [Speaker diarization](#speaker-diarization)
 
 4. **Run**:
@@ -60,7 +60,7 @@ Transcription and LLM-powered analysis tool for podcasts, YouTube videos, and lo
    uv run pidcast "/path/to/audio/file.mp3"
 
    # Use ElevenLabs for transcription (cloud, faster)
-   uv run pidcast "VIDEO_URL" --transcription_provider elevenlabs
+   uv run pidcast "VIDEO_URL" --transcription-provider elevenlabs
 
    # Skip LLM analysis
    uv run pidcast "VIDEO_URL" --no-analyze
@@ -114,7 +114,7 @@ uv run pidcast "VIDEO_URL" --no-analyze
 uv run pidcast "VIDEO_URL" -a key_points
 
 # Analyze existing transcript without re-transcribing
-uv run pidcast --analyze_existing transcript.md
+uv run pidcast --analyze-existing transcript.md
 
 # Transcribe local audio file
 uv run pidcast "/path/to/audio/file.mp3"
@@ -132,22 +132,22 @@ uv run pidcast "VIDEO_URL" -f
 uv run pidcast "VIDEO_URL" -v
 
 # Use PO Token for restricted YouTube videos
-uv run pidcast "VIDEO_URL" --po_token "client.type+TOKEN"
+uv run pidcast "VIDEO_URL" --po-token "client.type+TOKEN"
 ```
 
 ### Choosing a transcription provider
 
-By default, transcription uses local whisper.cpp. Pass `--transcription_provider elevenlabs` to use the ElevenLabs Scribe v2 cloud API instead:
+By default, transcription uses local whisper.cpp. Pass `--transcription-provider elevenlabs` to use the ElevenLabs Scribe v2 cloud API instead:
 
 ```bash
 # Local whisper.cpp (default)
 uv run pidcast "VIDEO_URL"
 
 # ElevenLabs cloud transcription (faster, requires ELEVENLABS_API_KEY)
-uv run pidcast "VIDEO_URL" --transcription_provider elevenlabs
+uv run pidcast "VIDEO_URL" --transcription-provider elevenlabs
 
 # ElevenLabs with built-in speaker diarization
-uv run pidcast "VIDEO_URL" --transcription_provider elevenlabs --diarize
+uv run pidcast "VIDEO_URL" --transcription-provider elevenlabs --diarize
 ```
 
 ElevenLabs Scribe v2 includes built-in speaker diarization (no HuggingFace token needed). Transcription time estimates adapt per-provider based on historical run data.
@@ -161,7 +161,7 @@ By default, analysis uses Groq. Pass `--provider claude` to use your local Claud
 uv run pidcast "VIDEO_URL" --provider claude
 
 # Choose a specific Claude model (sonnet is default)
-uv run pidcast "VIDEO_URL" --provider claude --claude_model opus
+uv run pidcast "VIDEO_URL" --provider claude --claude-model opus
 
 # Groq is the default (no flag needed)
 uv run pidcast "VIDEO_URL" --provider groq
@@ -282,16 +282,16 @@ Compare Groq and Claude summaries on the same transcript, judged by Claude Opus:
 
 ```bash
 # Run comparison (requires a plain-text transcript file)
-pidcast-eval --compare groq,claude --transcript_file transcript.txt --title "Episode Title"
+pidcast-eval --compare groq,claude --transcript-file transcript.txt --title "Episode Title"
 
 # Use a different Claude model for analysis
-pidcast-eval --compare groq,claude --claude_model opus --transcript_file transcript.txt
+pidcast-eval --compare groq,claude --claude-model opus --transcript-file transcript.txt
 
 # Use a different judge model (default: opus)
-pidcast-eval --compare groq,claude --judge sonnet --transcript_file transcript.txt
+pidcast-eval --compare groq,claude --judge sonnet --transcript-file transcript.txt
 
 # Different analysis type
-pidcast-eval --compare groq,claude --analysis_type comprehensive --transcript_file transcript.txt
+pidcast-eval --compare groq,claude --analysis-type comprehensive --transcript-file transcript.txt
 ```
 
 The judge scores each summary on accuracy, completeness, clarity, and conciseness (1-10 each) and returns a verdict with reasoning. Results are saved as markdown reports in `data/evals/comparisons/`.

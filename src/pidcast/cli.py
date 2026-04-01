@@ -13,7 +13,6 @@ from pathlib import Path
 from .config import (
     DEFAULT_PROMPTS_FILE,
     DEFAULT_STATS_FILE,
-    DEFAULT_TRANSCRIPTS_DIR,
     OBSIDIAN_PATH,
     WHISPER_MODEL,
 )
@@ -246,37 +245,39 @@ Common Workflows:
   # Choose specific model
   %(prog)s "VIDEO_URL" -m llama33           # Matches 'llama-3.3-70b-versatile'
 
+  # Test settings on a short segment before full transcription
+  %(prog)s "VIDEO_URL" --test-segment --diarize
+  %(prog)s "VIDEO_URL" --test-segment 5 --start-at 10
+
   # Analyze existing transcript
-  %(prog)s --analyze_existing transcript.md -a summary
+  %(prog)s --analyze-existing transcript.md -a summary
+
+  # Retry diarization on existing transcript (without re-transcribing)
+  %(prog)s --diarize-existing transcript.md
 
 Discovery:
-  # List available analysis types
-  %(prog)s -L
-
-  # List available models
-  %(prog)s -M
+  %(prog)s -L                              # List analysis types
+  %(prog)s -M                              # List LLM models
+  %(prog)s -W                              # List Whisper models
 
 Library Management:
-  # Add podcast to library
   %(prog)s lib add "https://feeds.example.com/podcast.xml"
-
-  # Process latest episode from library
   %(prog)s lib process "Lex Fridman" --latest
-
-  # List all shows
   %(prog)s lib list
-
-  # Sync library and process new episodes
   %(prog)s lib sync
 
 Short Flags:
-  -o  --save_to_obsidian    Save to Obsidian vault
-  -a  --analysis_type       Analysis type (fuzzy matching enabled)
-  -m  --groq_model          Model name (fuzzy matching enabled)
+  -o  --save-to-obsidian    Save to Obsidian vault
+  -a  --analysis-type       Analysis type (fuzzy matching enabled)
+  -m  --groq-model          Model name (fuzzy matching enabled)
+  -l  --language            Language code for transcription
   -f  --force               Force re-transcription
   -v  --verbose             Verbose output
+  -p  --preset              Use a named preset
   -L  --list-analyses       List available analysis types
-  -M  --list-models         List available models
+  -M  --list-models         List available LLM models
+  -W  --list-whisper-models List available Whisper models
+  -P  --list-presets        List available presets
         """,
     )
 
@@ -308,23 +309,33 @@ Short Flags:
         )
         process_parser.add_argument("--match", help="Process episode matching this title string")
         # Reuse common flags for processing
-        process_parser.add_argument("--output_dir", help="Output directory")
+        process_parser.add_argument("--output-dir", dest="output_dir", help="Output directory")
         process_parser.add_argument(
-            "--save_to_obsidian", action="store_true", help="Save to Obsidian"
+            "--save-to-obsidian",
+            dest="save_to_obsidian",
+            action="store_true",
+            help="Save to Obsidian",
         )
-        process_parser.add_argument("--whisper_model", help="Whisper model path")
-        process_parser.add_argument("--groq_api_key", help="Groq API key")
         process_parser.add_argument(
-            "--analysis_type", default="executive_summary", help="Analysis type"
+            "--whisper-model", dest="whisper_model", help="Whisper model path"
         )
-        process_parser.add_argument("--prompts_file", help="Prompts file path")
+        process_parser.add_argument("--groq-api-key", dest="groq_api_key", help="Groq API key")
+        process_parser.add_argument(
+            "--analysis-type",
+            dest="analysis_type",
+            default="executive_summary",
+            help="Analysis type",
+        )
+        process_parser.add_argument("--prompts-file", dest="prompts_file", help="Prompts file path")
         process_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
         process_parser.add_argument("--force", action="store_true", help="Force reprocessing")
-        process_parser.add_argument("--output_format", default="otxt", help="Output format")
         process_parser.add_argument(
-            "--keep_transcript", action="store_true", help="Keep transcript"
+            "--output-format", dest="output_format", default="otxt", help="Output format"
         )
-        process_parser.add_argument("--po_token", help="PO Token")
+        process_parser.add_argument(
+            "--keep-transcript", dest="keep_transcript", action="store_true", help="Keep transcript"
+        )
+        process_parser.add_argument("--po-token", dest="po_token", help="PO Token")
         process_parser.add_argument(
             "--cookies-from-browser",
             default=None,
@@ -341,14 +352,21 @@ Short Flags:
             dest="chrome_profile",
             help="Chrome profile for cookie extraction (display name or directory name)",
         )
-        process_parser.add_argument("--front_matter", default="{}", help="Front matter JSON")
-        process_parser.add_argument("--save", action="store_true", help="Save output")
-        process_parser.add_argument("--no-analyze", action="store_true", help="Skip analysis")
         process_parser.add_argument(
-            "--skip_analysis_on_error", action="store_true", help="Skip analysis on error"
+            "--front-matter", dest="front_matter", default="{}", help="Front matter JSON"
         )
-        process_parser.add_argument("--stats_file", help="Stats file path")
-        process_parser.add_argument("--groq_model", help="Groq model")
+        process_parser.add_argument("--save", action="store_true", help="Save output")
+        process_parser.add_argument(
+            "--no-analyze", dest="no_analyze", action="store_true", help="Skip analysis"
+        )
+        process_parser.add_argument(
+            "--skip-analysis-on-error",
+            dest="skip_analysis_on_error",
+            action="store_true",
+            help="Skip analysis on error",
+        )
+        process_parser.add_argument("--stats-file", dest="stats_file", help="Stats file path")
+        process_parser.add_argument("--groq-model", dest="groq_model", help="Groq model")
         process_parser.add_argument(
             "--provider",
             default="groq",
@@ -356,7 +374,8 @@ Short Flags:
             help="LLM provider: 'groq' (default) or 'claude'",
         )
         process_parser.add_argument(
-            "--claude_model",
+            "--claude-model",
+            dest="claude_model",
             default=None,
             help="Claude model alias when --provider claude: sonnet (default), opus, haiku",
         )
@@ -390,15 +409,21 @@ Short Flags:
         sync_parser.add_argument(
             "--backfill", type=int, metavar="N", help="Override backfill limit"
         )
-        sync_parser.add_argument("--output_dir", help="Output directory")
+        sync_parser.add_argument("--output-dir", dest="output_dir", help="Output directory")
         sync_parser.add_argument(
-            "--whisper_model", default=WHISPER_MODEL, help="Whisper model path"
+            "--whisper-model",
+            dest="whisper_model",
+            default=WHISPER_MODEL,
+            help="Whisper model path",
         )
-        sync_parser.add_argument("--groq_api_key", help="Groq API key")
+        sync_parser.add_argument("--groq-api-key", dest="groq_api_key", help="Groq API key")
         sync_parser.add_argument(
-            "--analysis_type", default="executive_summary", help="Analysis type"
+            "--analysis-type",
+            dest="analysis_type",
+            default="executive_summary",
+            help="Analysis type",
         )
-        sync_parser.add_argument("--prompts_file", help="Prompts file path")
+        sync_parser.add_argument("--prompts-file", dest="prompts_file", help="Prompts file path")
         sync_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
         sync_parser.add_argument("--no-digest", action="store_true", help="Skip digest generation")
 
@@ -406,9 +431,9 @@ Short Flags:
         digest_parser = lib_subparsers.add_parser("digest", help="Generate podcast digest")
         digest_parser.add_argument("--date", help="Specific date (YYYY-MM-DD)")
         digest_parser.add_argument("--range", help="Date range (e.g., 7d)")
-        digest_parser.add_argument("--output_dir", help="Output directory")
-        digest_parser.add_argument("--groq_api_key", help="Groq API key")
-        digest_parser.add_argument("--prompts_file", help="Prompts file path")
+        digest_parser.add_argument("--output-dir", dest="output_dir", help="Output directory")
+        digest_parser.add_argument("--groq-api-key", dest="groq_api_key", help="Groq API key")
+        digest_parser.add_argument("--prompts-file", dest="prompts_file", help="Prompts file path")
         digest_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
 
     # Input source group (mutually exclusive) - for original workflow
@@ -417,22 +442,37 @@ Short Flags:
         "input_source", nargs="?", help="YouTube video URL or path to local audio file"
     )
     input_group.add_argument(
-        "--analyze_existing",
+        "--analyze-existing",
+        dest="analyze_existing",
         help="Path to existing transcript file (.md or .txt) to analyze without re-transcribing",
     )
+    input_group.add_argument(
+        "--diarize-existing",
+        dest="diarize_existing",
+        help="Path to existing transcript (.md) to run speaker diarization on. "
+        "Requires .whisper.json next to the transcript (auto-saved during transcription).",
+    )
     parser.add_argument(
-        "--output_dir",
+        "--audio",
         default=None,
-        help=f"Output directory for Markdown files (default: {DEFAULT_TRANSCRIPTS_DIR})",
+        help="Path to audio file for --diarize-existing (overrides auto-detected .wav).",
+    )
+    parser.add_argument(
+        "--output-dir",
+        dest="output_dir",
+        default=None,
+        help="Output directory for Markdown files (default: current directory)",
     )
     parser.add_argument(
         "-o",
-        "--save_to_obsidian",
+        "--save-to-obsidian",
+        dest="save_to_obsidian",
         action="store_true",
-        help=f"Save analysis files to Obsidian vault (transcripts still saved to output_dir) at: {OBSIDIAN_PATH}",
+        help=f"Save analysis files to Obsidian vault (transcripts still saved to --output-dir) at: {OBSIDIAN_PATH}",
     )
     parser.add_argument(
-        "--whisper_model",
+        "--whisper-model",
+        dest="whisper_model",
         default=WHISPER_MODEL,
         help="Whisper model name (e.g., 'medium', 'large-v3-turbo') or path to model file",
     )
@@ -443,7 +483,8 @@ Short Flags:
         help="Language code for transcription (e.g., 'uk', 'en', 'de'). Default: auto-detect.",
     )
     parser.add_argument(
-        "--transcription_provider",
+        "--transcription-provider",
+        dest="transcription_provider",
         choices=["whisper", "elevenlabs"],
         default="whisper",
         help="Transcription backend: whisper (local) or elevenlabs (cloud). Default: whisper.",
@@ -455,30 +496,38 @@ Short Flags:
         help="Run speaker diarization (whisper: pyannote.audio + HUGGINGFACE_TOKEN, elevenlabs: built-in)",
     )
     parser.add_argument(
-        "--output_format",
+        "--output-format",
+        dest="output_format",
         default="otxt",
         help="Whisper output format (txt, vtt, srt, json). Prefix with 'o' for original filename.",
     )
     parser.add_argument(
-        "--front_matter", default="{}", help="JSON string for Markdown front matter"
+        "--front-matter",
+        dest="front_matter",
+        default="{}",
+        help="JSON string for Markdown front matter",
     )
     parser.add_argument(
-        "--stats_file",
+        "--stats-file",
+        dest="stats_file",
         default=None,
         help=f"File to store statistics (default: {DEFAULT_STATS_FILE})",
     )
     parser.add_argument(
-        "--keep_transcript",
+        "--keep-transcript",
+        dest="keep_transcript",
         action="store_true",
         help="Keep the .txt transcript file alongside the .md file",
     )
     parser.add_argument(
-        "--keep_audio",
+        "--keep-audio",
+        dest="keep_audio",
         action="store_true",
         help="Save the converted WAV audio file to the output directory",
     )
     parser.add_argument(
-        "--po_token",
+        "--po-token",
+        dest="po_token",
         default=None,
         help="PO Token for bypassing YouTube restrictions (format: 'client.type+TOKEN')",
     )
@@ -506,6 +555,29 @@ Short Flags:
         help="Skip duplicate detection and force transcription",
     )
 
+    # Test segment arguments
+    segment_group = parser.add_argument_group("Test Segment Options")
+    segment_group.add_argument(
+        "--test-segment",
+        nargs="?",
+        const=2,
+        type=float,
+        default=None,
+        dest="test_segment",
+        metavar="MINUTES",
+        help="Test transcription settings on first N minutes of audio (default: 2). "
+        "Skips markdown creation, analysis, and statistics.",
+    )
+    segment_group.add_argument(
+        "--start-at",
+        type=float,
+        default=None,
+        dest="start_at",
+        metavar="MINUTES",
+        help="Start offset in minutes for --test-segment (default: 0). "
+        "Use to skip intros or jump to a specific section.",
+    )
+
     # LLM Analysis arguments
     analysis_group = parser.add_argument_group("LLM Analysis Options")
     analysis_group.add_argument(
@@ -515,41 +587,34 @@ Short Flags:
         help="Skip LLM analysis (default: analyze is enabled)",
     )
     analysis_group.add_argument(
-        "--analyze",
-        action="store_true",
-        help="(Deprecated) Enable LLM analysis - this is now the default behavior",
-    )
-    analysis_group.add_argument(
         "-a",
-        "--analysis_type",
+        "--analysis-type",
+        dest="analysis_type",
         default="executive_summary",
         help="Analysis type/prompt template to use (default: executive_summary). Use -L to list available types.",
     )
     analysis_group.add_argument(
-        "--prompts_file",
+        "--prompts-file",
+        dest="prompts_file",
         default=None,
         help=f"Path to prompts YAML file (default: {DEFAULT_PROMPTS_FILE})",
     )
-    # Keep old flag name for backward compatibility
     analysis_group.add_argument(
-        "--analysis_prompts_file",
-        default=None,
-        dest="prompts_file_legacy",
-        help="(Deprecated) Use --prompts_file instead",
-    )
-    analysis_group.add_argument(
-        "--groq_api_key",
+        "--groq-api-key",
+        dest="groq_api_key",
         default=None,
         help="Groq API key (default: GROQ_API_KEY environment variable)",
     )
     analysis_group.add_argument(
         "-m",
-        "--groq_model",
+        "--groq-model",
+        dest="groq_model",
         default=None,
         help="Groq model to use for analysis (default: from config/models.yaml). Use -M to list available models.",
     )
     analysis_group.add_argument(
-        "--skip_analysis_on_error",
+        "--skip-analysis-on-error",
+        dest="skip_analysis_on_error",
         action="store_true",
         help="Continue if analysis fails instead of aborting",
     )
@@ -560,7 +625,8 @@ Short Flags:
         help="LLM provider for analysis: 'groq' (default) or 'claude' (uses local Claude CLI)",
     )
     analysis_group.add_argument(
-        "--claude_model",
+        "--claude-model",
+        dest="claude_model",
         default=None,
         help="Claude model alias when --provider claude: 'sonnet' (default), 'opus', 'haiku'",
     )
@@ -632,7 +698,7 @@ def cmd_process(args: argparse.Namespace) -> None:
     """Handle 'pidcast lib process' command."""
     import uuid
 
-    from .config import DEFAULT_STATS_FILE, DEFAULT_TRANSCRIPTS_DIR, OBSIDIAN_PATH, VideoInfo
+    from .config import DEFAULT_STATS_FILE, OBSIDIAN_PATH, VideoInfo
     from .library import LibraryManager, Show
 
     library = LibraryManager()
@@ -737,7 +803,7 @@ def cmd_process(args: argparse.Namespace) -> None:
             return
 
     # Run workflow
-    output_dir = Path(args.output_dir) if args.output_dir else DEFAULT_TRANSCRIPTS_DIR
+    output_dir = Path(args.output_dir) if args.output_dir else Path.cwd()
     stats_file = Path(args.stats_file) if args.stats_file else DEFAULT_STATS_FILE
     analysis_output_dir = Path(OBSIDIAN_PATH) if args.save_to_obsidian else output_dir
 
@@ -1091,7 +1157,7 @@ def cmd_digest(args: argparse.Namespace) -> None:
         DigestFormatter.format_terminal(digest)
 
         # Save to file
-        output_dir = Path(args.output_dir) if args.output_dir else DEFAULT_TRANSCRIPTS_DIR
+        output_dir = Path(args.output_dir) if args.output_dir else Path.cwd()
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = get_digest_output_path(date_filter or datetime.now())
 
@@ -1119,7 +1185,7 @@ def cmd_sync(args: argparse.Namespace) -> None:
     history = ProcessingHistory(HISTORY_FILE)
 
     # Get output directory
-    output_dir = Path(args.output_dir) if args.output_dir else DEFAULT_TRANSCRIPTS_DIR
+    output_dir = Path(args.output_dir) if args.output_dir else Path.cwd()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Get Whisper model
@@ -1336,7 +1402,11 @@ def main() -> None:
         return
 
     # Validate that we have either input_source or analyze_existing for transcription workflow
-    if not args.input_source and not args.analyze_existing:
+    if (
+        not args.input_source
+        and not args.analyze_existing
+        and not getattr(args, "diarize_existing", None)
+    ):
         log_error("Error: Either provide a URL/file path or use a library command")
         log_error("Run 'pidcast --help' for usage information")
         return
@@ -1382,7 +1452,7 @@ def main() -> None:
             return
 
     # Set defaults for paths
-    output_dir = Path(args.output_dir) if args.output_dir else DEFAULT_TRANSCRIPTS_DIR
+    output_dir = Path(args.output_dir) if args.output_dir else Path.cwd()
     stats_file = Path(args.stats_file) if args.stats_file else DEFAULT_STATS_FILE
 
     # Determine where analysis files should go
@@ -1396,6 +1466,46 @@ def main() -> None:
     run_uid = str(uuid.uuid4())
     run_timestamp = datetime.datetime.now().isoformat()
     start_time = time.time()
+
+    # Validate test-segment options
+    test_segment = getattr(args, "test_segment", None)
+    start_at = getattr(args, "start_at", None)
+
+    if test_segment is not None:
+        if test_segment <= 0:
+            log_error("--test-segment duration must be positive")
+            return
+        if test_segment > 30:
+            log_error("--test-segment maximum is 30 minutes")
+            return
+        if args.analyze_existing:
+            log_error("--test-segment cannot be used with --analyze_existing")
+            return
+
+    if start_at is not None:
+        if test_segment is None:
+            log_error("--start-at requires --test-segment")
+            return
+        if start_at < 0:
+            log_error("--start-at must be non-negative")
+            return
+
+    # Validate --audio flag
+    if getattr(args, "audio", None) and not getattr(args, "diarize_existing", None):
+        log_error("--audio requires --diarize-existing")
+        return
+
+    # Handle diarize-existing mode
+    diarize_existing = getattr(args, "diarize_existing", None)
+    if diarize_existing:
+        from .workflow import run_diarize_existing_mode
+
+        run_diarize_existing_mode(
+            diarize_existing,
+            audio_override=getattr(args, "audio", None),
+            verbose=args.verbose,
+        )
+        return
 
     # Handle analyze-existing mode
     if args.analyze_existing:
@@ -1424,8 +1534,8 @@ def main() -> None:
         logger.info(f"Run ID: {run_uid}")
         logger.info(f"Timestamp: {run_timestamp}")
 
-    # Check for duplicate transcription (unless --force is used)
-    if not args.force:
+    # Check for duplicate transcription (unless --force or --test-segment is used)
+    if not args.force and test_segment is None:
         prev_transcription = find_existing_transcription(stats_file, args.input_source, output_dir)
 
         if prev_transcription:

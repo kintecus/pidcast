@@ -32,6 +32,7 @@ from .exceptions import (
 from .markdown import create_analysis_markdown_file, create_markdown_file
 from .transcription import (
     estimate_transcription_time,
+    extract_audio_segment,
     process_local_file,
 )
 from .utils import (
@@ -243,8 +244,7 @@ def run_analysis(
     """
     log_section("Starting LLM Analysis")
 
-    # Load prompts (use new flag or legacy flag for backward compatibility)
-    prompts_file = args.prompts_file or getattr(args, "prompts_file_legacy", None)
+    prompts_file = args.prompts_file
     prompts_config = load_analysis_prompts(prompts_file, args.verbose)
 
     # Get transcript text
@@ -463,6 +463,143 @@ def run_analyze_existing_mode(
         return False
 
 
+def run_diarize_existing_mode(
+    transcript_path: str | Path,
+    audio_override: str | None = None,
+    verbose: bool = False,
+) -> bool:
+    """Run diarization on an existing transcript using saved whisper JSON.
+
+    Args:
+        transcript_path: Path to the existing transcript .md file
+        audio_override: Optional explicit path to audio file
+        verbose: Enable verbose output
+
+    Returns:
+        True if successful, False otherwise
+    """
+    from .config import HUGGINGFACE_TOKEN
+    from .diarization import merge_whisper_with_diarization, run_diarization
+    from .markdown import format_yaml_front_matter
+
+    transcript_path = Path(transcript_path)
+
+    if verbose:
+        log_section("Diarize Existing Transcript")
+        logger.info(f"Input file: {transcript_path}")
+
+    try:
+        # Parse transcript to get metadata and text
+        _, video_info = parse_transcript_file(str(transcript_path), verbose)
+        logger.info(f"Title: {video_info.title}")
+
+        # Locate whisper JSON
+        stem = transcript_path.stem
+        parent = transcript_path.parent
+        whisper_json = parent / f"{stem}.whisper.json"
+
+        if not whisper_json.exists():
+            log_error(
+                f"Whisper JSON not found: {whisper_json}\n"
+                "This file is auto-saved during transcription. "
+                "Re-run transcription to generate it."
+            )
+            return False
+
+        # Locate audio file
+        audio_file = None
+        if audio_override:
+            audio_file = Path(audio_override)
+            if not audio_file.exists():
+                log_error(f"Audio file not found: {audio_file}")
+                return False
+        else:
+            # Look for .wav next to the transcript
+            audio_wav = parent / f"{stem}.wav"
+            if audio_wav.exists():
+                audio_file = audio_wav
+            else:
+                log_error(
+                    f"Audio file not found: {audio_wav}\n"
+                    "Provide an audio file with --audio /path/to/file.wav"
+                )
+                return False
+
+        logger.info(f"Audio: {audio_file}")
+        logger.info(f"Whisper JSON: {whisper_json}")
+
+        # Validate HuggingFace token
+        if not HUGGINGFACE_TOKEN:
+            from .exceptions import DiarizationError
+
+            raise DiarizationError(
+                "HUGGINGFACE_TOKEN environment variable not set. Required for speaker diarization."
+            )
+
+        # Run diarization
+        logger.info("Running speaker diarization...")
+        import time
+
+        start_time = time.time()
+        diarization_segments = run_diarization(str(audio_file), HUGGINGFACE_TOKEN, verbose)
+        diarization_duration = time.time() - start_time
+
+        # Read whisper JSON and merge
+        with open(whisper_json, encoding="utf-8") as f:
+            whisper_data = json.load(f)
+
+        whisper_segments = whisper_data.get("transcription", [])
+        diarized_text, speaker_count = merge_whisper_with_diarization(
+            whisper_segments, diarization_segments
+        )
+
+        if speaker_count and speaker_count > 0:
+            logger.info(f"Speakers detected: {speaker_count}")
+        else:
+            logger.warning("No speaker segments detected")
+
+        # Re-read the original file to preserve front matter structure
+        content = transcript_path.read_text(encoding="utf-8")
+        parts = content.split("---", 2)
+
+        if len(parts) >= 3:
+            # Parse and update front matter
+            import yaml
+
+            try:
+                metadata = yaml.safe_load(parts[1]) or {}
+            except Exception:
+                metadata = {}
+            metadata["diarized"] = True
+            metadata["speaker_count"] = speaker_count
+
+            front_matter_str = format_yaml_front_matter(metadata)
+            updated_content = f"{front_matter_str}\n\n{diarized_text}"
+        else:
+            updated_content = diarized_text
+
+        transcript_path.write_text(updated_content, encoding="utf-8")
+
+        log_section("Diarization completed successfully!")
+        logger.info(f"Updated: file://{transcript_path.absolute()}")
+        logger.info(f"Diarization time: {format_duration(diarization_duration)}")
+        logger.info(f"Speakers: {speaker_count}")
+
+        return True
+
+    except DiarizationError as e:
+        log_error(str(e))
+        if verbose:
+            traceback.print_exc()
+        return False
+
+    except Exception as e:
+        log_error(f"An unexpected error occurred: {type(e).__name__}: {e}")
+        if verbose:
+            traceback.print_exc()
+        return False
+
+
 def process_input_source(
     input_source: str,
     args: argparse.Namespace,
@@ -493,6 +630,8 @@ def process_input_source(
     audio_file: str | None = None
     is_local_file = False
     video_info: VideoInfo | None = None
+    smart_filename: str | None = None
+    transcription_result = None
     success = False
 
     try:
@@ -512,10 +651,26 @@ def process_input_source(
         output_dir.mkdir(parents=True, exist_ok=True)
         analysis_output_dir.mkdir(parents=True, exist_ok=True)
 
+        # Compute segment parameters
+        test_segment = getattr(args, "test_segment", None)
+        start_at = getattr(args, "start_at", None)
+        segment_offset = start_at * 60 if start_at else None
+        segment_duration = test_segment * 60 if test_segment is not None else None
+
+        if test_segment is not None:
+            offset_str = f" from {start_at:.0f}:00" if start_at else ""
+            log_section(f"Test Segment: {test_segment:.0f} min{offset_str}")
+
         # Process input source
         if is_local_file:
             logger.info("Processing local file...")
-            audio_file, video_info = process_local_file(source, output_dir, args.verbose)
+            audio_file, video_info = process_local_file(
+                source,
+                output_dir,
+                args.verbose,
+                start_offset=segment_offset,
+                max_duration=segment_duration,
+            )
             logger.info("\n✓ Local file processed successfully!")
         elif is_apple_podcasts_url(source):
             logger.info("Resolving Apple Podcasts URL...")
@@ -557,6 +712,24 @@ def process_input_source(
         if not os.path.exists(audio_file):
             raise FileNotFoundError(f"Audio file not found: {audio_file}")
 
+        # Extract segment for URL sources (local files already handled in process_local_file)
+        if segment_duration is not None and not is_local_file:
+            trimmed_file = str(output_dir / f"test_segment_{uuid.uuid4().hex[:8]}.wav")
+            extract_audio_segment(
+                audio_file,
+                trimmed_file,
+                start_offset=segment_offset or 0,
+                max_duration=segment_duration,
+                verbose=args.verbose,
+            )
+            cleanup_temp_files(audio_file, args.verbose)
+            audio_file = trimmed_file
+            # Clamp video_info duration
+            if video_info.duration > 0:
+                offset = segment_offset or 0
+                video_info.duration = min(video_info.duration - offset, segment_duration)
+                video_info.duration_string = format_duration(video_info.duration)
+
         # Resolve provider and diarization settings
         transcription_provider_name = getattr(args, "transcription_provider", "whisper")
         diarize = getattr(args, "diarize", False)
@@ -593,12 +766,16 @@ def process_input_source(
         else:
             from .providers.whisper_provider import WhisperTranscriptionProvider
 
+            # Save whisper JSON for diarization retry (always, since it's small)
+            whisper_json_dest = output_dir / f"{smart_filename}.whisper.json"
+
             logger.info("\nTranscribing audio with Whisper...")
             transcription_provider = WhisperTranscriptionProvider(
                 whisper_model=args.whisper_model,
                 output_format=args.output_format.replace("o", ""),
                 output_dir=output_dir,
                 estimated_duration=estimated_time,
+                save_whisper_json_to=whisper_json_dest,
             )
 
         transcription_result = transcription_provider.transcribe(
@@ -611,10 +788,38 @@ def process_input_source(
         transcription_duration = transcription_result.duration
         speaker_count = transcription_result.speaker_count
 
+        # Auto-save audio when diarizing (for diarization retry)
+        saved_audio_path = None
+        if diarize and audio_file and Path(audio_file).exists():
+            saved_audio_path = output_dir / f"{smart_filename}.wav"
+            if not saved_audio_path.exists():
+                shutil.copy2(audio_file, saved_audio_path)
+                if args.verbose:
+                    logger.info(f"Saved audio for diarization retry: {saved_audio_path}")
+
         if diarize and speaker_count and speaker_count > 0:
             logger.info(f"\n✓ Diarization complete - {speaker_count} speaker(s) detected")
         elif diarize:
             logger.warning("Diarization returned no speaker segments, using plain transcript")
+
+        # Test segment: show preview and exit early
+        if test_segment is not None:
+            log_section("Test Segment Results")
+            preview = transcription_result.text[:3000]
+            if len(transcription_result.text) > 3000:
+                preview += "\n\n[... truncated ...]"
+            print(preview)
+            print()
+            if transcription_result.diarized and speaker_count:
+                logger.info(f"Speakers detected: {speaker_count}")
+            logger.info(f"Transcription time: {format_duration(transcription_duration)}")
+            logger.info(
+                f"Segment: {test_segment:.0f} min"
+                + (f" from {start_at:.0f}:00" if start_at else "")
+            )
+            logger.info("\nResults look good? Run without --test-segment for full transcription.")
+            success = True
+            return True
 
         # Write transcript to temp file for markdown creation
         transcript_file = str(output_dir / f"temp_transcript_{uuid.uuid4().hex[:8]}.txt")
@@ -741,10 +946,11 @@ def process_input_source(
                 f"({format_duration(diff_abs)}) {direction} than estimated"
             )
 
-        # Save audio file if requested
+        # Save audio file if requested (skip if already auto-saved for diarization)
         if getattr(args, "keep_audio", False) and audio_file and Path(audio_file).exists():
             saved_audio = output_dir / f"{smart_filename}.wav"
-            shutil.copy2(audio_file, saved_audio)
+            if not saved_audio.exists():
+                shutil.copy2(audio_file, saved_audio)
             logger.info(f"Audio saved to: file://{saved_audio.absolute()}")
 
         return True
@@ -753,12 +959,43 @@ def process_input_source(
         logger.info("\n\n✗ Process interrupted by user.")
         return False
 
+    except DiarizationError as e:
+        log_error(str(e))
+        # Check if whisper JSON was saved - if so, hint about retry
+        whisper_json = output_dir / f"{smart_filename}.whisper.json" if smart_filename else None
+        if whisper_json and whisper_json.exists():
+            # Save a non-diarized markdown from whisper JSON
+            fallback_md = output_dir / f"{smart_filename}.md"
+            if not fallback_md.exists() and video_info:
+                try:
+                    with open(whisper_json, encoding="utf-8") as f:
+                        whisper_data = json.load(f)
+                    plain_text = "\n".join(
+                        seg["text"].strip()
+                        for seg in whisper_data.get("transcription", [])
+                        if seg["text"].strip()
+                    )
+                    from .markdown import create_markdown_file as _create_md
+
+                    temp_txt = output_dir / f"_fallback_{uuid.uuid4().hex[:8]}.txt"
+                    temp_txt.write_text(plain_text, encoding="utf-8")
+                    _create_md(fallback_md, temp_txt, video_info, {}, args.verbose)
+                    temp_txt.unlink(missing_ok=True)
+                    logger.info(f"\nTranscript saved: file://{fallback_md.absolute()}")
+                except Exception:
+                    pass  # Best-effort fallback
+
+            logger.info("Retry diarization without re-transcribing:")
+            logger.info(f"  pidcast --diarize-existing {fallback_md}")
+        if args.verbose:
+            traceback.print_exc()
+        return False
+
     except (
         DownloadError,
         TranscriptionError,
         FileProcessingError,
         AnalysisError,
-        DiarizationError,
         ApplePodcastsResolutionError,
     ) as e:
         log_error(str(e))
