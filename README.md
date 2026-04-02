@@ -17,7 +17,7 @@ Transcription and LLM-powered analysis tool for podcasts, YouTube videos, and lo
   - Sync and process new episodes automatically
   - Generate digests from processing history
 - **Provider comparison evals** - Run the same transcript through Groq and Claude, judge quality with Opus
-- **Markdown output** with YAML front matter and contextual tags
+- **Markdown output** with YAML front matter and smart source-aware tags (YouTube, Apple Podcasts, local file) - override with `--tags`
 - **Smart filenames** with date prefixes
 - **Fast dependencies** managed with uv
 
@@ -97,6 +97,9 @@ uv run pidcast --analyze-existing transcript.md
 
 # Transcribe local audio file
 uv run pidcast "/path/to/audio/file.mp3"
+
+# Custom tags (overrides auto-inferred source tags)
+uv run pidcast "/path/to/meeting.mp3" --tags meeting,standup,weekly
 
 # Specify transcription language
 uv run pidcast "VIDEO_URL" -l uk

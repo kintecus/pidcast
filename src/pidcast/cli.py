@@ -508,6 +508,12 @@ Short Flags:
         help="JSON string for Markdown front matter",
     )
     parser.add_argument(
+        "--tags",
+        default=None,
+        help="Comma-separated tags for front matter (overrides auto-inferred source tags). "
+        "Example: --tags meeting,standup,weekly",
+    )
+    parser.add_argument(
         "--stats-file",
         dest="stats_file",
         default=None,
