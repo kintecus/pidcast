@@ -45,12 +45,37 @@ def format_yaml_front_matter(front_matter: dict[str, Any]) -> str:
 # ============================================================================
 
 
+def infer_source_tags(webpage_url: str, is_local_file: bool = False) -> list[str]:
+    """Infer default tags based on the input source type.
+
+    Args:
+        webpage_url: URL or file URI of the source
+        is_local_file: Whether the source is a local file
+
+    Returns:
+        List of inferred tags (always includes 'transcription')
+    """
+    tags = ["transcription"]
+    if is_local_file:
+        return tags
+    url_lower = webpage_url.lower()
+    if "youtube.com" in url_lower or "youtu.be" in url_lower:
+        tags.extend(["youtube", "podcast"])
+    elif "podcasts.apple.com" in url_lower:
+        tags.extend(["apple-podcasts", "podcast"])
+    elif webpage_url:
+        tags.append("podcast")
+    return tags
+
+
 def create_markdown_file(
     markdown_file: str | Path,
     transcript_file: str | Path,
     video_info: VideoInfo,
     front_matter: dict[str, Any] | None = None,
     verbose: bool = False,
+    is_local_file: bool = False,
+    custom_tags: list[str] | None = None,
 ) -> bool:
     """Create a Markdown file with front matter and transcript.
 
@@ -60,6 +85,8 @@ def create_markdown_file(
         video_info: Video metadata
         front_matter: Additional front matter fields
         verbose: Enable verbose output
+        is_local_file: Whether the source is a local file
+        custom_tags: User-provided tags (overrides inferred tags when set)
 
     Returns:
         True if successful, False otherwise
@@ -76,6 +103,11 @@ def create_markdown_file(
         with open(transcript_file, encoding="utf-8") as f:
             transcript = f.read()
 
+        if custom_tags is not None:
+            tags = custom_tags
+        else:
+            tags = infer_source_tags(video_info.webpage_url, is_local_file)
+
         obsidian_front_matter = {
             "title": video_info.title,
             "date": datetime.datetime.now().strftime("%Y-%m-%d"),
@@ -83,7 +115,7 @@ def create_markdown_file(
             "url": video_info.webpage_url,
             "duration": video_info.duration_string,
             "channel": video_info.channel,
-            "tags": ["podcast", "youtube", "transcription"],
+            "tags": tags,
         }
 
         obsidian_front_matter.update(front_matter)
@@ -111,6 +143,8 @@ def create_analysis_markdown_file(
     video_info: VideoInfo,
     output_dir: str | Path,
     verbose: bool = False,
+    is_local_file: bool = False,
+    custom_tags: list[str] | None = None,
 ) -> Path | None:
     """Create markdown file for LLM analysis results.
 
@@ -120,6 +154,8 @@ def create_analysis_markdown_file(
         video_info: Video metadata
         output_dir: Directory for output file
         verbose: Enable verbose output
+        is_local_file: Whether the source is a local file
+        custom_tags: User-provided tags (overrides inferred source tags when set)
 
     Returns:
         Path to created file, or None on error
@@ -136,13 +172,16 @@ def create_analysis_markdown_file(
         # Get unique path
         analysis_file = get_unique_filename(output_dir, analysis_filename, ".md")
 
-        # Build front matter
-        # Build tags list: static + contextual
+        # Build tags list: static + source-inferred/custom + contextual
+        if custom_tags is not None:
+            source_tags = custom_tags
+        else:
+            source_tags = infer_source_tags(video_info.webpage_url, is_local_file)
         static_tags = [
             "analysis",
             "ai-generated",
             analysis_results["analysis_type"],
-            "youtube",
+            *[t for t in source_tags if t != "transcription"],
         ]
         contextual_tags = analysis_results.get("contextual_tags", [])
 

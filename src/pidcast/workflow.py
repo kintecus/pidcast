@@ -229,6 +229,8 @@ def run_analysis(
     args: argparse.Namespace,
     transcript_text: str | None = None,
     save_to_file: bool = True,
+    is_local_file: bool = False,
+    custom_tags: list[str] | None = None,
 ) -> tuple[Path | None, float, dict[str, Any]]:
     """Run LLM analysis on transcript.
 
@@ -239,6 +241,8 @@ def run_analysis(
         args: Parsed arguments
         transcript_text: Optional pre-loaded transcript text
         save_to_file: Whether to save the analysis to a file
+        is_local_file: Whether the source is a local file
+        custom_tags: User-provided tags (overrides inferred source tags)
 
     Returns:
         Tuple of (analysis_file, duration, metadata)
@@ -330,6 +334,8 @@ def run_analysis(
             video_info,
             output_dir,
             args.verbose,
+            is_local_file=is_local_file,
+            custom_tags=custom_tags,
         )
 
         if not analysis_file:
@@ -856,12 +862,20 @@ def process_input_source(
             front_matter["diarized"] = True
             front_matter["speaker_count"] = transcription_result.speaker_count
 
+        # Parse custom tags from CLI
+        custom_tags = None
+        raw_tags = getattr(args, "tags", None)
+        if raw_tags:
+            custom_tags = [t.strip() for t in raw_tags.split(",") if t.strip()]
+
         if not create_markdown_file(
             markdown_file,
             transcript_file,
             video_info,
             front_matter,
             args.verbose,
+            is_local_file=is_local_file,
+            custom_tags=custom_tags,
         ):
             raise FileProcessingError("Failed to create Markdown file")
 
@@ -893,6 +907,8 @@ def process_input_source(
                     args,
                     transcript_text=None,
                     save_to_file=should_save_analysis,
+                    is_local_file=is_local_file,
+                    custom_tags=custom_tags,
                 )
                 analysis_performed = True
             except AnalysisError as e:
