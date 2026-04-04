@@ -104,11 +104,7 @@ def lookup_itunes(collection_id: str, track_id: str | None) -> dict:
     if track_id:
         ep_results = _itunes_fetch({"id": collection_id, "entity": "podcastEpisode"})
         for r in ep_results:
-            if (
-                r.get("wrapperType") == "track"
-                and r.get("kind") == "podcast-episode"
-                and str(r.get("trackId", "")) == track_id
-            ):
+            if r.get("kind") == "podcast-episode" and str(r.get("trackId", "")) == track_id:
                 episode_info = r
                 break
 
