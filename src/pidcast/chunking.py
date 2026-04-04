@@ -228,6 +228,7 @@ def format_chunks_for_synthesis(
     chunk_results: list[str],
     video_title: str,
     video_duration: str,
+    max_chars: int | None = None,
 ) -> str:
     """Prepare chunk analysis results for synthesis prompt.
 
@@ -235,17 +236,36 @@ def format_chunks_for_synthesis(
         chunk_results: List of analysis results from each chunk
         video_title: Original video title
         video_duration: Original video duration string
+        max_chars: If set, truncate each chunk proportionally to fit within this limit
 
     Returns:
         Formatted input for synthesis prompt
     """
-    parts = [
-        f"# Video: {video_title}",
-        f"# Duration: {video_duration}",
-        f"# Analyzed in {len(chunk_results)} chunks",
-        "",
-    ]
+    header = (
+        f"# Video: {video_title}\n"
+        f"# Duration: {video_duration}\n"
+        f"# Analyzed in {len(chunk_results)} chunks\n"
+    )
 
+    # If max_chars is set, calculate per-chunk budget
+    if max_chars is not None and chunk_results:
+        header_overhead = len(header) + sum(
+            len(f"\n## Chunk {i + 1} of {len(chunk_results)}\n\n")
+            for i in range(len(chunk_results))
+        )
+        available = max_chars - header_overhead
+        per_chunk = max(available // len(chunk_results), 200)
+
+        truncated_results = []
+        for result in chunk_results:
+            stripped = result.strip()
+            if len(stripped) > per_chunk:
+                truncated_results.append(stripped[:per_chunk] + "\n[...truncated]")
+            else:
+                truncated_results.append(stripped)
+        chunk_results = truncated_results
+
+    parts = [header]
     for i, result in enumerate(chunk_results):
         parts.append(f"## Chunk {i + 1} of {len(chunk_results)}")
         parts.append(result.strip())
