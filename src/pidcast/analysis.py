@@ -193,6 +193,14 @@ def is_json_validation_error(error: Exception) -> bool:
     return any(pattern.lower() in error_str for pattern in JSON_VALIDATION_ERROR_PATTERNS)
 
 
+def is_payload_too_large_error(error: Exception) -> bool:
+    """Check if error is a 413 Payload Too Large error."""
+    error_str = str(error).lower()
+    return (
+        "413" in error_str or "payload too large" in error_str or "request_too_large" in error_str
+    )
+
+
 # ============================================================================
 # PROMPT MANAGEMENT
 # ============================================================================
@@ -495,6 +503,24 @@ def _call_llm_with_fallback(
                             f"  2. Use --skip_analysis_on_error to save transcript without analysis\n"
                             f"  3. Check if your transcript is extremely short (models need enough content)"
                         ) from e
+            elif is_payload_too_large_error(e):
+                log_warning(
+                    f"{selector.get_display_name(current_model)} rejected payload as too large"
+                )
+                next_model = selector.handle_rate_limit(current_model)
+                if next_model:
+                    current_model = next_model
+                    continue
+                else:
+                    tried = selector.get_tried_models()
+                    raise AnalysisError(
+                        f"Payload too large for all fallback models.\n"
+                        f"Tried: {', '.join(sorted(tried))}\n\n"
+                        f"The synthesis prompt exceeds all models' request size limits.\n"
+                        f"Options:\n"
+                        f"  1. Try a shorter transcript\n"
+                        f"  2. Use --skip_analysis_on_error to skip analysis"
+                    ) from e
             elif is_rate_limit_error(e):
                 next_model = selector.handle_rate_limit(current_model)
                 if next_model:
@@ -850,6 +876,30 @@ def _analyze_with_chunking(
     synthesis_user = substitute_prompt_variables(
         synthesis_template.user_prompt, synthesis_variables
     )
+
+    # Pre-check: truncate synthesis payload if it exceeds model limits
+    synthesis_tokens = estimate_tokens(synthesis_system + synthesis_user)
+    effective_limit = selector.get_effective_token_limit(preferred_model)
+    max_input_tokens = effective_limit - synthesis_template.max_output_tokens - 500
+    if synthesis_tokens > max_input_tokens:
+        logger.info(
+            f"Synthesis prompt ({synthesis_tokens} tokens) exceeds limit ({max_input_tokens} tokens), "
+            f"truncating chunk analyses..."
+        )
+        max_synthesis_chars = max_input_tokens * CHAR_TO_TOKEN_RATIO
+        synthesis_input = format_chunks_for_synthesis(
+            valid_results,
+            video_info.title,
+            video_info.duration_string,
+            max_chars=max_synthesis_chars,
+        )
+        synthesis_variables = {"chunk_analyses": synthesis_input}
+        synthesis_system = substitute_prompt_variables(
+            synthesis_template.system_prompt, synthesis_variables
+        )
+        synthesis_user = substitute_prompt_variables(
+            synthesis_template.user_prompt, synthesis_variables
+        )
 
     # Make synthesis call
     selector.reset()
