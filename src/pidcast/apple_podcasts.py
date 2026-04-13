@@ -99,20 +99,27 @@ def lookup_itunes(collection_id: str, track_id: str | None) -> dict:
             "No RSS feed URL found for this podcast. The podcast may not have a public feed."
         )
 
-    # Step 2: optionally look up episode metadata by collection+track ID
+    # Step 2: optionally look up episode metadata by collection+track ID.
+    # iTunes Lookup defaults to ~50 results; pass the documented max so older
+    # episodes on long-running shows are still discoverable.
     episode_info: dict = {}
     if track_id:
-        ep_results = _itunes_fetch({"id": collection_id, "entity": "podcastEpisode"})
+        ep_results = _itunes_fetch({"id": collection_id, "entity": "podcastEpisode", "limit": 200})
         for r in ep_results:
             if r.get("kind") == "podcast-episode" and str(r.get("trackId", "")) == track_id:
                 episode_info = r
                 break
 
-    # Merge: collection provides feedUrl/collectionName/artistName,
-    # episode_info (if found) provides trackName/releaseDate for matching.
-    merged = {**collection_info, **episode_info}
-    # Ensure feedUrl is always present (episode_info might lack it)
-    merged["feedUrl"] = collection_info["feedUrl"]
+    # Only carry forward the show-level fields we actually need. Merging the
+    # full collection dict leaks the show's own ``releaseDate`` (= newest
+    # episode) into matching, which silently selects the wrong episode when
+    # the per-episode lookup misses.
+    merged = {
+        "feedUrl": collection_info["feedUrl"],
+        "collectionName": collection_info.get("collectionName", ""),
+        "artistName": collection_info.get("artistName", ""),
+        **episode_info,
+    }
 
     return merged
 
@@ -122,12 +129,19 @@ def _normalize(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
+def _strip_query(url: str) -> str:
+    """Drop query string and fragment so audio URLs compare cleanly across CDNs."""
+    parsed = urllib.parse.urlparse(url)
+    return parsed._replace(query="", fragment="").geturl()
+
+
 def find_episode_in_feed(feed_url: str, itunes_meta: dict, verbose: bool = False) -> Episode:
     """Parse the podcast RSS feed and find the episode matching *itunes_meta*.
 
-    Matching strategy:
-    1. Normalized title comparison (primary)
-    2. Same-day publication date (secondary fallback)
+    Matching strategy (most → least reliable):
+    1. Enclosure (audio) URL — iTunes ``episodeUrl`` vs RSS ``audio_url``
+    2. Normalized title
+    3. Unique same-day publication date (only if exactly one feed entry matches)
 
     Raises:
         ApplePodcastsResolutionError: If the episode cannot be found.
@@ -137,7 +151,15 @@ def find_episode_in_feed(feed_url: str, itunes_meta: dict, verbose: bool = False
     except Exception as e:
         raise ApplePodcastsResolutionError(f"Failed to fetch/parse podcast RSS feed: {e}") from e
 
-    # Primary: match by title
+    # Primary: match by enclosure URL (ignoring query strings, which CDNs mutate)
+    target_audio = itunes_meta.get("episodeUrl", "")
+    if target_audio:
+        norm_audio = _strip_query(target_audio)
+        for ep in episodes:
+            if _strip_query(ep.audio_url) == norm_audio:
+                return ep
+
+    # Secondary: match by normalized title
     target_title = itunes_meta.get("trackName", "")
     if target_title:
         norm_target = _normalize(target_title)
@@ -145,20 +167,24 @@ def find_episode_in_feed(feed_url: str, itunes_meta: dict, verbose: bool = False
             if _normalize(ep.title) == norm_target:
                 return ep
 
-    # Secondary: match by release date (same day)
+    # Tertiary: same-day release date, but only when the date uniquely
+    # identifies one episode. The previous unconditional fallback silently
+    # returned a wrong episode whenever the iTunes lookup missed the target.
     release_date_str = itunes_meta.get("releaseDate", "")
     if release_date_str:
         try:
             release_date = datetime.fromisoformat(release_date_str.replace("Z", "+00:00")).date()
-            for ep in episodes:
-                if ep.pub_date.date() == release_date:
-                    return ep
+            same_day = [ep for ep in episodes if ep.pub_date.date() == release_date]
+            if len(same_day) == 1:
+                return same_day[0]
         except (ValueError, AttributeError):
             pass
 
     raise ApplePodcastsResolutionError(
-        f"Could not find episode '{target_title}' in the podcast feed. "
-        f"The feed has {len(episodes)} episodes."
+        f"Could not find episode '{target_title or itunes_meta.get('trackId', '?')}' "
+        f"in the podcast feed. The feed has {len(episodes)} episodes. "
+        "The iTunes Lookup API may not have returned this episode "
+        "(common for very old episodes on long-running shows)."
     )
 
 
