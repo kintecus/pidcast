@@ -1,4 +1,4 @@
-"""Configuration file management for pidcast library."""
+"""User config management (~/.config/pidcast/config.yaml) for pidcast."""
 
 import logging
 from pathlib import Path
@@ -9,8 +9,6 @@ from ruamel.yaml import YAML
 from .config import (
     CONFIG_DIR,
     CONFIG_FILE,
-    DEFAULT_BACKFILL_LIMIT,
-    DEFAULT_FEED_CACHE_HOURS,
     DEFAULT_TRANSCRIPTS_DIR,
     OBSIDIAN_PATH,
 )
@@ -23,21 +21,13 @@ class ConfigManager:
 
     @staticmethod
     def ensure_config_dir() -> Path:
-        """Ensure config directory exists.
-
-        Returns:
-            Path to config directory
-        """
+        """Ensure config directory exists."""
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         return CONFIG_DIR
 
     @staticmethod
     def load_config() -> dict[str, Any]:
-        """Load config.yaml with defaults.
-
-        Returns:
-            Configuration dictionary
-        """
+        """Load config.yaml with defaults."""
         if not CONFIG_FILE.exists():
             return ConfigManager._default_config()
 
@@ -52,19 +42,12 @@ class ConfigManager:
 
     @staticmethod
     def save_config(config: dict[str, Any]) -> bool:
-        """Save configuration to config.yaml.
-
-        Args:
-            config: Configuration dictionary
-
-        Returns:
-            True if successful, False otherwise
-        """
+        """Save configuration to config.yaml."""
         try:
             ConfigManager.ensure_config_dir()
             yaml = YAML()
             yaml.default_flow_style = False
-            yaml.width = 4096  # Prevent line wrapping
+            yaml.width = 4096
 
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 yaml.dump(config, f)
@@ -75,11 +58,7 @@ class ConfigManager:
 
     @staticmethod
     def init_default_config() -> bool:
-        """Initialize default config.yaml if it doesn't exist.
-
-        Returns:
-            True if created or already exists, False on error
-        """
+        """Initialize default config.yaml if it doesn't exist."""
         if CONFIG_FILE.exists():
             return True
 
@@ -92,10 +71,7 @@ class ConfigManager:
             yaml.width = 4096
 
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                # Write comments manually for better documentation
-                f.write("# Pidcast Global Configuration\n\n")
-                f.write("# Number of recent episodes to process when adding a new show\n")
-                f.write(f"backfill_limit: {config['backfill_limit']}\n\n")
+                f.write("# Pidcast user config\n\n")
                 f.write("# Directory for transcript output\n")
                 f.write(f'output_dir: "{config["output_dir"]}"\n\n')
                 f.write("# Obsidian vault path (optional)\n")
@@ -103,8 +79,6 @@ class ConfigManager:
                     f.write(f'obsidian_vault: "{config["obsidian_vault"]}"\n\n')
                 else:
                     f.write("obsidian_vault: null\n\n")
-                f.write("# RSS feed cache duration (hours)\n")
-                f.write(f"feed_cache_hours: {config['feed_cache_hours']}\n\n")
                 f.write("# Chrome profile for cookie extraction (display name or directory name)\n")
                 f.write("# Run 'pidcast --list-chrome-profiles' to see available profiles\n")
                 f.write("chrome_profile: null\n")
@@ -117,17 +91,7 @@ class ConfigManager:
 
     @staticmethod
     def load_preset(name: str) -> dict[str, Any]:
-        """Load a named preset from config.
-
-        Args:
-            name: Preset name
-
-        Returns:
-            Dictionary of flag overrides
-
-        Raises:
-            ValueError: If preset not found or no presets defined
-        """
+        """Load a named preset from config."""
         config = ConfigManager.load_config()
         presets = config.get("presets")
         if not presets:
@@ -139,11 +103,7 @@ class ConfigManager:
 
     @staticmethod
     def list_presets() -> dict[str, dict[str, Any]]:
-        """List all defined presets.
-
-        Returns:
-            Dictionary of preset names to their flag overrides
-        """
+        """List all defined presets."""
         config = ConfigManager.load_config()
         presets = config.get("presets")
         if not presets:
@@ -152,15 +112,9 @@ class ConfigManager:
 
     @staticmethod
     def _default_config() -> dict[str, Any]:
-        """Default configuration.
-
-        Returns:
-            Default configuration dictionary
-        """
+        """Default configuration."""
         return {
-            "backfill_limit": DEFAULT_BACKFILL_LIMIT,
             "output_dir": str(DEFAULT_TRANSCRIPTS_DIR),
             "obsidian_vault": OBSIDIAN_PATH,
-            "feed_cache_hours": DEFAULT_FEED_CACHE_HOURS,
             "chrome_profile": None,
         }

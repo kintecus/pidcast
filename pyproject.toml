@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pidcast"
-version = "0.8.1"
-description = "YouTube transcription tool with Whisper and LLM analysis"
+version = "1.0.0"
+description = "Single-shot transcription and LLM analysis for podcasts, YouTube, and local audio"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -16,7 +16,6 @@ dependencies = [
     "pyyaml>=6.0.3",
     "feedparser>=6.0.0",
     "ruamel.yaml>=0.18.0",
-    "requests-cache>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -31,8 +30,6 @@ elevenlabs = [
 
 [project.scripts]
 pidcast = "pidcast.cli:main"
-yt-transcribe = "pidcast.cli:main"
-pidcast-eval = "pidcast.evals.cli:eval_main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pidcast"]

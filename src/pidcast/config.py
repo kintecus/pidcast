@@ -2,7 +2,6 @@
 
 import os
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -52,62 +51,28 @@ DEFAULT_TRANSCRIPTS_DIR = PROJECT_ROOT / "data" / "transcripts"
 DEFAULT_STATS_FILE = DEFAULT_TRANSCRIPTS_DIR / "transcription_stats.json"
 DEFAULT_PROMPTS_FILE = PROJECT_ROOT / "config" / "prompts.yaml"
 DEFAULT_MODELS_FILE = PROJECT_ROOT / "config" / "models.yaml"
-DEFAULT_DIGESTS_DIR = DEFAULT_TRANSCRIPTS_DIR  # Digests saved alongside transcripts
-
-# Deprecated: kept for backward compatibility
-DEFAULT_ANALYSIS_PROMPTS_FILE = DEFAULT_PROMPTS_FILE
-
-
-def get_digest_output_path(date: datetime | None = None) -> Path:
-    """Get output path for digest file.
-
-    Args:
-        date: Date for digest (defaults to today)
-
-    Returns:
-        Path to digest markdown file
-    """
-    if date is None:
-        date = datetime.now()
-
-    filename = f"{date.strftime('%Y-%m-%d')}_podcast-digest.md"
-    return DEFAULT_DIGESTS_DIR / filename
-
-
 # ============================================================================
-# LIBRARY CONFIGURATION
+# USER CONFIG DIRECTORY
 # ============================================================================
 
 
 def get_config_dir() -> Path:
     """Get config directory (XDG compliant)."""
     if os.name == "posix":
-        # Use XDG_CONFIG_HOME if set, otherwise use ~/.config
         xdg_config = os.environ.get("XDG_CONFIG_HOME")
         if xdg_config:
             return Path(xdg_config) / "pidcast"
         return Path.home() / ".config" / "pidcast"
-    else:  # Windows
-        appdata = os.environ.get("APPDATA")
-        if appdata:
-            return Path(appdata) / "pidcast"
-        return Path.home() / "AppData" / "Roaming" / "pidcast"
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        return Path(appdata) / "pidcast"
+    return Path.home() / "AppData" / "Roaming" / "pidcast"
 
 
 CONFIG_DIR = get_config_dir()
-LIBRARY_FILE = CONFIG_DIR / "library.yaml"
 CONFIG_FILE = CONFIG_DIR / "config.yaml"
-HISTORY_FILE = CONFIG_DIR / "history.json"
-SYNC_LOGS_DIR = CONFIG_DIR / "logs"
 COOKIE_CACHE_DIR = CONFIG_DIR / "cache"
 COOKIE_CACHE_MAX_AGE_HOURS = 24
-
-# Library defaults
-DEFAULT_BACKFILL_LIMIT = 5
-DEFAULT_FEED_CACHE_HOURS = 1
-
-# Sync defaults
-DEFAULT_MAX_CONCURRENT_FEEDS = 5
 
 
 # ============================================================================

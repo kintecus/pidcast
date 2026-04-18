@@ -7,13 +7,116 @@ import logging
 import re
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 from datetime import datetime
 
+import feedparser
+
 from .config import VideoInfo
-from .exceptions import ApplePodcastsResolutionError
-from .rss import Episode, RSSParser
+from .exceptions import ApplePodcastsResolutionError, FeedFetchError, FeedParseError
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class Episode:
+    """Podcast episode parsed from an RSS feed."""
+
+    guid: str
+    title: str
+    description: str
+    pub_date: datetime
+    duration: int | None
+    audio_url: str
+
+
+def _parse_pub_date(entry) -> datetime:
+    for attr in ("published_parsed", "updated_parsed"):
+        value = getattr(entry, attr, None) or entry.get(attr)
+        if value:
+            try:
+                return datetime(*value[:6])
+            except Exception:
+                pass
+    return datetime.now()
+
+
+def _parse_duration(entry) -> int | None:
+    raw = entry.get("itunes_duration") or entry.get("duration")
+    if raw is None:
+        return None
+    if isinstance(raw, int):
+        return raw
+    try:
+        parts = str(raw).split(":")
+        if len(parts) == 3:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+        if len(parts) == 2:
+            return int(parts[0]) * 60 + int(parts[1])
+        return int(raw)
+    except Exception:
+        return None
+
+
+def _extract_audio_url(entry) -> str:
+    for enclosure in entry.get("enclosures", []) or []:
+        mime = enclosure.get("type", "")
+        if mime.startswith("audio/") or mime.startswith("video/"):
+            return enclosure.get("href") or enclosure.get("url", "")
+    enclosures = entry.get("enclosures", []) or []
+    if enclosures:
+        return enclosures[0].get("href") or enclosures[0].get("url", "")
+    media = getattr(entry, "media_content", None)
+    if isinstance(media, list) and media:
+        return media[0].get("url", "")
+    return ""
+
+
+def _parse_feed_episodes(feed_url: str, verbose: bool = False) -> list[Episode]:
+    """Fetch an RSS feed and return parsed episodes.
+
+    feedparser fetches the URL itself; we don't need a separate HTTP client.
+    """
+    if verbose:
+        logger.info(f"Fetching RSS feed: {feed_url}")
+
+    feed = feedparser.parse(feed_url)
+
+    if feed.bozo and hasattr(feed, "bozo_exception"):
+        msg = str(feed.bozo_exception).lower()
+        if "not well-formed" in msg or "no element found" in msg:
+            raise FeedParseError(f"Invalid feed format: {feed.bozo_exception}")
+
+    if not getattr(feed, "feed", None):
+        raise FeedFetchError(f"Feed fetch returned no data: {feed_url}")
+
+    episodes: list[Episode] = []
+    for entry in feed.entries:
+        title = (entry.get("title") or "").strip()
+        if not title:
+            continue
+        guid = entry.get("id") or entry.get("guid") or entry.get("link") or ""
+        audio_url = _extract_audio_url(entry)
+        if not audio_url:
+            continue
+        episodes.append(
+            Episode(
+                guid=guid,
+                title=title,
+                description=entry.get("summary")
+                or entry.get("description")
+                or entry.get("subtitle", ""),
+                pub_date=_parse_pub_date(entry),
+                duration=_parse_duration(entry),
+                audio_url=audio_url,
+            )
+        )
+
+    if not episodes:
+        raise FeedParseError(f"Feed has no valid episodes: {feed_url}")
+
+    return episodes
+
 
 ITUNES_LOOKUP_URL = "https://itunes.apple.com/lookup"
 
@@ -147,7 +250,7 @@ def find_episode_in_feed(feed_url: str, itunes_meta: dict, verbose: bool = False
         ApplePodcastsResolutionError: If the episode cannot be found.
     """
     try:
-        _, episodes = RSSParser.parse_feed(feed_url, verbose=verbose)
+        episodes = _parse_feed_episodes(feed_url, verbose=verbose)
     except Exception as e:
         raise ApplePodcastsResolutionError(f"Failed to fetch/parse podcast RSS feed: {e}") from e
 

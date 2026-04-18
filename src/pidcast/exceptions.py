@@ -37,32 +37,14 @@ class FileProcessingError(PidcastError):
     pass
 
 
-class LibraryError(PidcastError):
-    """Base exception for library operations."""
-
-    pass
-
-
-class FeedFetchError(LibraryError):
+class FeedFetchError(PidcastError):
     """Failed to fetch RSS feed."""
 
     pass
 
 
-class FeedParseError(LibraryError):
+class FeedParseError(PidcastError):
     """Failed to parse RSS feed."""
-
-    pass
-
-
-class ShowNotFoundError(LibraryError):
-    """Show not found in library."""
-
-    pass
-
-
-class DuplicateShowError(LibraryError):
-    """Show already exists in library."""
 
     pass
 
