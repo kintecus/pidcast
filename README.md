@@ -102,7 +102,7 @@ Subscribe to podcast feeds and process new episodes in one command.
 
 ```bash
 # Add a show by name (searches Apple Podcasts + iTunes) or by RSS URL
-uv run pidcast lib add "Lex Fridman Podcast"
+uv run pidcast lib add "99% Invisible"
 uv run pidcast lib add "https://feeds.example.com/podcast.xml"
 
 # Inspect
@@ -110,8 +110,8 @@ uv run pidcast lib list                    # all shows
 uv run pidcast lib show 1 --episodes 10    # recent episodes for show ID 1
 
 # Process one episode
-uv run pidcast lib process "Lex Fridman" --latest
-uv run pidcast lib process "Lex Fridman" --match "episode title"
+uv run pidcast lib process "99% Invisible" --latest
+uv run pidcast lib process "99% Invisible" --match "episode title"
 
 # Process all new episodes across the library
 uv run pidcast lib sync
