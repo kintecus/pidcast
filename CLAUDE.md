@@ -1,72 +1,80 @@
 # Project: pidcast
 
-YouTube transcription and analysis tool using Whisper and Groq. Generates Obsidian-ready Markdown with smart metadata.
+Single-shot CLI that turns a URL or audio file into an Obsidian-ready Markdown transcript with optional LLM analysis. See [README.md](README.md) for user-facing overview and [docs/architecture.md](docs/architecture.md) for system structure.
 
-## Tech Stack
+## Tech stack
 
-- **Runtime:** Python (managed via `uv`)
-- **Audio/Video:** `yt-dlp`, `ffmpeg`, `ffprobe`
-- **Transcription:** `whisper.cpp` (via `pidcast/transcription.py`)
-- **LLM Analysis:** Groq API with JSON mode for structured output
+- **Runtime:** Python ≥ 3.10, managed via `uv`
+- **Audio:** `yt-dlp`, `ffmpeg`, `ffprobe`
+- **Transcription providers:** `whisper.cpp` (local, default) and ElevenLabs Scribe v2 (cloud)
+- **Diarization:** `pyannote.audio` (whisper path, needs HF token) or built-in (ElevenLabs path)
+- **LLM providers:** Groq (default, JSON mode) or Claude via the Claude Code CLI
 
-## Core Commands
+## Core commands
 
-**Transcription:**
+Run with `uv run pidcast <input>`. Useful entry points:
 
-- **Run tool:** `uv run pidcast "URL_OR_PATH"`
-- **Save to Obsidian:** `uv run pidcast "URL" --save-to-obsidian` (saves analysis only)
-- **Analyze existing:** `uv run pidcast --analyze-existing transcript.md`
-- **Test segment:** `uv run pidcast "URL" --test-segment --diarize` (test settings on first 2 min)
-- **Test from offset:** `uv run pidcast "URL" --test-segment 3 --start-at 10` (3 min from 10:00)
-- **Re-diarize:** `uv run pidcast --diarize-existing transcript.md` (retry diarization without re-transcribing)
+| Command | Purpose |
+|---------|---------|
+| `pidcast <URL_OR_PATH>` | Transcribe + analyze |
+| `pidcast setup` | Interactive setup wizard (env, deps, API keys) |
+| `pidcast doctor` | Diagnose tooling/env configuration |
+| `pidcast --analyze-existing transcript.md` | Re-analyze without re-transcribing |
+| `pidcast --diarize-existing transcript.md [--audio file]` | Retry diarization only |
+| `pidcast --test-segment [MIN] [--start-at MIN]` | Dry-run transcription on a slice |
+| `pidcast --transcription-provider {whisper,elevenlabs}` | Pick transcription backend |
+| `pidcast --provider {groq,claude}` | Pick LLM analysis backend |
+| `pidcast lib {add,list,show,remove,sync,process,digest}` | Manage podcast subscriptions |
+| `pidcast -L \| -M \| -W \| -P` | List analysis types / LLM models / Whisper models / presets |
 
-**Library Management:**
+Environment: copy `.env.example` → `.env`. See [docs/development-guide.md](docs/development-guide.md) for the full var list.
 
-- **Add show:** `uv run pidcast lib add "FEED_URL"`
-- **List shows:** `uv run pidcast lib list`
-- **Show details:** `uv run pidcast lib show ID`
-- **Remove show:** `uv run pidcast lib remove ID`
-- **Sync library:** `uv run pidcast lib sync`
-- **Generate digest:** `uv run pidcast lib digest`
+## Build, test, lint
 
-**Environment:** Requires `.env` (see `.env.example`)
+```bash
+uv sync --group dev          # install runtime + dev deps
+uv run pytest                # run tests
+uv run ruff check src/       # lint
+uv run ruff format src/      # format
+pre-commit install           # enable pre-commit hooks (ruff, mermaid)
+```
 
-## Module Architecture
+## Module map
 
-**Core Modules:**
+Source lives under `src/pidcast/`. Hot-path modules (read these first when debugging a workflow):
 
-- `cli.py` - Command-line interface, argument parsing, main transcription flow
-- `analysis.py` - LLM-based transcript analysis using Groq API with JSON mode
-- `transcription.py` - Whisper.cpp integration for audio-to-text transcription
-- `download.py` - YouTube video downloading via yt-dlp
-- `markdown.py` - Markdown file creation with YAML front matter
-- `chunking.py` - Semantic transcript chunking for long content
-- `model_selector.py` - LLM model selection and fallback logic
-- `config.py` - Configuration constants, dataclasses, environment variables
-- `utils.py` - Utility functions (filenames, logging, JSON I/O, duplicate detection)
-- `exceptions.py` - Custom exception classes
+- `cli.py` — argparse surface; dispatches to `workflow.py` and the `lib` subcommands
+- `workflow.py` — orchestration: download → transcribe → diarize → analyze → write
+- `transcription.py` + `providers/` — provider dispatch for whisper/ElevenLabs
+- `diarization.py` — pyannote integration; consumes whisper JSON or ElevenLabs speakers
+- `analysis.py` + `summarization.py` — Groq/Claude prompt execution, JSON validation
+- `chunking.py` — semantic chunking for transcripts > 120k chars
+- `markdown.py` — front matter assembly, smart filename construction
+- `library.py` + `sync.py` + `rss.py` + `apple_podcasts.py` + `discovery.py` — podcast library subsystem
+- `digest.py` + `history.py` — processing history + digest generation
+- `download.py` + `cookies.py` — yt-dlp wrapper, browser cookie extraction
+- `config.py` + `config_manager.py` + `model_selector.py` + `setup.py` — config, model fallback chain, setup wizard
+- `evals/` — provider comparison evals (`pidcast-eval` entry point)
+- `exceptions.py` + `utils.py` — shared error types, filename/duplicate helpers
 
-**Configuration:**
+## Engineering conventions
 
-- `config/prompts.yaml` - LLM analysis prompts with JSON response format
-- `config/models.yaml` - LLM model definitions and rate limits
-- `data/transcripts/transcription_stats.json` - Historical run statistics
+- **Workflow:** "plan then execute" — propose changes before editing.
+- **Audio pipeline:** standardize to 16kHz mono WAV before transcription regardless of source format.
+- **Chunking threshold:** transcripts > 120k chars use semantic chunking with synthesis.
+- **LLM responses:** every analysis prompt returns JSON with `analysis` and `contextual_tags` fields.
+- **Filenames:** smart-filtered with `YYYY-MM-DD_Title.md` date prefix.
+- **Transcripts location:** `data/transcripts/` is canonical — never drop stray transcripts in the repo root (ignored via `.gitignore`).
+- **Linting:** ruff is the single source of truth (config in `pyproject.toml` under `[tool.ruff]`).
 
-## Engineering Conventions
+## Data handling
 
-- **Workflow:** Always "Plan then execute." Propose changes before editing.
-- **File Naming:** Smart filtering applies date prefixes (`YYYY-MM-DD_Title.md`).
-- **Audio Pipeline:** Standardize to 16kHz mono WAV before transcription.
-- **Constraints:** Transcripts >120k chars use semantic chunking with synthesis.
-- **LLM Responses:** All analysis prompts now return JSON with `analysis` and `contextual_tags` fields.
-- Use ruff for linting and syntax
+`data/transcripts/` contains large text files (some > 200 KB). **Do NOT read these into context** unless the user explicitly approves a specific file. For test fixtures, ask the user to point at one or create a dedicated minimal fixture under `tests/`.
 
-## Data Files & Testing
+## Further reading
 
-**IMPORTANT:** DO NOT read transcript files in `/data/transcripts/` unless critically necessary and explicitly approved by the user. These files contain large amounts of text and will consume significant context. If you need sample transcripts for testing, request the user to specify which files to use or create a dedicated test fixtures file.
-
-## Progressive Disclosure
-
-- **API Details:** Refer to `analysis.py` for LLM API integration and JSON parsing.
-- **Prompting:** Templates defined in `config/prompts.yaml` with JSON structure.
-- **Duplicate Detection:** See `utils.py` for `find_existing_transcription()` logic.
+- [docs/architecture.md](docs/architecture.md) — components, data flow, diagrams
+- [docs/development-guide.md](docs/development-guide.md) — dev environment, testing, CI
+- [docs/adr/](docs/adr/) — Architecture Decision Records (provider abstractions)
+- `config/prompts.yaml` — analysis prompt templates
+- `config/models.yaml` — LLM model definitions and fallback chains
