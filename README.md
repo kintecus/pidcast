@@ -102,7 +102,7 @@ Subscribe to podcast feeds and process new episodes in one command.
 
 ```bash
 # Add a show by name (searches Apple Podcasts + iTunes) or by RSS URL
-uv run pidcast lib add "99% Invisible Podcast"
+uv run pidcast lib add "99% Invisible"
 uv run pidcast lib add "https://feeds.example.com/podcast.xml"
 
 # Inspect
