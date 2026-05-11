@@ -537,18 +537,51 @@ def run_diarize_existing_mode(
 
         # Validate HuggingFace token
         if not HUGGINGFACE_TOKEN:
-            from .exceptions import DiarizationError
-
             raise DiarizationError(
                 "HUGGINGFACE_TOKEN environment variable not set. Required for speaker diarization."
             )
+
+        # pyannote's soundfile backend only reads WAV/FLAC/OGG; transcode anything else.
+        diarize_input = audio_file
+        tmp_wav: Path | None = None
+        if audio_file.suffix.lower() != ".wav":
+            import subprocess
+            import tempfile
+
+            from .transcription import build_ffmpeg_audio_conversion_command
+
+            tmp_wav = Path(tempfile.mkstemp(prefix="pidcast_diarize_", suffix=".wav")[1])
+            logger.info(f"Converting {audio_file.name} to 16kHz mono WAV for diarization...")
+            command = build_ffmpeg_audio_conversion_command(
+                str(audio_file),
+                str(tmp_wav),
+                overwrite=True,
+            )
+            try:
+                if verbose:
+                    subprocess.run(command, check=True)
+                else:
+                    subprocess.run(
+                        command,
+                        check=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE,
+                    )
+            except subprocess.CalledProcessError as e:
+                tmp_wav.unlink(missing_ok=True)
+                raise DiarizationError(f"Failed to convert audio to WAV: {e}") from e
+            diarize_input = tmp_wav
 
         # Run diarization
         logger.info("Running speaker diarization...")
         import time
 
         start_time = time.time()
-        diarization_segments = run_diarization(str(audio_file), HUGGINGFACE_TOKEN, verbose)
+        try:
+            diarization_segments = run_diarization(str(diarize_input), HUGGINGFACE_TOKEN, verbose)
+        finally:
+            if tmp_wav is not None:
+                tmp_wav.unlink(missing_ok=True)
         diarization_duration = time.time() - start_time
 
         # Read whisper JSON and merge
