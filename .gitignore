@@ -207,6 +207,11 @@ pyrightconfig.json
 
 # Claude code
 .claude/settings.local.json
+.claude/skills/
+
+# Stray transcripts dropped in repo root (canonical location is data/transcripts/)
+/20[0-9][0-9]-[01][0-9]-[0-3][0-9]_*.md
+/20[0-9][0-9]-[01][0-9]-[0-3][0-9]_*.whisper.json
 
 # Worktrees
 .worktrees/
