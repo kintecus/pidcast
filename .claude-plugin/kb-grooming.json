@@ -1,0 +1,42 @@
+{
+  "model": "sonnet",
+  "scope": {
+    "include": ["README.md", "CLAUDE.md", "docs/", "*.md"],
+    "exclude": [
+      "node_modules/",
+      ".git/",
+      "vendor/",
+      "dist/",
+      "build/",
+      ".venv/",
+      "venv/",
+      ".pytest_cache/",
+      ".ruff_cache/",
+      ".mypy_cache/",
+      "data/",
+      ".claude/skills/",
+      "docs/plans/",
+      "docs/ideation/",
+      "docs/ultrathink/"
+    ]
+  },
+  "checks": {
+    "brokenLinks": true,
+    "orphanDocs": true,
+    "duplicateContent": true,
+    "claudemdOverflow": true,
+    "mandatoryDocs": true,
+    "readmeCompliance": true,
+    "terminologyConsistency": true,
+    "adrCompleteness": true,
+    "contentActuality": true
+  },
+  "output": {
+    "githubIssues": false,
+    "reportFile": true
+  },
+  "github": {
+    "labels": ["documentation", "kb-grooming"],
+    "assignee": ""
+  }
+}

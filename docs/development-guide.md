@@ -1,153 +1,130 @@
 # Development guide
 
-Generated: 2026-03-12 | Scan level: Quick
+How to set up a dev environment, run tests, and ship a change. For user-facing usage see [README.md](../README.md); for architecture see [architecture.md](architecture.md).
 
 ## Prerequisites
 
-- **Python** >=3.10
-- **uv** - Fast Python package manager ([install](https://astral.sh/uv/install.sh))
-- **ffmpeg** - Audio processing (install via system package manager)
-- **whisper.cpp** - Transcription engine ([build from source](https://github.com/ggerganov/whisper.cpp))
+- **Python ≥ 3.10**
+- **`uv`** — package manager ([install](https://docs.astral.sh/uv/getting-started/installation/))
+- **`ffmpeg`** — required for all audio paths (system package manager)
+- **`whisper.cpp`** — only if you want local transcription ([build from source](https://github.com/ggerganov/whisper.cpp)). Skip if you'll use ElevenLabs.
 
-## Environment setup
-
-1. Clone the repository:
-
-   ```bash
-   git clone https://github.com/kintecus/pidcast
-   cd pidcast
-   ```
-
-2. Install dependencies:
-
-   ```bash
-   uv sync          # Runtime dependencies
-   uv sync --group dev  # Include dev dependencies (ruff, pytest)
-   ```
-
-3. Configure environment:
-
-   ```bash
-   cp .env.example .env
-   # Edit .env with your API keys and tool paths
-   ```
-
-   Required variables:
-   - `GROQ_API_KEY` - Groq API key ([console.groq.com](https://console.groq.com/))
-   - `WHISPER_CPP_PATH` - Path to whisper.cpp binary
-   - `WHISPER_MODEL` - Path to Whisper model file
-
-   Optional variables:
-   - `OBSIDIAN_VAULT_PATH` - For `--save-to-obsidian` flag
-   - `HUGGINGFACE_TOKEN` - For speaker diarization (`--diarize`)
-   - `FFMPEG_PATH` - Custom ffmpeg path (defaults to `ffmpeg`)
-
-4. Set up pre-commit hooks:
-
-   ```bash
-   pre-commit install
-   ```
-
-## Running the tool
+## First-time setup
 
 ```bash
-# Main transcription
-uv run pidcast "https://youtube.com/watch?v=VIDEO_ID"
-
-# With analysis type
-uv run pidcast "VIDEO_URL" -a key_points
-
-# Skip analysis
-uv run pidcast "VIDEO_URL" --no-analyze
-
-# Local audio file
-uv run pidcast "/path/to/file.mp3"
-
-# Evaluation CLI
-uv run pidcast-eval --compare groq,claude --transcript-file transcript.txt
+git clone https://github.com/kintecus/pidcast
+cd pidcast
+uv sync --group dev          # runtime + dev deps (ruff, pytest)
+cp .env.example .env         # fill in keys
+uv run pidcast setup         # interactive wizard for paths and models
+pre-commit install           # ruff + mermaid validation on commit
 ```
 
-## Testing
+`pidcast setup` walks through whisper.cpp paths, model selection, and API keys. Run `pidcast doctor` at any time to check the current state of your tooling and env.
+
+## Environment variables
+
+Set in `.env`. See `.env.example` for the up-to-date list.
+
+| Variable | Purpose | Required? |
+|----------|---------|-----------|
+| `GROQ_API_KEY` | Default LLM provider for analysis | Required unless `--no-analyze` or `--provider claude` |
+| `ELEVENLABS_API_KEY` | ElevenLabs Scribe v2 transcription provider | Required if `--transcription-provider elevenlabs` |
+| `HUGGINGFACE_TOKEN` | Downloads pyannote diarization model on first use | Required for `--diarize` on the whisper path |
+| `WHISPER_CPP_PATH` | Path to `whisper-cli` binary | Required for local whisper transcription |
+| `WHISPER_MODEL` | Path to a `ggml-*.bin` model file | Required for local whisper transcription |
+| `FFMPEG_PATH` | Custom ffmpeg location | Optional (defaults to PATH lookup) |
+| `OBSIDIAN_VAULT_PATH` | Target vault root for `--save-to-obsidian` | Optional |
+
+## Running tests
 
 ```bash
-# Run all tests
-uv run pytest
-
-# Run specific test file
-uv run pytest tests/test_chunking.py
-
-# Verbose output
-uv run pytest -v
-
-# Run tests matching pattern
-uv run pytest -k "test_model"
+uv run pytest                              # full suite
+uv run pytest tests/test_chunking.py       # one file
+uv run pytest -k "test_model"              # name pattern
+uv run pytest -v                           # verbose
 ```
 
-Test configuration is in `pyproject.toml` under `[tool.pytest.ini_options]`.
+Test config is in `pyproject.toml` under `[tool.pytest.ini_options]`. Provider-specific tests are skipped when their API key is absent — set `ELEVENLABS_API_KEY=dummy` and `GROQ_API_KEY=dummy` in the test env if you want to run the offline shape checks without making real calls.
 
-## Code quality
+## Lint and format
 
 ```bash
-# Lint
-uv run ruff check src/
-
-# Auto-fix lint issues
-uv run ruff check --fix src/
-
-# Format
-uv run ruff format src/
-
-# Check formatting without changes
-uv run ruff format --check src/
+uv run ruff check src/                # lint
+uv run ruff check --fix src/          # autofix
+uv run ruff format src/               # format
+uv run ruff format --check src/       # CI-style check
 ```
 
-Ruff configuration is in `pyproject.toml` under `[tool.ruff]`:
+Ruff config lives in `pyproject.toml` under `[tool.ruff]`:
 
-- Target: Python 3.10
-- Line length: 100
-- Rules: E, W, F, I, N, UP, B, C4, SIM
+- Target Python 3.10
+- Line length 100
+- Rule set: `E, W, F, I, N, UP, B, C4, SIM`
+
+Pre-commit hook runs ruff and Mermaid syntax validation. Don't bypass with `--no-verify` — fix the underlying issue.
 
 ## Adding dependencies
 
 ```bash
-# Runtime dependency
-uv add package-name
-
-# Dev dependency
-uv add --dev package-name
-
-# Optional dependency group
-# Edit pyproject.toml [project.optional-dependencies] manually
-
-# Update all
-uv sync --upgrade
+uv add package-name              # runtime
+uv add --dev package-name        # dev only
+uv sync --upgrade                # bump all pins
 ```
+
+Optional dependency groups (e.g. `[diarize]`) live in `pyproject.toml` under `[project.optional-dependencies]`; edit manually.
 
 ## Project layout
 
 ```
-src/pidcast/          # Main package (src layout)
-config/               # External config (prompts, models)
-tests/                # Test suite
-data/                 # Runtime outputs (transcripts, evals, logs)
-docs/                 # Documentation
-scripts/              # Utility scripts
+src/pidcast/          # main package (src layout)
+  providers/          # transcription provider implementations
+  evals/              # pidcast-eval CLI for provider comparison
+config/               # prompts.yaml, models.yaml
+tests/                # pytest suite
+data/                 # runtime output (gitignored except eval references)
+  transcripts/        # canonical transcript location
+  evals/              # eval runs, references, comparisons
+docs/                 # this directory
+  adr/                # Architecture Decision Records
+scripts/              # diarize-existing.sh and other helpers
 ```
 
-## CI/CD
+## Project conventions
 
-GitHub Actions workflow (`.github/workflows/ci.yml`) runs on push/PR to main:
+- **Audio pipeline:** every audio input is normalized to 16 kHz mono WAV before transcription. Downstream modules MUST assume this invariant.
+- **LLM responses:** all analysis prompts return JSON with `analysis` and `contextual_tags` fields. Add fields via `config/prompts.yaml`, not via prompt-string surgery in code.
+- **Chunking threshold:** 120 000 characters triggers semantic chunking with synthesis. Threshold lives in `config.py`.
+- **Filenames:** smart-prefixed `YYYY-MM-DD_Title.md`. Logic in `utils.py`.
+- **Transcripts canonical location:** `data/transcripts/`. The repo gitignores stray `YYYY-MM-DD_*.md` files at the root.
 
-1. **Lint job** - `ruff check` + `ruff format --check`
-2. **Test job** - `pytest`
+## Provider comparison evals
 
-Both jobs use `uv sync --group dev` for dependency installation.
+`pidcast-eval` (entry point installed by `uv sync`) runs the same transcript through multiple providers and judges output quality with Claude Opus:
 
-## Conventions
+```bash
+uv run pidcast-eval --compare groq,claude --transcript-file transcript.txt --title "Episode Title"
+uv run pidcast-eval --run-matrix                              # all prompt × model × reference combos
+uv run pidcast-eval --run-matrix --models "llama-3.3-70b-versatile,mixtral-8x7b-32768"
+```
 
-- Use `ruff` for all linting and formatting
-- Follow src layout (`src/pidcast/`)
-- Audio pipeline standardizes to 16kHz mono WAV before transcription
-- All LLM responses use JSON mode with `analysis` and `contextual_tags` fields
-- Transcripts >120k chars use semantic chunking with synthesis
-- Smart filename filtering applies date prefixes (`YYYY-MM-DD_Title.md`)
+Results land in `data/evals/comparisons/` as Markdown reports. See `src/pidcast/evals/` for the underlying machinery.
+
+## CI
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on push/PR to `main`:
+
+1. **Lint** — `ruff check` + `ruff format --check`
+2. **Test** — `pytest`
+
+Both jobs install with `uv sync --group dev`.
+
+## Plugin-driven automation
+
+This repo opts into several Claude Code plugins. Their config lives in `.claude-plugin/`:
+
+- `semver.json` — auto bumps `pyproject.toml` version on feature/fix commits (excludes `*.md`, `docs/**`)
+- `kb-grooming.json` — documentation health check scope
+- pre-commit hook in `.githooks/pre-commit` — ruff, PlantUML, and Mermaid validation
+
+The session entry points (`/semver:setup`, `/kb-grooming:kb-groom`, `/playbook:playbook-browse`) are usable from Claude Code but not from regular shells.
