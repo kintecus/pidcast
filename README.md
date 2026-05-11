@@ -1,324 +1,154 @@
-# Pidcast - Podcast & YouTube Transcription Tool
+# pidcast
 
-Transcription and LLM-powered analysis tool for podcasts, YouTube videos, and local audio files. Uses whisper.cpp for local transcription and Groq or Claude for structured analysis. Outputs Obsidian-ready Markdown with YAML front matter.
+> [!TIP]
+> ✨ ***A URL or audio file in, an Obsidian-ready Markdown transcript with smart LLM analysis out.***
 
-## Features
+pidcast is a single-shot CLI for podcast and YouTube transcription with optional LLM analysis. Built for engineers and knowledge-workers who want **searchable, source-attributed notes** out of long-form audio — without leaving the terminal. Whisper.cpp or ElevenLabs handles speech-to-text; Groq or Claude handles the analysis; output lands as Markdown with YAML front matter, ready for Obsidian.
 
-- **Multiple input sources** - YouTube videos, Apple Podcasts URLs, podcast RSS feeds, and local audio files
-- **Transcription providers** - whisper.cpp (local) or ElevenLabs Scribe v2 (cloud API)
-- **Speaker diarization** - optional speaker identification via pyannote.audio (whisper) or built-in (ElevenLabs)
-- **LLM analysis** with Groq AI (enabled by default)
-  - Automatic model fallback and retry logic
-  - Smart chunking for long transcripts with semantic boundaries
-  - JSON-validated structured output
-  - **Shareable brief** in every analysis - punchy headline + friend-ready quick take for sharing links
-- **Library management** - Manage podcast RSS feeds with persistent storage
-  - Add shows by name (searches Apple Podcasts DB + iTunes API) or by RSS URL
-  - Sync and process new episodes automatically
-  - Generate digests from processing history
-- **Provider comparison evals** - Run the same transcript through Groq and Claude, judge quality with Opus
-- **Markdown output** with YAML front matter and smart source-aware tags (YouTube, Apple Podcasts, local file) - override with `--tags`
-- **Smart filenames** with date prefixes
-- **Fast dependencies** managed with uv
+> [!NOTE]
+> [📦 Installation](#installation) · [🔧 Setup](#setup) · [⚡ Usage](#usage) · [🎙️ Library](#library) · [🗣️ Speaker diarization](#diarization) · [📊 Evals](#evals) · [📚 Documentation](#documentation)
 
-![Pidcast example run](assets/screenshots/pidcast-example.png)
+## 🎬 Demo <a name="demo"></a>
 
-## Quick start
-
-### Path A: Cloud transcription (fastest - 5 min setup)
-
-No local models needed. Uses [ElevenLabs Scribe v2](https://elevenlabs.io/) for transcription.
+![pidcast transcribing and analyzing a YouTube episode](assets/screenshots/pidcast-example.png)
 
 ```bash
-# 1. Install uv (Python package manager)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 2. Clone and install
-git clone https://github.com/kintecus/pidcast && cd pidcast && uv sync
-
-# 3. Run guided setup (will ask for your ElevenLabs API key)
-uv run pidcast setup
-
-# 4. Transcribe!
-uv run pidcast "https://youtube.com/watch?v=VIDEO_ID"
+$ uv run pidcast "https://youtube.com/watch?v=VIDEO_ID"
+[1/5] Downloading audio ............................. ok (3m 21s)
+[2/5] Normalizing to 16kHz mono WAV ................. ok
+[3/5] Transcribing (whisper.cpp, large-v3-turbo) .... ok (4m 02s)
+[4/5] Analyzing (groq, llama-3.3-70b-versatile) ..... ok
+[5/5] Writing Markdown .............................. ok
+→ 2026-05-11_Episode_Title.md  (12,847 words, 3 speakers)
 ```
 
-### Path B: Local transcription (private - no audio leaves your machine)
+## 📦 Installation <a name="installation"></a>
 
-Uses [whisper.cpp](https://github.com/ggerganov/whisper.cpp) locally. Requires ffmpeg and building whisper.cpp.
+**Requirements:** Python ≥ 3.10, `ffmpeg`, and (for local transcription) a built `whisper.cpp`.
 
 ```bash
-# 1. Install uv and ffmpeg
+# 1. Install uv if you don't have it
 curl -LsSf https://astral.sh/uv/install.sh | sh
-brew install ffmpeg  # macOS, or: apt install ffmpeg
 
-# 2. Clone and install
+# 2. Clone and sync
 git clone https://github.com/kintecus/pidcast && cd pidcast && uv sync
 
-# 3. Run guided setup (will walk you through whisper.cpp)
-uv run pidcast setup
-
-# 4. Transcribe!
-uv run pidcast "https://youtube.com/watch?v=VIDEO_ID"
+# 3. Optional: ffmpeg
+brew install ffmpeg              # macOS — or: apt install ffmpeg
 ```
 
-### Troubleshooting
+## 🔧 Setup <a name="setup"></a>
 
-Run `pidcast doctor` at any time to check your configuration:
+```bash
+uv run pidcast setup
+```
+
+The wizard configures:
+
+- **Transcription backend** — local `whisper.cpp` (private, free) or ElevenLabs Scribe v2 (cloud, faster)
+- **API keys** — Groq for analysis, optionally ElevenLabs for cloud transcription, optionally HuggingFace for diarization
+- **Output paths** — transcript directory and optional Obsidian vault
+
+At any time, check the live state of your tooling and env:
 
 ```bash
 uv run pidcast doctor
 ```
 
-### Optional configuration
+Configuration is read from `.env` (see `.env.example`). Full variable reference: [docs/development-guide.md](docs/development-guide.md#environment-variables).
 
-Set these in `.env` for additional features:
-
-- `GROQ_API_KEY` - AI-powered analysis of transcripts (free at <https://console.groq.com/>)
-- `OBSIDIAN_VAULT_PATH` - Save analysis to Obsidian vault (`-o` flag)
-- `HUGGINGFACE_TOKEN` - Speaker diarization with whisper (`--diarize` flag)
-
-## Usage examples
-
-### Single video/episode transcription
+## ⚡ Usage <a name="usage"></a>
 
 ```bash
-# Basic transcription with analysis (default)
-uv run pidcast "https://www.youtube.com/watch?v=VIDEO_ID"
+# YouTube, Apple Podcasts URL, or local audio file
+uv run pidcast "https://youtube.com/watch?v=VIDEO_ID"
+uv run pidcast "https://podcasts.apple.com/.../id123?i=456"
+uv run pidcast "/path/to/audio.mp3"
 
-# Transcription only (skip analysis)
-uv run pidcast "VIDEO_URL" --no-analyze
+# Pick a transcription provider
+uv run pidcast "URL" --transcription-provider elevenlabs
 
-# Different analysis type
-uv run pidcast "VIDEO_URL" -a key_points
+# Pick an LLM provider for analysis
+uv run pidcast "URL" --provider claude --claude-model opus
 
-# Analyze existing transcript without re-transcribing
-uv run pidcast --analyze-existing transcript.md
+# Pick an analysis type (or skip analysis entirely)
+uv run pidcast "URL" -a key_points
+uv run pidcast "URL" --no-analyze
 
-# Transcribe local audio file
-uv run pidcast "/path/to/audio/file.mp3"
-
-# Custom tags (overrides auto-inferred source tags)
+# Custom front matter tags (overrides auto-inferred source tags)
 uv run pidcast "/path/to/meeting.mp3" --tags meeting,standup,weekly
 
-# Specify transcription language
-uv run pidcast "VIDEO_URL" -l uk
+# Test settings on a 2-minute slice before committing to a long run
+uv run pidcast "URL" --test-segment
 
-# Transcribe with speaker diarization
-uv run pidcast "VIDEO_URL" --diarize
+# Reuse an existing transcript
+uv run pidcast --analyze-existing transcript.md          # re-analyze
+uv run pidcast --diarize-existing transcript.md          # retry diarization
 
-# Force re-transcription (skip duplicate detection)
-uv run pidcast "VIDEO_URL" -f
-
-# Verbose output
-uv run pidcast "VIDEO_URL" -v
-
-# Use PO Token for restricted YouTube videos
-uv run pidcast "VIDEO_URL" --po-token "client.type+TOKEN"
+# Discovery flags
+uv run pidcast -L     # list analysis types
+uv run pidcast -M     # list LLM models
+uv run pidcast -W     # list Whisper models
+uv run pidcast -P     # list presets
 ```
 
-### Choosing a transcription provider
+Available analysis types: `executive_summary` (default), `summary`, `key_points`, `action_items`, `comprehensive`. Every type ends with a **Shareable Brief** — a punchy headline (≤ 15 words) plus a 3–5 sentence quick-take suitable for sending to a friend.
 
-By default, transcription uses local whisper.cpp. Pass `--transcription-provider elevenlabs` to use the ElevenLabs Scribe v2 cloud API instead:
+Claude model aliases: `sonnet` (claude-sonnet-4-6, default), `opus` (claude-opus-4-6), `haiku` (claude-haiku-4-5).
 
-```bash
-# Local whisper.cpp (default)
-uv run pidcast "VIDEO_URL"
+## 🎙️ Library <a name="library"></a>
 
-# ElevenLabs cloud transcription (faster, requires ELEVENLABS_API_KEY)
-uv run pidcast "VIDEO_URL" --transcription-provider elevenlabs
-
-# ElevenLabs with built-in speaker diarization
-uv run pidcast "VIDEO_URL" --transcription-provider elevenlabs --diarize
-```
-
-ElevenLabs Scribe v2 includes built-in speaker diarization (no HuggingFace token needed). Transcription time estimates adapt per-provider based on historical run data.
-
-### Choosing an LLM provider
-
-By default, analysis uses Groq. Pass `--provider claude` to use your local Claude Code installation instead:
+Subscribe to podcast feeds and process new episodes in one command.
 
 ```bash
-# Analyze with Claude (requires Claude Code installed and authenticated)
-uv run pidcast "VIDEO_URL" --provider claude
-
-# Choose a specific Claude model (sonnet is default)
-uv run pidcast "VIDEO_URL" --provider claude --claude-model opus
-
-# Groq is the default (no flag needed)
-uv run pidcast "VIDEO_URL" --provider groq
-```
-
-Available Claude model aliases: `sonnet` (claude-sonnet-4-6), `opus` (claude-opus-4-6), `haiku` (claude-haiku-4-5).
-
-### Library management
-
-Manage a persistent library of podcast shows for batch processing:
-
-```bash
-# Add a podcast by name (searches Apple Podcasts DB and iTunes)
+# Add a show by name (searches Apple Podcasts + iTunes) or by RSS URL
 uv run pidcast lib add "Lex Fridman Podcast"
-
-# Add a podcast directly by RSS feed URL
 uv run pidcast lib add "https://feeds.example.com/podcast.xml"
 
-# Preview episodes before adding
-uv run pidcast lib add "https://feeds.example.com/podcast.xml" --preview
+# Inspect
+uv run pidcast lib list                    # all shows
+uv run pidcast lib show 1 --episodes 10    # recent episodes for show ID 1
 
-# List all shows in library
-uv run pidcast lib list
+# Process one episode
+uv run pidcast lib process "Lex Fridman" --latest
+uv run pidcast lib process "Lex Fridman" --match "episode title"
 
-# Show details for a specific podcast (with recent episodes)
-uv run pidcast lib show 1
-
-# Show more episodes
-uv run pidcast lib show 1 --episodes 10
-
-# Remove a show from library
-uv run pidcast lib remove 1
-
-# Sync library and process new episodes
+# Process all new episodes across the library
 uv run pidcast lib sync
 
-# Process a specific episode from a show
-uv run pidcast lib process "show name" --latest
-uv run pidcast lib process "show name" --match "episode title"
-
-# Generate digest from processing history
+# Roll up recent processing history into a digest
 uv run pidcast lib digest
 ```
 
-When adding by name, pidcast first checks the local Apple Podcasts SQLite database (macOS only), then falls back to the iTunes Search API. You select from a numbered list of matches.
+Library file: `~/.config/pidcast/library.yaml` (macOS/Linux) or `%APPDATA%\pidcast\library.yaml` (Windows). Human-readable, hand-editable.
 
-The library is stored at `~/.config/pidcast/library.yaml` (or `%APPDATA%\pidcast\library.yaml` on Windows) and is human-readable and editable.
+## 🗣️ Speaker diarization <a name="diarization"></a>
 
-## Speaker diarization
+Identify who said what. Two paths:
 
-Optional speaker identification (who said what) using [pyannote.audio](https://github.com/pyannote/pyannote-audio). Runs locally - the HuggingFace token is only needed to download the model on first use.
-
-### Setup
-
-1. **Install diarization extra**:
-
-   ```bash
-   uv pip install 'pidcast[diarize]'
-   ```
-
-2. **Get a HuggingFace token** - go to [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens), create a token with `read` scope, and add to `.env`:
-
-   ```bash
-   HUGGINGFACE_TOKEN=hf_your_token_here
-   ```
-
-3. **Accept pyannote model licenses** (one-time, both required):
-   - [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
-   - [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
-
-4. **Run**:
-
-   ```bash
-   uv run pidcast "VIDEO_URL" --diarize
-   ```
-
-First run downloads the model (~1 GB), subsequent runs use cache. Output includes `**Speaker 1**` / `**Speaker 2**` labels and front matter fields `speaker_count` and `diarized: true`.
-
-## Analysis prompts and configuration
-
-### Prompt templates
-
-Prompts are configured in `config/prompts.yaml`. Each prompt template defines:
-
-- System and user prompts with variable substitution
-- Max output tokens
-- JSON response format for structured output with `analysis` and `contextual_tags`
-
-Available analysis types:
-
-- `executive_summary` (default) - Concise overview with key insights
-- `summary` - Comprehensive summary
-- `key_points` - Bulleted highlights
-- `action_items` - Actionable takeaways
-- `comprehensive` - Archival-quality detailed guide
-
-All analysis types include a **Shareable Brief** section at the end: a reformulated headline (≤15 words) plus a 3-5 sentence casual quick take suitable for sharing with friends.
-
-### Model configuration
-
-Models and fallback chains are defined in `config/models.yaml`:
-
-- Automatic fallback on rate limits or failures
-- Token-based model selection for long transcripts
-- Smart chunking for content exceeding context windows
-
-### Chunking strategy
-
-Long transcripts are automatically chunked with:
-
-- Semantic boundary detection (paragraph/sentence breaks)
-- Overlap between chunks for context preservation
-- Synthesis step to combine chunk analyses
-
-## Provider comparison evals
-
-Compare Groq and Claude summaries on the same transcript, judged by Claude Opus:
+- **whisper + pyannote** (`--diarize` with `--transcription-provider whisper`): runs locally, needs a HuggingFace token to download the model on first use. Install with `uv pip install 'pidcast[diarize]'`, set `HUGGINGFACE_TOKEN` in `.env`, and accept the license at [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) and [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0).
+- **ElevenLabs built-in** (`--diarize` with `--transcription-provider elevenlabs`): no extra setup, runs as part of the transcription API call.
 
 ```bash
-# Run comparison (requires a plain-text transcript file)
-pidcast-eval --compare groq,claude --transcript-file transcript.txt --title "Episode Title"
-
-# Use a different Claude model for analysis
-pidcast-eval --compare groq,claude --claude-model opus --transcript-file transcript.txt
-
-# Use a different judge model (default: opus)
-pidcast-eval --compare groq,claude --judge sonnet --transcript-file transcript.txt
-
-# Different analysis type
-pidcast-eval --compare groq,claude --analysis-type comprehensive --transcript-file transcript.txt
+uv run pidcast "URL" --diarize
 ```
 
-The judge scores each summary on accuracy, completeness, clarity, and conciseness (1-10 each) and returns a verdict with reasoning. Results are saved as markdown reports in `data/evals/comparisons/`.
+Output adds `**Speaker 1**` / `**Speaker 2**` labels inline and front matter fields `speaker_count` and `diarized: true`.
 
-For matrix evals across multiple prompts, models, and reference transcripts:
+## 📊 Evals <a name="evals"></a>
+
+Compare provider output quality on the same transcript, judged by Claude Opus:
 
 ```bash
-# Run all combinations
-pidcast-eval --run-matrix
-
-# Subset of models
-pidcast-eval --run-matrix --models "llama-3.3-70b-versatile,mixtral-8x7b-32768"
+uv run pidcast-eval --compare groq,claude --transcript-file transcript.txt --title "Episode"
+uv run pidcast-eval --run-matrix           # all prompt × model × reference combos
 ```
 
-## Development
+Reports land in `data/evals/comparisons/`. See [docs/development-guide.md](docs/development-guide.md#provider-comparison-evals) for the full eval matrix flags.
 
-### Code quality
+## 📚 Documentation <a name="documentation"></a>
 
-Pre-commit hooks run ruff linting and formatting automatically on each commit. To set up:
-
-```bash
-pre-commit install
-```
-
-Manual usage:
-
-```bash
-uv run ruff format src/
-uv run ruff check src/
-uv run ruff check --fix src/
-```
-
-### Adding dependencies
-
-```bash
-# Add runtime dependency
-uv add package-name
-
-# Add dev dependency
-uv add --dev package-name
-
-# Update all dependencies
-uv sync --upgrade
-```
-
-## License
-
-MIT
+- [Architecture](docs/architecture.md) — system structure, data flow, component boundaries
+- [Development guide](docs/development-guide.md) — env setup, testing, CI, conventions
+- [Architecture Decision Records](docs/adr/) — why-we-chose decisions
+- [CLAUDE.md](CLAUDE.md) — Claude Code agent instructions for this repo
