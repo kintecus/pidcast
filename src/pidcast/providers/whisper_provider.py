@@ -12,7 +12,11 @@ from pathlib import Path
 from ..config import HUGGINGFACE_TOKEN
 from ..diarization import merge_whisper_with_diarization, run_diarization
 from ..exceptions import DiarizationError, TranscriptionError
-from ..transcription import run_whisper_transcription
+from ..transcription import (
+    collapse_repeated_lines,
+    dedupe_whisper_segments,
+    run_whisper_transcription,
+)
 from . import TranscriptionResult
 
 logger = logging.getLogger(__name__)
@@ -28,12 +32,17 @@ class WhisperTranscriptionProvider:
         output_dir: str | Path,
         estimated_duration: float | None = None,
         save_whisper_json_to: Path | None = None,
+        whisper_options: dict | None = None,
     ) -> None:
         self._whisper_model = whisper_model
         self._output_format = output_format
         self._output_dir = Path(output_dir)
         self._estimated_duration = estimated_duration
         self._save_whisper_json_to = save_whisper_json_to
+        # Decoding/quality knobs (threads, VAD, thresholds, suppress_nst) splatted
+        # into run_whisper_transcription. Whisper-only, kept off the shared
+        # TranscriptionProvider.transcribe() signature.
+        self._opts = whisper_options or {}
 
     def transcribe(
         self,
@@ -65,6 +74,7 @@ class WhisperTranscriptionProvider:
                 verbose,
                 estimated_duration=self._estimated_duration,
                 language=language,
+                **self._opts,
             )
         except Exception as e:
             raise TranscriptionError(f"Whisper transcription failed: {e}") from e
@@ -88,20 +98,12 @@ class WhisperTranscriptionProvider:
         else:
             # When we forced JSON for saving, also read plain text from it
             if need_json:
-                try:
-                    with open(json_file, encoding="utf-8") as f:
-                        whisper_data = json.load(f)
-                    text = "\n".join(
-                        seg["text"].strip()
-                        for seg in whisper_data.get("transcription", [])
-                        if seg["text"].strip()
-                    )
-                except FileNotFoundError as e:
-                    raise TranscriptionError(f"Whisper JSON output not found: {json_file}") from e
+                segments = self._load_whisper_segments(json_file)
+                text = "\n".join(seg["text"].strip() for seg in segments if seg["text"].strip())
             else:
                 txt_file = Path(f"{temp_output}.txt")
                 try:
-                    text = txt_file.read_text(encoding="utf-8")
+                    text = collapse_repeated_lines(txt_file.read_text(encoding="utf-8"))
                 except FileNotFoundError as e:
                     raise TranscriptionError(f"Whisper output file not found: {txt_file}") from e
             diarized = False
@@ -129,18 +131,26 @@ class WhisperTranscriptionProvider:
         logger.info("Running speaker diarization...")
         diarization_segments = run_diarization(audio_file, HUGGINGFACE_TOKEN, verbose)
 
-        # Read whisper JSON output
-        json_file = Path(f"{temp_output}.json")
+        # Read (and dedup) whisper JSON output before aligning to speakers
+        whisper_segments = self._load_whisper_segments(Path(f"{temp_output}.json"))
+        text, speaker_count = merge_whisper_with_diarization(whisper_segments, diarization_segments)
+
+        return text, speaker_count
+
+    @staticmethod
+    def _load_whisper_segments(json_file: Path) -> list[dict]:
+        """Load whisper JSON segments and collapse hallucinated repeats.
+
+        Shared by the plain-JSON and diarization paths so both get identical
+        anti-hallucination dedup.
+        """
         try:
             with open(json_file, encoding="utf-8") as f:
                 whisper_data = json.load(f)
         except FileNotFoundError as e:
             raise TranscriptionError(f"Whisper JSON output not found: {json_file}") from e
 
-        whisper_segments = whisper_data.get("transcription", [])
-        text, speaker_count = merge_whisper_with_diarization(whisper_segments, diarization_segments)
-
-        return text, speaker_count
+        return dedupe_whisper_segments(whisper_data.get("transcription", []))
 
     def _cleanup_temp_files(self, temp_output: Path) -> None:
         """Remove temporary whisper output files."""

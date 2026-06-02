@@ -99,6 +99,25 @@ def check_whisper_model() -> CheckResult:
     )
 
 
+def check_vad_model() -> CheckResult:
+    """Check if a Silero VAD model is available (optional, enables --vad)."""
+    from .transcription import resolve_vad_model
+
+    vad_model = resolve_vad_model()
+    if vad_model:
+        size_mb = Path(vad_model).stat().st_size / (1024 * 1024)
+        return CheckResult("VAD model", True, f"ok ({Path(vad_model).name}, {size_mb:.0f} MB)")
+    return CheckResult(
+        "VAD model",
+        False,
+        "not found",
+        hint="Optional, enables --vad anti-hallucination. Download: "
+        "cd whisper.cpp && bash models/download-vad-model.sh silero-v5.1.2 "
+        "(then set WHISPER_VAD_MODEL in .env)",
+        required=False,
+    )
+
+
 def check_env_var(name: str, display: str, required: bool = True, hint: str = "") -> CheckResult:
     """Check if an environment variable is set."""
     value = os.environ.get(name)
@@ -130,6 +149,7 @@ def run_all_checks() -> list[CheckResult]:
         check_ffmpeg(),
         check_whisper(),
         check_whisper_model(),
+        check_vad_model(),
         check_env_var(
             "GROQ_API_KEY",
             "GROQ_API_KEY",
