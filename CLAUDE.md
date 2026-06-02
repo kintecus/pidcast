@@ -23,6 +23,7 @@ Run with `uv run pidcast <input>`. Useful entry points:
 | `pidcast --diarize-existing transcript.md [--audio file]` | Retry diarization only |
 | `pidcast --test-segment [MIN] [--start-at MIN]` | Dry-run transcription on a slice |
 | `pidcast --transcription-provider {whisper,elevenlabs}` | Pick transcription backend |
+| `pidcast --vad [--vad-threshold N]` | Whisper anti-hallucination: strip silence via VAD (needs `WHISPER_VAD_MODEL`) |
 | `pidcast --provider {groq,claude}` | Pick LLM analysis backend |
 | `pidcast lib {add,list,show,remove,sync,process,digest}` | Manage podcast subscriptions |
 | `pidcast -L \| -M \| -W \| -P` | List analysis types / LLM models / Whisper models / presets |
@@ -61,6 +62,7 @@ Source lives under `src/pidcast/`. Hot-path modules (read these first when debug
 
 - **Workflow:** "plan then execute" — propose changes before editing.
 - **Audio pipeline:** standardize to 16kHz mono WAV before transcription regardless of source format.
+- **Whisper anti-hallucination:** `--suppress-nst` is ON by default; `--vad` (opt-in, needs a Silero model) strips silence pre-decode; repeated identical lines (3+) are collapsed in post-processing. These attack Whisper's silence-hallucination at the source rather than censoring phrases.
 - **Chunking threshold:** transcripts > 120k chars use semantic chunking with synthesis.
 - **LLM responses:** every analysis prompt returns JSON with `analysis` and `contextual_tags` fields.
 - **Filenames:** smart-filtered with `YYYY-MM-DD_Title.md` date prefix.

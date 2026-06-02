@@ -501,6 +501,67 @@ Short Flags:
         default="otxt",
         help="Whisper output format (txt, vtt, srt, json). Prefix with 'o' for original filename.",
     )
+
+    # Whisper quality / anti-hallucination options (whisper provider only)
+    whisper_quality = parser.add_argument_group("Whisper Quality Options")
+    whisper_quality.add_argument(
+        "--vad",
+        action="store_true",
+        default=False,
+        help="Enable Voice Activity Detection to strip silence before decoding "
+        "(reduces hallucinations). Needs a Silero VAD model; no-ops with a warning "
+        "if none is found. See WHISPER_VAD_MODEL / 'pidcast doctor'.",
+    )
+    whisper_quality.add_argument(
+        "--vad-model",
+        dest="vad_model",
+        default=None,
+        help="Path to a Silero VAD model (overrides WHISPER_VAD_MODEL and auto-detect).",
+    )
+    whisper_quality.add_argument(
+        "--vad-threshold",
+        dest="vad_threshold",
+        type=float,
+        default=None,
+        help="VAD speech-probability threshold (whisper -vt). Default: whisper's 0.50.",
+    )
+    whisper_quality.add_argument(
+        "--no-speech-thold",
+        dest="no_speech_thold",
+        type=float,
+        default=None,
+        help="No-speech threshold (whisper -nth). Default: whisper's 0.60. "
+        "Raise (e.g. 0.8) to reject more low-speech audio.",
+    )
+    whisper_quality.add_argument(
+        "--temperature",
+        type=float,
+        default=None,
+        help="Sampling temperature (whisper -tp). Default: whisper's 0.00.",
+    )
+    whisper_quality.add_argument(
+        "--no-fallback",
+        dest="no_fallback",
+        action="store_true",
+        default=False,
+        help="Disable temperature fallback while decoding (whisper -nf).",
+    )
+    whisper_quality.add_argument(
+        "--suppress-nst",
+        "--no-suppress-nst",
+        dest="suppress_nst",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Suppress non-speech tokens (whisper -sns). On by default to curb "
+        "boilerplate hallucinations; use --no-suppress-nst to disable.",
+    )
+    whisper_quality.add_argument(
+        "--whisper-threads",
+        dest="whisper_threads",
+        type=int,
+        default=8,
+        help="Number of whisper decoding threads (whisper -t). Default: 8.",
+    )
     parser.add_argument(
         "--front-matter",
         dest="front_matter",
@@ -1329,6 +1390,7 @@ def cmd_setup() -> None:
         ENV_FILE,
         check_env_var,
         check_ffmpeg,
+        check_vad_model,
         check_whisper,
         check_whisper_model,
         write_env_var,
@@ -1356,6 +1418,13 @@ def cmd_setup() -> None:
     if whisper.ok and whisper_model.ok:
         print(f"  whisper.cpp: {whisper.detail}")
         print(f"  whisper model: {whisper_model.detail}")
+        vad = check_vad_model()
+        if vad.ok:
+            print(f"  VAD model: {vad.detail}")
+        else:
+            print("  VAD model: not found (optional, enables --vad anti-hallucination)")
+            print("    Download: cd whisper.cpp && bash models/download-vad-model.sh silero-v5.1.2")
+            print("    Then set in .env: WHISPER_VAD_MODEL=/path/to/ggml-silero-v5.1.2.bin")
     else:
         print("  whisper.cpp: not configured")
         print("\n  whisper.cpp is needed for local (private) transcription.")
@@ -1475,6 +1544,8 @@ def main() -> None:
             print("      language: uk")
             print("      diarize: true")
             print("      no_analyze: true")
+            print("      vad: true            # strip silence (anti-hallucination)")
+            print("      vad_threshold: 0.5")
         else:
             print("Available presets:\n")
             for name, flags in presets.items():

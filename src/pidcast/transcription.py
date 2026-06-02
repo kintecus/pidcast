@@ -13,6 +13,7 @@ from .config import (
     WHISPER_CPP_PATH,
     WHISPER_MODEL,
     WHISPER_MODELS_DIR,
+    WHISPER_VAD_MODEL,
 )
 from .exceptions import TranscriptionError
 from .utils import load_json_file
@@ -96,6 +97,130 @@ def resolve_whisper_model(model_arg: str) -> str:
         f"Available models: {', '.join(names) if names else 'none'}\n"
         f"Download models with: {models_dir}/download-ggml-model.sh {model_arg}"
     )
+
+
+def resolve_vad_model(model_arg: str | None = None, verbose: bool = False) -> str | None:
+    """Resolve a Silero VAD model path for whisper.cpp's --vad.
+
+    Resolution precedence:
+        1. Explicit ``model_arg`` (CLI/preset value), if it is an existing file.
+        2. ``WHISPER_VAD_MODEL`` environment variable, if it is an existing file.
+        3. Auto-detect ``ggml-silero-*.bin`` in the models directory, skipping the
+           ``for-tests-*`` fixtures bundled with whisper.cpp.
+
+    Args:
+        model_arg: Explicit VAD model name or path (overrides env/auto-detect).
+        verbose: Log the resolved path when found.
+
+    Returns:
+        Absolute path to a VAD model, or None if none can be resolved. Never raises -
+        the caller decides whether to warn and continue without VAD.
+    """
+    if model_arg and Path(model_arg).is_file():
+        if verbose:
+            logger.info(f"Using VAD model: {model_arg}")
+        return str(model_arg)
+
+    if WHISPER_VAD_MODEL and Path(WHISPER_VAD_MODEL).is_file():
+        if verbose:
+            logger.info(f"Using VAD model from WHISPER_VAD_MODEL: {WHISPER_VAD_MODEL}")
+        return WHISPER_VAD_MODEL
+
+    models_dir = _get_models_dir()
+    if models_dir:
+        for f in sorted(models_dir.glob("ggml-silero-*.bin")):
+            if f.name.startswith("for-tests-"):
+                continue
+            if verbose:
+                logger.info(f"Auto-detected VAD model: {f}")
+            return str(f)
+
+    return None
+
+
+# ============================================================================
+# TRANSCRIPT POST-PROCESSING
+# ============================================================================
+
+
+def _normalize_for_dedup(text: str) -> str:
+    """Normalize text for repeat detection: strip, casefold, drop trailing punctuation."""
+    return text.strip().casefold().rstrip(".!?…").strip()
+
+
+def dedupe_whisper_segments(
+    segments: list[dict],
+    max_repeats: int = 2,
+) -> list[dict]:
+    """Collapse runs of identical consecutive whisper segments.
+
+    Whisper hallucinates repeated boilerplate (e.g. "Дякую за перегляд!") on
+    low-speech / silence stretches. This collapses any run of more than
+    ``max_repeats`` consecutive segments with identical normalized text down to a
+    single segment, keeping the first occurrence. A run of ``max_repeats`` or fewer
+    is left intact (a legitimately doubled line survives).
+
+    Args:
+        segments: Whisper JSON ``transcription`` list (each dict has a ``text`` key).
+        max_repeats: Maximum consecutive identical lines to keep (default 2 -> a run
+            of 3 or more collapses to one).
+
+    Returns:
+        A new list with over-long identical runs collapsed. Non-text/edge cases pass
+        through unchanged.
+    """
+    if not segments:
+        return segments
+
+    result: list[dict] = []
+    run_key: str | None = None
+    run_len = 0
+
+    for seg in segments:
+        key = _normalize_for_dedup(seg.get("text", ""))
+        if key and key == run_key:
+            run_len += 1
+            # Beyond the allowed repeats, drop the segment entirely.
+            if run_len > max_repeats:
+                continue
+        else:
+            run_key = key
+            run_len = 1
+        result.append(seg)
+
+    return result
+
+
+def collapse_repeated_lines(text: str, max_repeats: int = 2) -> str:
+    """Collapse runs of identical consecutive lines in a plain-text transcript.
+
+    Line-level counterpart to :func:`dedupe_whisper_segments` for the plain ``.txt``
+    output path (no JSON segments available). Preserves blank-line structure.
+
+    Args:
+        text: Transcript text.
+        max_repeats: Maximum consecutive identical lines to keep.
+
+    Returns:
+        Text with over-long identical runs collapsed.
+    """
+    lines = text.splitlines()
+    result: list[str] = []
+    run_key: str | None = None
+    run_len = 0
+
+    for line in lines:
+        key = _normalize_for_dedup(line)
+        if key and key == run_key:
+            run_len += 1
+            if run_len > max_repeats:
+                continue
+        else:
+            run_key = key
+            run_len = 1
+        result.append(line)
+
+    return "\n".join(result)
 
 
 # ============================================================================
@@ -294,6 +419,14 @@ def run_whisper_transcription(
     estimated_duration: float | None = None,
     show_progress: bool = True,
     language: str | None = None,
+    *,
+    threads: int = 8,
+    vad_model: str | None = None,
+    vad_threshold: float | None = None,
+    no_speech_thold: float | None = None,
+    temperature: float | None = None,
+    no_fallback: bool = False,
+    suppress_nst: bool = False,
 ) -> bool:
     """Run whisper transcription.
 
@@ -306,6 +439,19 @@ def run_whisper_transcription(
         estimated_duration: Estimated transcription duration for progress bar
         show_progress: Whether to show progress indicator
         language: Language code for transcription (e.g., 'uk', 'en', 'de')
+        threads: Number of decoding threads (whisper -t)
+        vad_model: Resolved path to a Silero VAD model. When set, enables VAD
+            (--vad) to strip silence before decoding, the primary defense against
+            silence hallucinations. None disables VAD.
+        vad_threshold: VAD speech-probability threshold (whisper -vt). None uses
+            the whisper default (0.50).
+        no_speech_thold: No-speech threshold (whisper -nth). None uses the whisper
+            default (0.60).
+        temperature: Sampling temperature (whisper -tp). None uses the whisper
+            default (0.00).
+        no_fallback: Disable temperature fallback while decoding (whisper -nf).
+        suppress_nst: Suppress non-speech tokens (whisper -sns). Reduces boilerplate
+            hallucinations on low-speech audio.
 
     Returns:
         True if successful
@@ -321,12 +467,26 @@ def run_whisper_transcription(
         "-m",
         whisper_model,
         "-t",
-        "8",
+        str(threads),
     ]
 
     # Add language if specified
     if language:
         command.extend(["-l", language])
+
+    # Anti-hallucination / decoding quality flags
+    if no_speech_thold is not None:
+        command.extend(["-nth", str(no_speech_thold)])
+    if temperature is not None:
+        command.extend(["-tp", str(temperature)])
+    if no_fallback:
+        command.append("-nf")
+    if suppress_nst:
+        command.append("-sns")
+    if vad_model:
+        command.extend(["--vad", "-vm", str(vad_model)])
+        if vad_threshold is not None:
+            command.extend(["-vt", str(vad_threshold)])
 
     # Add output format flag
     format_flags = {

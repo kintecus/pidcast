@@ -820,9 +820,33 @@ def process_input_source(
             )
         else:
             from .providers.whisper_provider import WhisperTranscriptionProvider
+            from .transcription import resolve_vad_model
 
             # Save whisper JSON for diarization retry (always, since it's small)
             whisper_json_dest = output_dir / f"{smart_filename}.whisper.json"
+
+            # Resolve VAD here (single decision point) so both the test-segment and
+            # full paths get identical graceful fallback when no model is available.
+            vad_model = None
+            if getattr(args, "vad", False):
+                vad_model = resolve_vad_model(getattr(args, "vad_model", None), args.verbose)
+                if not vad_model:
+                    logger.warning(
+                        "VAD requested but no Silero VAD model found. Continuing "
+                        "without VAD. Download one with: "
+                        "bash whisper.cpp/models/download-vad-model.sh silero-v5.1.2 "
+                        "(then set WHISPER_VAD_MODEL), or run 'pidcast doctor'."
+                    )
+
+            whisper_opts = {
+                "threads": getattr(args, "whisper_threads", 8),
+                "vad_model": vad_model,
+                "vad_threshold": getattr(args, "vad_threshold", None),
+                "no_speech_thold": getattr(args, "no_speech_thold", None),
+                "temperature": getattr(args, "temperature", None),
+                "no_fallback": getattr(args, "no_fallback", False),
+                "suppress_nst": getattr(args, "suppress_nst", True),
+            }
 
             logger.info("\nTranscribing audio with Whisper...")
             transcription_provider = WhisperTranscriptionProvider(
@@ -831,6 +855,7 @@ def process_input_source(
                 output_dir=output_dir,
                 estimated_duration=estimated_time,
                 save_whisper_json_to=whisper_json_dest,
+                whisper_options=whisper_opts,
             )
 
         transcription_result = transcription_provider.transcribe(
