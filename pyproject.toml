@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pidcast"
-version = "0.9.1"
+version = "0.9.2"
 description = "YouTube transcription tool with Whisper and LLM analysis"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -24,6 +24,12 @@ diarize = [
     "pyannote.audio>=3.3.0",
     "numpy<2",
     "huggingface-hub<1.0",
+    # torch>=2.3 dropped macOS x86_64 (Intel) wheels; 2.2.2 is the last build
+    # with one. Cap torch on Intel macs only so Linux/CI still resolve a modern
+    # torch. Without this, uv picks the newest torch and fails with "no wheel
+    # for the current platform" when installing the diarize extra.
+    "torch<=2.2.2; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    "torchaudio<=2.2.2; sys_platform == 'darwin' and platform_machine == 'x86_64'",
 ]
 elevenlabs = [
     "elevenlabs>=2.0.0",
