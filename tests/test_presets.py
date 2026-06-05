@@ -113,6 +113,39 @@ class TestApplyPreset:
         assert args.whisper_model == "medium"  # NOT overridden
         assert args.language == "uk"  # set from preset
 
+    def test_hyphenated_preset_key_resolves_to_dest(self):
+        # Keys written with hyphens (matching CLI flags) should map to the
+        # underscore argparse dest. Regression: --transcription-provider was
+        # silently skipped when written as 'transcription-provider' in a preset.
+        args = argparse.Namespace(
+            preset="elabs",
+            transcription_provider="whisper",
+            keep_audio=False,
+            verbose=False,
+        )
+        preset_values = {
+            "transcription-provider": "elevenlabs",
+            "keep-audio": True,
+        }
+        with patch.object(ConfigManager, "load_preset", return_value=preset_values):
+            apply_preset(args)
+
+        assert args.transcription_provider == "elevenlabs"
+        assert args.keep_audio is True
+
+    def test_explicit_flag_overrides_hyphenated_preset_key(self):
+        args = argparse.Namespace(
+            preset="elabs",
+            transcription_provider="whisper",
+            verbose=False,
+        )
+        preset_values = {"transcription-provider": "elevenlabs"}
+        explicitly_set = {"transcription_provider"}
+        with patch.object(ConfigManager, "load_preset", return_value=preset_values):
+            apply_preset(args, explicitly_set=explicitly_set)
+
+        assert args.transcription_provider == "whisper"  # CLI flag wins
+
     def test_unknown_preset_key_warns(self, caplog):
         args = argparse.Namespace(
             preset="daily",

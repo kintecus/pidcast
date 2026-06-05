@@ -200,12 +200,16 @@ def apply_preset(
     preset_values = ConfigManager.load_preset(args.preset)
 
     for key, value in preset_values.items():
-        if not hasattr(args, key):
+        # Preset keys may be written with hyphens (matching CLI flags like
+        # --transcription-provider) or underscores (matching argparse dests).
+        # Normalize to the dest form so both styles resolve.
+        dest = key.replace("-", "_")
+        if not hasattr(args, dest):
             logger.warning(f"Unknown preset key '{key}', skipping")
             continue
-        if key in explicitly_set:
+        if dest in explicitly_set:
             continue
-        setattr(args, key, value)
+        setattr(args, dest, value)
 
     if getattr(args, "verbose", False):
         logger.info(f"Applied preset '{args.preset}': {preset_values}")
