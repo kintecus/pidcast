@@ -470,6 +470,68 @@ def run_analyze_existing_mode(
         return False
 
 
+# Audio extensions pyannote / ffmpeg can ingest, used when locating the source
+# audio for an existing transcript.
+_AUDIO_EXTENSIONS = (".wav", ".m4a", ".mp3", ".flac", ".opus", ".ogg", ".aac")
+
+
+def _url_to_local_path(url: str) -> Path | None:
+    """Convert a front-matter ``url`` value to a local audio Path, if it is one.
+
+    Handles ``file://`` URLs (as written for local-file captures) and bare
+    filesystem paths. Returns None for remote URLs (http/https) or empty values.
+    """
+    if not url:
+        return None
+    if url.startswith("file://"):
+        from urllib.parse import unquote, urlparse
+
+        return Path(unquote(urlparse(url).path))
+    if "://" in url:  # remote source (http, https, etc.) — no local audio
+        return None
+    return Path(url)
+
+
+def resolve_existing_audio(
+    transcript_path: Path,
+    front_matter_url: str = "",
+) -> Path | None:
+    """Locate the source audio for an existing transcript.
+
+    Resolution order:
+      1. The ``url`` recorded in the transcript front matter (local-file captures
+         store the source audio there, even when its filename differs from the
+         transcript's).
+      2. A single audio file sitting next to the transcript.
+      3. ``<transcript-stem>.wav`` next to the transcript (legacy heuristic).
+
+    Returns the resolved Path, or None if nothing matched. The transcript and
+    its audio are NOT guaranteed to share a stem — pidcast writes the audio with
+    a smart-filtered name and the transcript with a date-prefixed name — so the
+    front-matter url is the authoritative source.
+    """
+    parent = transcript_path.parent
+
+    # 1. Front-matter url
+    from_meta = _url_to_local_path(front_matter_url)
+    if from_meta and from_meta.exists():
+        return from_meta
+
+    # 2. Single sibling audio file
+    siblings = sorted(
+        p for p in parent.iterdir() if p.is_file() and p.suffix.lower() in _AUDIO_EXTENSIONS
+    )
+    if len(siblings) == 1:
+        return siblings[0]
+
+    # 3. Legacy stem-swap
+    stem_wav = parent / f"{transcript_path.stem}.wav"
+    if stem_wav.exists():
+        return stem_wav
+
+    return None
+
+
 def run_diarize_existing_mode(
     transcript_path: str | Path,
     audio_override: str | None = None,
@@ -521,15 +583,21 @@ def run_diarize_existing_mode(
                 log_error(f"Audio file not found: {audio_file}")
                 return False
         else:
-            # Look for .wav next to the transcript
-            audio_wav = parent / f"{stem}.wav"
-            if audio_wav.exists():
-                audio_file = audio_wav
-            else:
-                log_error(
-                    f"Audio file not found: {audio_wav}\n"
-                    "Provide an audio file with --audio /path/to/file.wav"
+            audio_file = resolve_existing_audio(transcript_path, video_info.webpage_url)
+            if audio_file is None:
+                candidates = sorted(
+                    p.name
+                    for p in parent.iterdir()
+                    if p.is_file() and p.suffix.lower() in _AUDIO_EXTENSIONS
                 )
+                hint = (
+                    "Provide an audio file with --audio /path/to/file.wav"
+                    if not candidates
+                    else "Could not match audio automatically. Audio files in this folder:\n  "
+                    + "\n  ".join(candidates)
+                    + "\nRe-run with --audio /path/to/file"
+                )
+                log_error(f"Audio file not found for transcript: {transcript_path.name}\n{hint}")
                 return False
 
         logger.info(f"Audio: {audio_file}")
