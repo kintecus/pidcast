@@ -1,8 +1,11 @@
 """Whisper transcription functionality."""
 
+import contextlib
 import logging
+import re
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from .config import (
@@ -15,8 +18,85 @@ from .config import (
     WHISPER_MODELS_DIR,
     WHISPER_VAD_MODEL,
 )
-from .exceptions import TranscriptionError
+from .exceptions import TranscriptionError, TranscriptionPaused
 from .utils import load_json_file
+
+# whisper.cpp stdout segment line: "[HH:MM:SS.mmm --> HH:MM:SS.mmm]   text".
+# Tolerant of '.' or ',' as the ms separator (varies by build) and inner spacing.
+_SEGMENT_LINE_RE = re.compile(
+    r"^\s*\[(\d{2}):(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*"
+    r"(\d{2}):(\d{2}):(\d{2})[.,](\d{3})\]\s*(.*)$"
+)
+
+
+def _ts_to_ms(h: str, m: str, s: str, ms: str) -> int:
+    return ((int(h) * 60 + int(m)) * 60 + int(s)) * 1000 + int(ms)
+
+
+def parse_whisper_segment_line(line: str) -> dict | None:
+    """Parse one whisper stdout segment line into ``{from_ms, to_ms, text}``.
+
+    Returns None for lines that are not segment lines (progress, banners, blank).
+    A line that *looks* like a segment (starts with ``[``) but fails to parse is
+    logged at WARNING so a format drift is caught rather than silently dropped.
+    """
+    match = _SEGMENT_LINE_RE.match(line)
+    if not match:
+        if line.lstrip().startswith("[") and "-->" in line:
+            logger.warning("Unparseable whisper segment line (format drift?): %r", line.strip())
+        return None
+    g = match.groups()
+    return {
+        "from_ms": _ts_to_ms(g[0], g[1], g[2], g[3]),
+        "to_ms": _ts_to_ms(g[4], g[5], g[6], g[7]),
+        "text": g[8].strip(),
+    }
+
+
+def ms_to_timestamp(ms: int) -> str:
+    """Render absolute milliseconds as a whisper-style ``HH:MM:SS,mmm`` string."""
+    ms = max(0, int(ms))
+    hours, rem = divmod(ms, 3_600_000)
+    minutes, rem = divmod(rem, 60_000)
+    seconds, millis = divmod(rem, 1000)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
+
+
+def merge_segments_to_whisper_json(
+    segments: list[dict],
+    base_template: dict | None = None,
+) -> dict:
+    """Assemble a whisper-shaped JSON dict from streamed ``{from_ms,to_ms,text}`` records.
+
+    Each ``transcription[]`` entry carries the ``offsets`` sub-dict (ms ints) that
+    :func:`pidcast.diarization.merge_whisper_with_diarization` and the plain-text
+    fallback both read, plus regenerated ``timestamps`` strings so the saved file
+    is internally consistent. Segments are de-overlapped (a re-decoded segment from
+    a VAD-backed-off resume whose start precedes the previous segment's end is
+    dropped) and then run through :func:`dedupe_whisper_segments`.
+    """
+    deoverlapped: list[dict] = []
+    last_to = -1
+    for seg in sorted(segments, key=lambda s: int(s.get("from_ms", 0))):
+        from_ms = int(seg.get("from_ms", 0))
+        to_ms = int(seg.get("to_ms", from_ms))
+        # Drop a segment fully inside what we already have (resume re-decode overlap).
+        if to_ms <= last_to:
+            continue
+        deoverlapped.append(
+            {
+                "text": seg.get("text", ""),
+                "offsets": {"from": from_ms, "to": to_ms},
+                "timestamps": {"from": ms_to_timestamp(from_ms), "to": ms_to_timestamp(to_ms)},
+            }
+        )
+        last_to = to_ms
+
+    transcription = dedupe_whisper_segments(deoverlapped)
+    result = dict(base_template) if base_template else {}
+    result["transcription"] = transcription
+    return result
+
 
 logger = logging.getLogger(__name__)
 
@@ -410,6 +490,140 @@ def extract_audio_segment(
 # ============================================================================
 
 
+def _run_whisper_streaming(
+    command: list[str],
+    *,
+    verbose: bool,
+    show_progress: bool,
+    estimated_duration: float | None,
+    audio_duration: float | None,
+    offset_ms: int | None,
+    segment_callback: Callable[[dict], None] | None,
+    pause_check: Callable[[], bool] | None,
+) -> None:
+    """Run whisper as a single Popen, reading stdout line-by-line.
+
+    Unifies every non-verbose path (estimate / no-estimate / no-rich) onto one
+    streaming loop so the segment callback and pause check work regardless of
+    whether a duration estimate is available. whisper.cpp prints each completed
+    segment to stdout and flushes, so we parse those lines live.
+
+    In verbose mode stdout is inherited (whisper prints directly) so we cannot
+    parse segments - pause still works via process polling, but per-segment
+    checkpointing does not. Callers needing checkpointing run non-verbose.
+
+    Raises:
+        TranscriptionPaused: if ``pause_check`` returns True mid-run.
+        subprocess.CalledProcessError: on non-zero exit.
+    """
+    offset_base = int(offset_ms or 0)
+
+    # Progress is driven by AUDIO POSITION (segment end-time vs total audio
+    # duration), not wall-clock, so it stays correct when resuming from an offset:
+    # the bar starts at offset/duration and Rich derives the ETA from throughput.
+    # Fall back to the wall-clock estimate only when the true duration is unknown.
+    total = None
+    if audio_duration and audio_duration > 0:
+        total = int(audio_duration * 1000)  # ms scale (audio timeline)
+    elif estimated_duration and estimated_duration > 0:
+        total = int(estimated_duration * 1000)
+
+    label = "Resuming transcription" if offset_base > 0 else "Transcribing"
+    progress_ctx = None
+    progress = None
+    task = None
+    if show_progress and not verbose:
+        try:
+            from rich.progress import (
+                BarColumn,
+                Progress,
+                SpinnerColumn,
+                TextColumn,
+                TimeElapsedColumn,
+                TimeRemainingColumn,
+            )
+
+            progress = Progress(
+                SpinnerColumn(),
+                TextColumn(f"[cyan]{label}..."),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TextColumn("[dim]elapsed[/dim]"),
+                TimeElapsedColumn(),
+                TextColumn("[dim]eta[/dim]"),
+                TimeRemainingColumn(),
+            )
+            progress_ctx = progress
+        except ImportError:
+            logger.info(f"{label} (install 'rich' for progress display)...")
+
+    # Verbose: inherit stdout so whisper prints directly; only poll for pause.
+    stdout_target = None if verbose else subprocess.PIPE
+    proc = subprocess.Popen(
+        command,
+        stdout=stdout_target,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+
+    def _terminate_for_pause() -> None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+    last_to_ms = offset_base
+    try:
+        if progress_ctx is not None:
+            progress_ctx.start()
+            task = progress.add_task("transcribe", total=total)
+            # Seed the bar at the resume offset so % and ETA are right from the
+            # first new segment (a resumed run starts partway through the audio).
+            if total and offset_base > 0:
+                progress.update(task, completed=min(offset_base, total - 1))
+
+        if proc.stdout is not None:
+            for line in proc.stdout:
+                if pause_check is not None and pause_check():
+                    _terminate_for_pause()
+                    raise TranscriptionPaused(last_offset_ms=last_to_ms)
+
+                seg = parse_whisper_segment_line(line)
+                if seg is None:
+                    continue
+                last_to_ms = seg["to_ms"]
+                if segment_callback is not None:
+                    segment_callback(seg)
+                if progress is not None and task is not None and total:
+                    progress.update(task, completed=min(seg["to_ms"], total - 1))
+        else:
+            # Verbose path: no stdout to read; poll for pause.
+            while proc.poll() is None:
+                if pause_check is not None and pause_check():
+                    _terminate_for_pause()
+                    raise TranscriptionPaused(last_offset_ms=last_to_ms)
+                time.sleep(0.2)
+
+        proc.wait()
+        if progress is not None and task is not None and total:
+            progress.update(task, completed=total)
+
+        if proc.returncode != 0:
+            stderr = proc.stderr.read() if proc.stderr else ""
+            raise subprocess.CalledProcessError(proc.returncode, command, stderr=stderr)
+    finally:
+        if progress_ctx is not None:
+            progress_ctx.stop()
+        if proc.stdout is not None:
+            proc.stdout.close()
+        if proc.stderr is not None and not proc.stderr.closed:
+            with contextlib.suppress(Exception):
+                proc.stderr.close()
+
+
 def run_whisper_transcription(
     audio_file: str | Path,
     whisper_model: str,
@@ -427,6 +641,10 @@ def run_whisper_transcription(
     temperature: float | None = None,
     no_fallback: bool = False,
     suppress_nst: bool = False,
+    audio_duration: float | None = None,
+    offset_ms: int | None = None,
+    segment_callback: "Callable[[dict], None] | None" = None,
+    pause_check: "Callable[[], bool] | None" = None,
 ) -> bool:
     """Run whisper transcription.
 
@@ -452,6 +670,14 @@ def run_whisper_transcription(
         no_fallback: Disable temperature fallback while decoding (whisper -nf).
         suppress_nst: Suppress non-speech tokens (whisper -sns). Reduces boilerplate
             hallucinations on low-speech audio.
+        offset_ms: Resume offset in milliseconds (whisper -ot). Decoding starts here;
+            emitted timestamps remain absolute (relative to file start).
+        segment_callback: Invoked once per completed segment as it streams off
+            whisper's stdout, with ``{"from_ms", "to_ms", "text"}`` (absolute ms).
+            Enables live checkpointing for pause/resume.
+        pause_check: Polled between stdout lines; if it returns True the whisper
+            subprocess is terminated cleanly and the function raises
+            :class:`TranscriptionPaused` (already-streamed segments are preserved).
 
     Returns:
         True if successful
@@ -488,6 +714,12 @@ def run_whisper_transcription(
         if vad_threshold is not None:
             command.extend(["-vt", str(vad_threshold)])
 
+    # Resume: start decoding at a time offset. whisper.cpp emits ABSOLUTE
+    # timestamps under -ot (verified), so the streamed segments need no
+    # offset-correction - they align directly onto the pre-pause segments.
+    if offset_ms and offset_ms > 0:
+        command.extend(["-ot", str(int(offset_ms))])
+
     # Add output format flag
     format_flags = {
         "txt": "--output-txt",
@@ -506,75 +738,16 @@ def run_whisper_transcription(
         logger.info(f"Running Whisper command: {' '.join(command)}")
 
     try:
-        # Run transcription with Rich progress bar
-        if show_progress and not verbose:
-            try:
-                from rich.progress import (
-                    BarColumn,
-                    Progress,
-                    SpinnerColumn,
-                    TextColumn,
-                    TimeElapsedColumn,
-                )
-
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[cyan]Transcribing..."),
-                    BarColumn(),
-                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                    TimeElapsedColumn(),
-                ) as progress:
-                    # Add task with total based on estimated duration
-                    if estimated_duration and estimated_duration > 0:
-                        # Use estimated duration in deciseconds for granular updates
-                        total = int(estimated_duration * 10)
-                        task = progress.add_task("transcribe", total=total)
-
-                        # Run transcription in subprocess
-                        proc = subprocess.Popen(
-                            command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
-                        )
-
-                        # Update progress based on elapsed time
-                        start_time = time.time()
-                        while proc.poll() is None:
-                            elapsed = time.time() - start_time
-                            completed = min(int(elapsed * 10), total - 1)  # Cap at 99%
-                            progress.update(task, completed=completed)
-                            time.sleep(0.1)
-
-                        # Mark as complete
-                        progress.update(task, completed=total)
-
-                        # Check return code
-                        if proc.returncode != 0:
-                            stderr = proc.stderr.read().decode() if proc.stderr else ""
-                            raise subprocess.CalledProcessError(
-                                proc.returncode, command, stderr=stderr
-                            )
-
-                    else:
-                        # No estimate - just show spinner
-                        task = progress.add_task("transcribe", total=None)
-                        subprocess.run(
-                            command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
-                        )
-                        progress.update(task, completed=1)
-
-            except ImportError:
-                # Fallback if rich is not installed
-                logger.info("Transcribing (install 'rich' for progress display)...")
-                subprocess.run(
-                    command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
-                )
-        else:
-            # Verbose mode or no progress
-            if verbose:
-                subprocess.run(command, check=True)
-            else:
-                subprocess.run(
-                    command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
-                )
+        _run_whisper_streaming(
+            command,
+            verbose=verbose,
+            show_progress=show_progress,
+            estimated_duration=estimated_duration,
+            audio_duration=audio_duration,
+            offset_ms=offset_ms,
+            segment_callback=segment_callback,
+            pause_check=pause_check,
+        )
 
         if verbose:
             logger.info("✓ Transcription completed successfully.")
