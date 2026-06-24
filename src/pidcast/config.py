@@ -103,6 +103,12 @@ SYNC_LOGS_DIR = CONFIG_DIR / "logs"
 COOKIE_CACHE_DIR = CONFIG_DIR / "cache"
 COOKIE_CACHE_MAX_AGE_HOURS = 24
 
+# Resume/pause checkpoints. Kept OUTSIDE COOKIE_CACHE_DIR so a cookie-cache sweep
+# never wipes a paused transcription job.
+CHECKPOINT_DIR = CONFIG_DIR / "checkpoints"
+# Paused jobs older than this are eligible for the stale-job sweep.
+CHECKPOINT_MAX_AGE_DAYS = 14
+
 # Library defaults
 DEFAULT_BACKFILL_LIMIT = 5
 DEFAULT_FEED_CACHE_HOURS = 1

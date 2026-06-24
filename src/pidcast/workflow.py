@@ -29,6 +29,7 @@ from .exceptions import (
     DownloadError,
     FileProcessingError,
     TranscriptionError,
+    TranscriptionPaused,
 )
 from .markdown import create_analysis_markdown_file, create_markdown_file
 from .transcription import (
@@ -51,6 +52,56 @@ from .utils import (
 logger = logging.getLogger(__name__)
 
 
+# Set by the SIGINT handler (cli.py) to request a clean pause of the running
+# transcription. The whisper stream loop polls this between segments.
+_pause_requested = False
+
+
+def request_pause() -> None:
+    """Signal the running transcription to pause at the next segment boundary."""
+    global _pause_requested
+    _pause_requested = True
+
+
+def reset_pause() -> None:
+    global _pause_requested
+    _pause_requested = False
+
+
+def _pause_requested_check() -> bool:
+    return _pause_requested
+
+
+# Flags that are NOT persisted into the resume manifest (they are run-local,
+# resolved at runtime, or would prevent a clean resume).
+_NON_RESUMABLE_ARG_KEYS = {
+    "resume",
+    "no_checkpoint",
+    "keep_checkpoint",
+    "test_segment",
+    "start_at",
+    "analyze_existing",
+    "diarize_existing",
+    "verbose",
+}
+
+
+def _persistable_args(args: argparse.Namespace) -> dict[str, Any]:
+    """The subset of args needed to re-run a job on `pidcast resume`.
+
+    Stores the whisper model NAME via the original ``args.whisper_model`` value as
+    given by the user (resume re-resolves it), and drops run-local flags. Only
+    JSON-serializable scalars/lists are kept.
+    """
+    out: dict[str, Any] = {}
+    for key, value in vars(args).items():
+        if key in _NON_RESUMABLE_ARG_KEYS:
+            continue
+        if value is None or isinstance(value, (str, int, float, bool, list)):
+            out[key] = value
+    return out
+
+
 def _extract_whisper_model_name(model_path: str | None) -> str | None:
     """Extract clean model name from whisper model path.
 
@@ -59,6 +110,76 @@ def _extract_whisper_model_name(model_path: str | None) -> str | None:
     if not model_path:
         return None
     return Path(model_path).stem.removeprefix("ggml-")
+
+
+def _ensure_job_manifest(
+    args: argparse.Namespace,
+    input_source: str,
+    audio_file: str,
+    smart_filename: str,
+    video_info: VideoInfo,
+    provider: str,
+    model_name: str | None,
+    vad_model: str | None,
+    diarize: bool,
+):
+    """Create (or load, when resuming) the checkpoint manifest for this run.
+
+    Copies the working WAV into the job dir as ``source.wav`` BEFORE transcription
+    so a pause/crash is resumable without re-downloading or re-converting.
+    """
+    from .checkpoint import (
+        IN_PROGRESS,
+        JobManifest,
+        compute_job_id,
+        quick_file_signature,
+    )
+
+    resume_job_id = getattr(args, "resume_job_id", None)
+    if resume_job_id:
+        existing = JobManifest.load(
+            (
+                JobManifest(
+                    job_id=resume_job_id,
+                    input_source="",
+                    audio_signature="",
+                    smart_filename="",
+                    provider="",
+                    model="",
+                    language=None,
+                    vad_signature="",
+                )
+            ).job_dir
+        )
+        if existing is not None:
+            existing.transcription.status = IN_PROGRESS
+            existing.save()
+            return existing
+
+    vad_signature = f"vad:{Path(vad_model).name}" if vad_model else "novad"
+    audio_sig = quick_file_signature(audio_file)
+    job_id = compute_job_id(
+        audio_sig, provider, model_name or "", getattr(args, "language", None), vad_signature
+    )
+    manifest = JobManifest(
+        job_id=job_id,
+        input_source=input_source,
+        audio_signature=audio_sig,
+        smart_filename=smart_filename,
+        provider=provider,
+        model=model_name or "",
+        language=getattr(args, "language", None),
+        vad_signature=vad_signature,
+        cli_args=_persistable_args(args),
+        video_info=video_info.to_dict() if video_info else None,
+    )
+    manifest.diarization.requested = diarize
+    manifest.transcription.status = IN_PROGRESS
+    manifest.save()
+    # Copy the working audio into the job dir up-front (resume source of truth).
+    if not manifest.source_wav_path.exists():
+        shutil.copy2(audio_file, manifest.source_wav_path)
+    return manifest
 
 
 def parse_transcript_file(filepath: str, verbose: bool = False) -> tuple[str, VideoInfo]:
@@ -741,6 +862,9 @@ def process_input_source(
     smart_filename: str | None = None
     transcription_result = None
     success = False
+    paused = False
+    job_manifest = None
+    reset_pause()
 
     try:
         # Validate input
@@ -916,6 +1040,28 @@ def process_input_source(
                 "suppress_nst": getattr(args, "suppress_nst", True),
             }
 
+            # Set up the resume/pause checkpoint (whisper only). Disabled for
+            # test-segment runs and when --no-checkpoint is passed. The source WAV
+            # is copied into the job dir BEFORE transcription so a pause/crash is
+            # resumable even after the finally-block cleans the working audio.
+            checkpoint_enabled = (
+                test_segment is None
+                and not getattr(args, "no_checkpoint", False)
+                and not getattr(args, "resume_job_id", None)  # set below if resuming
+            )
+            if checkpoint_enabled or getattr(args, "resume_job_id", None):
+                job_manifest = _ensure_job_manifest(
+                    args,
+                    input_source,
+                    audio_file,
+                    smart_filename,
+                    video_info,
+                    transcription_provider_name,
+                    whisper_model_name,
+                    vad_model,
+                    diarize,
+                )
+
             logger.info("\nTranscribing audio with Whisper...")
             transcription_provider = WhisperTranscriptionProvider(
                 whisper_model=args.whisper_model,
@@ -924,6 +1070,8 @@ def process_input_source(
                 estimated_duration=estimated_time,
                 save_whisper_json_to=whisper_json_dest,
                 whisper_options=whisper_opts,
+                checkpoint=job_manifest,
+                pause_check=_pause_requested_check if job_manifest is not None else None,
             )
 
         transcription_result = transcription_provider.transcribe(
@@ -935,6 +1083,14 @@ def process_input_source(
 
         transcription_duration = transcription_result.duration
         speaker_count = transcription_result.speaker_count
+
+        # Transcription finished cleanly: mark it done in the manifest so a later
+        # crash (e.g. during diarization) resumes into diarization, not whisper.
+        if job_manifest is not None:
+            from .checkpoint import DONE
+
+            job_manifest.transcription.status = DONE
+            job_manifest.save()
 
         # Auto-save audio when diarizing (for diarization retry)
         saved_audio_path = None
@@ -1121,7 +1277,31 @@ def process_input_source(
                 shutil.copy2(audio_file, saved_audio)
             logger.info(f"Audio saved to: file://{saved_audio.absolute()}")
 
+        # Success: drop the checkpoint unless the user wants to keep it.
+        if job_manifest is not None and not getattr(args, "keep_checkpoint", False):
+            from .checkpoint import cleanup_job_dir
+
+            cleanup_job_dir(job_manifest.job_id)
+        elif job_manifest is not None:
+            logger.info(f"Checkpoint kept: {job_manifest.job_dir}")
+
         return True
+
+    except TranscriptionPaused as e:
+        paused = True
+        if job_manifest is not None:
+            from .checkpoint import PAUSED
+
+            job_manifest.transcription.status = PAUSED
+            job_manifest.save()
+            n = job_manifest.transcription.segment_count
+            mm, ss = divmod(int(e.last_offset_ms) // 1000, 60)
+            log_section("Transcription paused")
+            logger.info(f"Saved {n} segments (up to {mm:02d}:{ss:02d}).")
+            logger.info("Resume with:  pidcast resume")
+        else:
+            logger.info("\n\n✗ Transcription interrupted.")
+        return False
 
     except KeyboardInterrupt:
         logger.info("\n\n✗ Process interrupted by user.")
@@ -1179,8 +1359,15 @@ def process_input_source(
         return False
 
     finally:
-        # Clean up temporary audio files
-        if audio_file:
+        # Clean up temporary audio files. Never touch a job-dir source.wav: that is
+        # the resume source of truth and must survive a pause/crash, and on a resume
+        # run the working audio IS the job-dir copy.
+        in_job_dir = bool(
+            job_manifest is not None
+            and audio_file
+            and str(job_manifest.job_dir) in str(Path(audio_file).resolve())
+        )
+        if audio_file and not in_job_dir:
             if is_local_file:
                 audio_path = Path(audio_file)
                 if audio_path.exists() and "_16k.wav" in audio_file:
@@ -1194,8 +1381,8 @@ def process_input_source(
             else:
                 cleanup_temp_files(audio_file, args.verbose)
 
-        # Save failure statistics if needed
-        if not success and video_info:
+        # Save failure statistics if needed (a deliberate pause is not a failure).
+        if not success and not paused and video_info:
             end_time = time.time()
             duration = end_time - start_time
             stats = TranscriptionStats(

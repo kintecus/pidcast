@@ -7,7 +7,12 @@ import logging
 import shutil
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..checkpoint import JobManifest
 
 from ..config import HUGGINGFACE_TOKEN
 from ..diarization import merge_whisper_with_diarization, run_diarization
@@ -15,11 +20,19 @@ from ..exceptions import DiarizationError, TranscriptionError
 from ..transcription import (
     collapse_repeated_lines,
     dedupe_whisper_segments,
+    merge_segments_to_whisper_json,
     run_whisper_transcription,
 )
 from . import TranscriptionResult
 
 logger = logging.getLogger(__name__)
+
+# When resuming a VAD run, back the offset off by this many ms before the last
+# good segment. -ot + --vad can shift the boundary and swallow audio at the seam
+# (verified in the phase-0 spike); re-decoding a few seconds and de-overlapping on
+# merge avoids dropped words. Harmless for non-VAD resumes (de-overlap drops the
+# re-decoded segments anyway).
+_VAD_RESUME_BACKOFF_MS = 8000
 
 
 class WhisperTranscriptionProvider:
@@ -33,6 +46,8 @@ class WhisperTranscriptionProvider:
         estimated_duration: float | None = None,
         save_whisper_json_to: Path | None = None,
         whisper_options: dict | None = None,
+        checkpoint: JobManifest | None = None,
+        pause_check: Callable[[], bool] | None = None,
     ) -> None:
         self._whisper_model = whisper_model
         self._output_format = output_format
@@ -43,6 +58,11 @@ class WhisperTranscriptionProvider:
         # into run_whisper_transcription. Whisper-only, kept off the shared
         # TranscriptionProvider.transcribe() signature.
         self._opts = whisper_options or {}
+        # Resume/pause: when set, segments stream into the manifest's JSONL and a
+        # crash/pause can be resumed via -ot. None keeps the one-shot behavior
+        # byte-identical to before.
+        self._checkpoint = checkpoint
+        self._pause_check = pause_check
 
     def transcribe(
         self,
@@ -53,8 +73,10 @@ class WhisperTranscriptionProvider:
     ) -> TranscriptionResult:
         """Transcribe audio using whisper.cpp."""
         temp_output = self._output_dir / f"temp_transcript_{uuid.uuid4().hex[:8]}"
-        # Always output JSON when we need to save whisper data or diarize
-        need_json = diarize or self._save_whisper_json_to is not None
+        # Always output JSON when we need to save whisper data, diarize, or checkpoint.
+        need_json = (
+            diarize or self._save_whisper_json_to is not None or self._checkpoint is not None
+        )
         output_format = "json" if need_json else self._output_format
 
         if diarize and not HUGGINGFACE_TOKEN:
@@ -64,26 +86,32 @@ class WhisperTranscriptionProvider:
             )
 
         start_time = time.time()
+        json_file = Path(f"{temp_output}.json")
 
-        try:
-            run_whisper_transcription(
-                audio_file,
-                self._whisper_model,
-                output_format,
-                str(temp_output),
-                verbose,
-                estimated_duration=self._estimated_duration,
-                language=language,
-                **self._opts,
-            )
-        except Exception as e:
-            raise TranscriptionError(f"Whisper transcription failed: {e}") from e
+        if self._checkpoint is not None:
+            # Resumable path: stream segments into the manifest's JSONL, resume
+            # from the persisted offset, then materialize the merged JSON.
+            self._transcribe_checkpointed(audio_file, output_format, temp_output, language, verbose)
+        else:
+            try:
+                run_whisper_transcription(
+                    audio_file,
+                    self._whisper_model,
+                    output_format,
+                    str(temp_output),
+                    verbose,
+                    estimated_duration=self._estimated_duration,
+                    language=language,
+                    pause_check=self._pause_check,
+                    **self._opts,
+                )
+            except Exception as e:
+                raise TranscriptionError(f"Whisper transcription failed: {e}") from e
 
         duration = time.time() - start_time
 
         # Save whisper JSON before diarization (so it survives diarization failures)
         whisper_json_path = None
-        json_file = Path(f"{temp_output}.json")
         if self._save_whisper_json_to and json_file.exists():
             shutil.copy2(json_file, self._save_whisper_json_to)
             whisper_json_path = self._save_whisper_json_to
@@ -120,6 +148,97 @@ class WhisperTranscriptionProvider:
             diarized=diarized,
             whisper_json_path=whisper_json_path,
         )
+
+    def _transcribe_checkpointed(
+        self,
+        audio_file: str | Path,
+        output_format: str,
+        temp_output: Path,
+        language: str | None,
+        verbose: bool,
+    ) -> None:
+        """Resumable transcription: stream segments to the JSONL, merge on completion.
+
+        Resumes from the offset persisted in the manifest's JSONL. With VAD the
+        offset is backed off a few seconds (the seam can swallow audio) and the
+        re-decoded overlap is dropped at merge time. On completion the merged,
+        de-overlapped whisper JSON is written to ``{temp_output}.json`` so the rest
+        of the provider (text extraction, diarization, JSON save) is unchanged.
+        """
+        from ..checkpoint import DONE
+
+        manifest = self._checkpoint
+        assert manifest is not None
+
+        # Transcription already finished in a prior run (job paused/crashed during
+        # diarization or analysis). Skip whisper entirely and rebuild the JSON from
+        # the persisted segments so we go straight to diarization/text.
+        if manifest.transcription.status == DONE:
+            logger.info("Transcription already complete - skipping whisper, rebuilding JSON...")
+            self._materialize_json_from_segments(manifest, temp_output)
+            return
+
+        prior = manifest.load_segments()
+        resume_offset = manifest.resume_offset_ms()
+        if resume_offset > 0 and self._opts.get("vad_model"):
+            resume_offset = max(0, resume_offset - _VAD_RESUME_BACKOFF_MS)
+
+        if prior:
+            logger.info(
+                f"Resuming transcription from {resume_offset // 1000}s "
+                f"({len(prior)} segments already done)..."
+            )
+
+        def _on_segment(seg: dict) -> None:
+            # Skip anything we already persisted (resume re-decode overlap).
+            if seg["to_ms"] <= manifest.transcription.last_offset_ms:
+                return
+            manifest.append_segment(seg)
+            manifest.transcription.last_offset_ms = seg["to_ms"]
+            manifest.transcription.segment_count += 1
+
+        try:
+            run_whisper_transcription(
+                audio_file,
+                self._whisper_model,
+                output_format,
+                str(temp_output),
+                verbose,
+                estimated_duration=self._estimated_duration,
+                language=language,
+                offset_ms=resume_offset,
+                segment_callback=_on_segment,
+                pause_check=self._pause_check,
+                **self._opts,
+            )
+        except Exception:
+            # TranscriptionPaused and real failures both propagate; the JSONL holds
+            # everything decoded so far either way.
+            raise
+
+        # Materialize the full, de-overlapped whisper JSON from the JSONL (single
+        # source of truth across the resume seam).
+        self._materialize_json_from_segments(manifest, temp_output)
+
+    @staticmethod
+    def _materialize_json_from_segments(manifest, temp_output: Path) -> None:
+        """Write the merged whisper JSON from the manifest's persisted segments.
+
+        Preserves any metadata (model/params/systeminfo) from a freshly written
+        per-run JSON if present, then overwrites it with the full de-overlapped set.
+        """
+        all_segments = manifest.load_segments()
+        base_template: dict = {}
+        raw_json = Path(f"{temp_output}.json")
+        if raw_json.exists():
+            try:
+                loaded = json.loads(raw_json.read_text(encoding="utf-8"))
+                base_template = {k: v for k, v in loaded.items() if k != "transcription"}
+            except (json.JSONDecodeError, OSError):
+                base_template = {}
+        merged = merge_segments_to_whisper_json(all_segments, base_template)
+        raw_json.parent.mkdir(parents=True, exist_ok=True)
+        raw_json.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _run_diarization(
         self,
