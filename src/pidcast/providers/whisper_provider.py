@@ -35,6 +35,14 @@ logger = logging.getLogger(__name__)
 _VAD_RESUME_BACKOFF_MS = 8000
 
 
+def _fmt_clock(ms: int) -> str:
+    """Render milliseconds as MM:SS (or H:MM:SS past an hour) for human-facing logs."""
+    total_s = max(0, int(ms)) // 1000
+    h, rem = divmod(total_s, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
 class WhisperTranscriptionProvider:
     """Transcription provider using local whisper.cpp."""
 
@@ -48,11 +56,15 @@ class WhisperTranscriptionProvider:
         whisper_options: dict | None = None,
         checkpoint: JobManifest | None = None,
         pause_check: Callable[[], bool] | None = None,
+        audio_duration: float | None = None,
     ) -> None:
         self._whisper_model = whisper_model
         self._output_format = output_format
         self._output_dir = Path(output_dir)
         self._estimated_duration = estimated_duration
+        # True audio length (seconds) - drives the progress bar by audio position,
+        # which stays correct across a resume offset (unlike the wall-clock estimate).
+        self._audio_duration = audio_duration
         self._save_whisper_json_to = save_whisper_json_to
         # Decoding/quality knobs (threads, VAD, thresholds, suppress_nst) splatted
         # into run_whisper_transcription. Whisper-only, kept off the shared
@@ -101,6 +113,7 @@ class WhisperTranscriptionProvider:
                     str(temp_output),
                     verbose,
                     estimated_duration=self._estimated_duration,
+                    audio_duration=self._audio_duration,
                     language=language,
                     pause_check=self._pause_check,
                     **self._opts,
@@ -184,10 +197,16 @@ class WhisperTranscriptionProvider:
             resume_offset = max(0, resume_offset - _VAD_RESUME_BACKOFF_MS)
 
         if prior:
-            logger.info(
-                f"Resuming transcription from {resume_offset // 1000}s "
-                f"({len(prior)} segments already done)..."
-            )
+            done = _fmt_clock(resume_offset)
+            if self._audio_duration and self._audio_duration > 0:
+                total = _fmt_clock(int(self._audio_duration * 1000))
+                pct = min(100, int(100 * resume_offset / (self._audio_duration * 1000)))
+                logger.info(
+                    f"Resuming from {done} of {total} ({pct}% done, "
+                    f"{len(prior)} segments) - transcribing the remainder..."
+                )
+            else:
+                logger.info(f"Resuming from {done} ({len(prior)} segments already done)...")
 
         def _on_segment(seg: dict) -> None:
             # Skip anything we already persisted (resume re-decode overlap).
@@ -205,6 +224,7 @@ class WhisperTranscriptionProvider:
                 str(temp_output),
                 verbose,
                 estimated_duration=self._estimated_duration,
+                audio_duration=self._audio_duration,
                 language=language,
                 offset_ms=resume_offset,
                 segment_callback=_on_segment,

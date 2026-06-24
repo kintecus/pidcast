@@ -1072,6 +1072,7 @@ def process_input_source(
                 whisper_options=whisper_opts,
                 checkpoint=job_manifest,
                 pause_check=_pause_requested_check if job_manifest is not None else None,
+                audio_duration=audio_duration if audio_duration and audio_duration > 0 else None,
             )
 
         transcription_result = transcription_provider.transcribe(

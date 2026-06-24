@@ -82,10 +82,19 @@ def resume_job(manifest: JobManifest) -> None:
     phase = "diarization" if manifest.transcription.status == DONE else "transcription"
     title = (manifest.video_info or {}).get("title", manifest.input_source)
     log_section(f"Resuming {phase}: {title}")
-    logger.info(
-        f"Job {manifest.job_id} - {manifest.transcription.segment_count} segments done, "
-        f"resuming from {manifest.resume_offset_ms() // 1000}s"
-    )
+    if phase == "diarization":
+        logger.info(
+            f"Job {manifest.job_id} - transcription already complete, "
+            "resuming at the diarization step."
+        )
+    else:
+        from .providers.whisper_provider import _fmt_clock
+
+        offset_ms = manifest.resume_offset_ms()
+        logger.info(
+            f"Job {manifest.job_id} - {manifest.transcription.segment_count} segments done, "
+            f"continuing from {_fmt_clock(offset_ms)}."
+        )
 
     if not _preflight(manifest):
         return

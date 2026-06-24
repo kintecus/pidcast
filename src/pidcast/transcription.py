@@ -496,6 +496,7 @@ def _run_whisper_streaming(
     verbose: bool,
     show_progress: bool,
     estimated_duration: float | None,
+    audio_duration: float | None,
     offset_ms: int | None,
     segment_callback: Callable[[dict], None] | None,
     pause_check: Callable[[], bool] | None,
@@ -515,10 +516,22 @@ def _run_whisper_streaming(
         TranscriptionPaused: if ``pause_check`` returns True mid-run.
         subprocess.CalledProcessError: on non-zero exit.
     """
+    offset_base = int(offset_ms or 0)
+
+    # Progress is driven by AUDIO POSITION (segment end-time vs total audio
+    # duration), not wall-clock, so it stays correct when resuming from an offset:
+    # the bar starts at offset/duration and Rich derives the ETA from throughput.
+    # Fall back to the wall-clock estimate only when the true duration is unknown.
+    total = None
+    if audio_duration and audio_duration > 0:
+        total = int(audio_duration * 1000)  # ms scale (audio timeline)
+    elif estimated_duration and estimated_duration > 0:
+        total = int(estimated_duration * 1000)
+
+    label = "Resuming transcription" if offset_base > 0 else "Transcribing"
     progress_ctx = None
     progress = None
     task = None
-    total = None
     if show_progress and not verbose:
         try:
             from rich.progress import (
@@ -527,20 +540,22 @@ def _run_whisper_streaming(
                 SpinnerColumn,
                 TextColumn,
                 TimeElapsedColumn,
+                TimeRemainingColumn,
             )
 
             progress = Progress(
                 SpinnerColumn(),
-                TextColumn("[cyan]Transcribing..."),
+                TextColumn(f"[cyan]{label}..."),
                 BarColumn(),
                 TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TextColumn("[dim]elapsed[/dim]"),
                 TimeElapsedColumn(),
+                TextColumn("[dim]eta[/dim]"),
+                TimeRemainingColumn(),
             )
             progress_ctx = progress
-            if estimated_duration and estimated_duration > 0:
-                total = int(estimated_duration * 1000)  # ms scale
         except ImportError:
-            logger.info("Transcribing (install 'rich' for progress display)...")
+            logger.info(f"{label} (install 'rich' for progress display)...")
 
     # Verbose: inherit stdout so whisper prints directly; only poll for pause.
     stdout_target = None if verbose else subprocess.PIPE
@@ -551,8 +566,6 @@ def _run_whisper_streaming(
         text=True,
         bufsize=1,
     )
-
-    offset_base = int(offset_ms or 0)
 
     def _terminate_for_pause() -> None:
         proc.terminate()
@@ -567,6 +580,10 @@ def _run_whisper_streaming(
         if progress_ctx is not None:
             progress_ctx.start()
             task = progress.add_task("transcribe", total=total)
+            # Seed the bar at the resume offset so % and ETA are right from the
+            # first new segment (a resumed run starts partway through the audio).
+            if total and offset_base > 0:
+                progress.update(task, completed=min(offset_base, total - 1))
 
         if proc.stdout is not None:
             for line in proc.stdout:
@@ -624,6 +641,7 @@ def run_whisper_transcription(
     temperature: float | None = None,
     no_fallback: bool = False,
     suppress_nst: bool = False,
+    audio_duration: float | None = None,
     offset_ms: int | None = None,
     segment_callback: "Callable[[dict], None] | None" = None,
     pause_check: "Callable[[], bool] | None" = None,
@@ -725,6 +743,7 @@ def run_whisper_transcription(
             verbose=verbose,
             show_progress=show_progress,
             estimated_duration=estimated_duration,
+            audio_duration=audio_duration,
             offset_ms=offset_ms,
             segment_callback=segment_callback,
             pause_check=pause_check,
