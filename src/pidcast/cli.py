@@ -75,7 +75,7 @@ def prompt_duplicate_detected(
     console.print(
         Panel(
             "[yellow bold]Duplicate Detected![/yellow bold]\n\n"
-            "This video was previously transcribed.",
+            "This recording was previously transcribed.",
             border_style="yellow",
         )
     )
@@ -105,7 +105,7 @@ def prompt_duplicate_detected(
     # Build options
     console.print("[bold]What would you like to do?[/bold]")
     console.print()
-    console.print("  [cyan]1[/cyan] - Re-transcribe the video")
+    console.print("  [cyan]1[/cyan] - Re-transcribe the recording")
 
     if transcript_exists:
         console.print("  [cyan]2[/cyan] - Analyze existing transcript (skip re-transcription)")
@@ -149,7 +149,7 @@ def _prompt_duplicate_basic(prev) -> DuplicateAction:
     print(f"File: {prev.smart_filename}")
     print()
     print("Options:")
-    print("  1 - Re-transcribe the video")
+    print("  1 - Re-transcribe the recording")
     print("  2 - Analyze existing transcript")
     print("  3 - Continue anyway")
     print("  4 - Cancel")
@@ -1377,12 +1377,18 @@ def cmd_sync(args: argparse.Namespace) -> None:
             traceback.print_exc()
 
 
-def cmd_doctor() -> None:
+def cmd_doctor(prune_stats: bool = False) -> None:
     """Run health checks and display configuration status."""
+    from .config import DEFAULT_STATS_FILE
     from .setup import determine_status, run_all_checks
+    from .utils import prune_phantom_stats
 
     print("\npidcast doctor")
     print("=" * 40)
+
+    if prune_stats:
+        removed = prune_phantom_stats(DEFAULT_STATS_FILE)
+        print(f"  Pruned {removed} phantom stats entr(y/ies) with a missing transcript.\n")
 
     checks = run_all_checks()
     max_name = max(len(c.name) for c in checks)
@@ -1538,12 +1544,16 @@ def main() -> None:
             from dotenv import load_dotenv
 
             load_dotenv()
-            cmd_doctor()
+            # doctor/setup dispatch before parse_arguments()/setup_logging(), so
+            # configure logging here or logger.* output is silently dropped.
+            setup_logging("--verbose" in sys.argv or "-v" in sys.argv)
+            cmd_doctor(prune_stats="--prune-stats" in sys.argv)
             return
         if sys.argv[1] == "setup":
             from dotenv import load_dotenv
 
             load_dotenv()
+            setup_logging("--verbose" in sys.argv or "-v" in sys.argv)
             cmd_setup()
             return
         if sys.argv[1] == "resume":

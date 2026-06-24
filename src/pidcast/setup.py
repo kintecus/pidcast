@@ -142,6 +142,26 @@ def check_env_file() -> CheckResult:
     )
 
 
+def check_stats_integrity() -> CheckResult:
+    """Check for phantom stats entries (success recorded, transcript file gone)."""
+    from .config import DEFAULT_STATS_FILE
+    from .utils import find_phantom_stats
+
+    try:
+        phantoms = find_phantom_stats(DEFAULT_STATS_FILE)
+    except Exception as e:
+        return CheckResult("stats integrity", True, f"skipped ({e})", required=False)
+    if not phantoms:
+        return CheckResult("stats integrity", True, "ok (no phantom entries)", required=False)
+    return CheckResult(
+        "stats integrity",
+        False,
+        f"{len(phantoms)} stats entr(y/ies) point at a missing transcript",
+        hint="These block duplicate detection. Clean them with: pidcast doctor --prune-stats",
+        required=False,
+    )
+
+
 def run_all_checks() -> list[CheckResult]:
     """Run all health checks and return results."""
     return [
@@ -150,6 +170,7 @@ def run_all_checks() -> list[CheckResult]:
         check_whisper(),
         check_whisper_model(),
         check_vad_model(),
+        check_stats_integrity(),
         check_env_var(
             "GROQ_API_KEY",
             "GROQ_API_KEY",
