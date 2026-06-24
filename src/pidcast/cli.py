@@ -1550,7 +1550,12 @@ def main() -> None:
             from dotenv import load_dotenv
 
             load_dotenv()
-            job_arg = sys.argv[2] if len(sys.argv) > 2 else None
+            # These subcommands dispatch before parse_arguments()/setup_logging(),
+            # so configure logging here or every logger.* call is silently dropped.
+            verbose = "--verbose" in sys.argv or "-v" in sys.argv
+            setup_logging(verbose)
+            job_args = [a for a in sys.argv[2:] if not a.startswith("-")]
+            job_arg = job_args[0] if job_args else None
             cmd_resume(job_arg)
             return
 

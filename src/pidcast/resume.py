@@ -121,6 +121,11 @@ def resume_job(manifest: JobManifest) -> None:
         if OBSIDIAN_PATH:
             analysis_output_dir = Path(OBSIDIAN_PATH)
 
+    # Reuse the ORIGINAL recording's metadata (title, url, channel) so the resumed
+    # transcript keeps its real name and front matter - otherwise the title would
+    # be re-derived from the checkpoint's generic "source.wav" filename.
+    video_info_override = manifest.video_info_obj()
+
     run_uid = uuid.uuid4().hex[:12]
     run_timestamp = datetime.datetime.now().isoformat()
 
@@ -134,5 +139,6 @@ def resume_job(manifest: JobManifest) -> None:
             run_uid,
             run_timestamp,
             time.time(),
+            video_info_override=video_info_override,
         )
     )

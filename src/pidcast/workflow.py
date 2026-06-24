@@ -122,6 +122,7 @@ def _ensure_job_manifest(
     model_name: str | None,
     vad_model: str | None,
     diarize: bool,
+    output_dir: Path,
 ):
     """Create (or load, when resuming) the checkpoint manifest for this run.
 
@@ -161,6 +162,10 @@ def _ensure_job_manifest(
     job_id = compute_job_id(
         audio_sig, provider, model_name or "", getattr(args, "language", None), vad_signature
     )
+    persisted_args = _persistable_args(args)
+    # Pin the RESOLVED output dir so resume writes to the original location, not the
+    # cwd it happens to be launched from (args.output_dir is None for a cwd default).
+    persisted_args["output_dir"] = str(output_dir)
     manifest = JobManifest(
         job_id=job_id,
         input_source=input_source,
@@ -170,7 +175,7 @@ def _ensure_job_manifest(
         model=model_name or "",
         language=getattr(args, "language", None),
         vad_signature=vad_signature,
-        cli_args=_persistable_args(args),
+        cli_args=persisted_args,
         video_info=video_info.to_dict() if video_info else None,
     )
     manifest.diarization.requested = diarize
@@ -932,6 +937,10 @@ def process_input_source(
                 video_info.channel = video_info_override.channel
             if video_info_override.upload_date:
                 video_info.upload_date = video_info_override.upload_date
+            # Preserve the original source url (resume): otherwise the front matter
+            # would point at the checkpoint's source.wav, breaking --diarize-existing.
+            if video_info_override.webpage_url:
+                video_info.webpage_url = video_info_override.webpage_url
 
         logger.info(f"Title: {video_info.title}")
 
@@ -1060,6 +1069,7 @@ def process_input_source(
                     whisper_model_name,
                     vad_model,
                     diarize,
+                    output_dir,
                 )
 
             logger.info("\nTranscribing audio with Whisper...")

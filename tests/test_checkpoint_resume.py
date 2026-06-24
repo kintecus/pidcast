@@ -239,6 +239,66 @@ def test_quick_file_signature_small_file_hashes_whole(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Resume arg/metadata reconstruction (regression: don't lose the original
+# title / output dir / source url when resuming from a different directory)
+# ---------------------------------------------------------------------------
+
+
+def test_reconstruct_args_restores_metadata_and_output_dir(checkpoint_dir, monkeypatch):
+    from pidcast.config import VideoInfo
+    from pidcast.resume import _reconstruct_args
+
+    m = _make_manifest()
+    m.video_info = VideoInfo(
+        title="Sabre Interview",
+        webpage_url="file:///recordings/sabre.wav",
+        channel="",
+        uploader="",
+        duration=600,
+        duration_string="10:00",
+        view_count=0,
+        upload_date="",
+        description="",
+    ).to_dict()
+    # Original run wrote to a specific dir; resume must restore it, not use cwd.
+    m.cli_args = {"output_dir": "/some/original/out", "whisper_model": "base.en", "force": False}
+    m.save()
+
+    args = _reconstruct_args(m)
+
+    # Input is redirected to the checkpoint's source.wav and duplicate detection is off.
+    assert args.input_source == str(m.source_wav_path)
+    assert args.force is True
+    assert args.resume_job_id == m.job_id
+    # The original output dir survives (so resume writes to the intended location).
+    assert args.output_dir == "/some/original/out"
+    # The persisted model name is carried through for re-resolution.
+    assert args.whisper_model == "base.en"
+
+
+def test_manifest_video_info_obj_round_trips():
+    from pidcast.config import VideoInfo
+
+    m = _make_manifest()
+    vi = VideoInfo(
+        title="Sabre Interview",
+        webpage_url="file:///recordings/sabre.wav",
+        channel="ACME",
+        uploader="ACME",
+        duration=600,
+        duration_string="10:00",
+        view_count=0,
+        upload_date="20260624",
+        description="desc",
+    )
+    m.video_info = vi.to_dict()
+    restored = m.video_info_obj()
+    assert restored.title == "Sabre Interview"
+    assert restored.webpage_url == "file:///recordings/sabre.wav"
+    assert restored.channel == "ACME"
+
+
+# ---------------------------------------------------------------------------
 # Streaming + pause loop (against a fake whisper binary)
 # ---------------------------------------------------------------------------
 
