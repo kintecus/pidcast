@@ -19,6 +19,19 @@ class TranscriptionError(PidcastError):
     pass
 
 
+class TranscriptionPaused(PidcastError):  # noqa: N818 - a control signal, not an error
+    """Transcription was deliberately paused (e.g. via Ctrl-C).
+
+    Not an error: already-streamed segments are checkpointed and the job can be
+    resumed with ``pidcast resume``. Carries the last offset reached so callers
+    can report progress.
+    """
+
+    def __init__(self, message: str = "", last_offset_ms: int = 0) -> None:
+        super().__init__(message)
+        self.last_offset_ms = last_offset_ms
+
+
 class AnalysisError(PidcastError):
     """LLM analysis failed."""
 

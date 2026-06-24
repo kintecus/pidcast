@@ -596,6 +596,24 @@ Short Flags:
         action="store_true",
         help="Save the converted WAV audio file to the output directory",
     )
+
+    checkpoint_group = parser.add_argument_group("Checkpoint / Resume Options")
+    checkpoint_group.add_argument(
+        "--no-checkpoint",
+        dest="no_checkpoint",
+        action="store_true",
+        help="Disable resume checkpointing (one-shot transcription, no pause/resume).",
+    )
+    checkpoint_group.add_argument(
+        "--keep-checkpoint",
+        dest="keep_checkpoint",
+        action="store_true",
+        help="Keep the checkpoint directory after a successful run (default: delete).",
+    )
+    # Internal: set by `pidcast resume` to re-enter a specific job. Hidden from help.
+    parser.add_argument(
+        "--resume-job-id", dest="resume_job_id", default=None, help=argparse.SUPPRESS
+    )
     parser.add_argument(
         "--po-token",
         dest="po_token",
@@ -1528,6 +1546,18 @@ def main() -> None:
             load_dotenv()
             cmd_setup()
             return
+        if sys.argv[1] == "resume":
+            from dotenv import load_dotenv
+
+            load_dotenv()
+            # These subcommands dispatch before parse_arguments()/setup_logging(),
+            # so configure logging here or every logger.* call is silently dropped.
+            verbose = "--verbose" in sys.argv or "-v" in sys.argv
+            setup_logging(verbose)
+            job_args = [a for a in sys.argv[2:] if not a.startswith("-")]
+            job_arg = job_args[0] if job_args else None
+            cmd_resume(job_arg)
+            return
 
     args = parse_arguments()
 
@@ -1818,17 +1848,83 @@ def main() -> None:
             elif action == DuplicateAction.FORCE_CONTINUE:
                 logger.info("Continuing with transcription...")
 
-    # Run the main transcription workflow
-    process_input_source(
-        args.input_source,
-        args,
-        output_dir,
-        analysis_output_dir,
-        stats_file,
-        run_uid,
-        run_timestamp,
-        start_time,
+    # Run the main transcription workflow under a pause-aware SIGINT handler.
+    _run_with_pause_handler(
+        lambda: process_input_source(
+            args.input_source,
+            args,
+            output_dir,
+            analysis_output_dir,
+            stats_file,
+            run_uid,
+            run_timestamp,
+            start_time,
+        )
     )
+
+
+def _run_with_pause_handler(run_fn) -> None:
+    """Run ``run_fn`` with Ctrl-C wired to a clean transcription pause.
+
+    First Ctrl-C requests a pause (the whisper stream loop stops at the next
+    segment boundary and the job is checkpointed). A second Ctrl-C restores the
+    default handler and hard-quits.
+    """
+    import signal
+
+    from .workflow import request_pause
+
+    state = {"count": 0}
+    original = signal.getsignal(signal.SIGINT)
+
+    def _handler(signum, frame):
+        state["count"] += 1
+        if state["count"] == 1:
+            logger.info(
+                "\nPausing transcription at the next segment boundary... (Ctrl-C again to force quit)"
+            )
+            request_pause()
+        else:
+            signal.signal(signal.SIGINT, original)
+            raise KeyboardInterrupt
+
+    signal.signal(signal.SIGINT, _handler)
+    try:
+        run_fn()
+    finally:
+        signal.signal(signal.SIGINT, original)
+
+
+def cmd_resume(job_arg: str | None) -> None:
+    """Resume a paused/interrupted transcription job (``pidcast resume [job-id]``)."""
+    from .checkpoint import DONE, JobManifest, find_resumable_jobs
+    from .resume import resume_job
+
+    jobs = find_resumable_jobs()
+    if not jobs:
+        logger.info("No resumable jobs found.")
+        return
+
+    manifest: JobManifest | None = None
+    if job_arg:
+        manifest = next((j for j in jobs if j.job_id.startswith(job_arg)), None)
+        if manifest is None:
+            logger.error(f"No resumable job matching '{job_arg}'.")
+            return
+    elif len(jobs) == 1:
+        manifest = jobs[0]
+    else:
+        logger.info("Multiple resumable jobs - pass a job id to pick one:\n")
+        for j in jobs:
+            phase = "diarization" if j.transcription.status == DONE else "transcription"
+            title = (j.video_info or {}).get("title", j.input_source)
+            logger.info(
+                f"  {j.job_id}  [{phase}]  {title}  "
+                f"({j.transcription.segment_count} segments, updated {j.updated_at})"
+            )
+        return
+
+    resume_job(manifest)
 
 
 if __name__ == "__main__":
