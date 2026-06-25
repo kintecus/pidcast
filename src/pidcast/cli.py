@@ -566,6 +566,22 @@ Short Flags:
         default=8,
         help="Number of whisper decoding threads (whisper -t). Default: 8.",
     )
+    whisper_quality.add_argument(
+        "--whisper-prompt",
+        dest="whisper_prompt",
+        default=None,
+        help="Raw initial-prompt text passed to whisper --prompt to bias decoding "
+        "toward domain terms (proper nouns, jargon). Limited to roughly half the "
+        "model's text context (~200+ tokens); keep it short. Overrides --glossary.",
+    )
+    whisper_quality.add_argument(
+        "--glossary",
+        dest="glossary",
+        default=None,
+        help="Name of a glossary from config/glossaries.yaml (e.g. 'adtech-ai') to "
+        "bias transcription via whisper --prompt. NOTE: pair English-only (.en) "
+        "models with English audio only.",
+    )
     parser.add_argument(
         "--front-matter",
         dest="front_matter",

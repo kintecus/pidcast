@@ -1,0 +1,18 @@
+# Pidcast transcription glossaries
+#
+# Each glossary is a short natural-language string fed to whisper.cpp via --prompt
+# to bias decoding toward domain terms (proper nouns and jargon it otherwise
+# mis-transcribes). Use with `--glossary <name>` on the main command.
+#
+# Whisper conditions on PROSE, not word lists - write a sentence. Keep it short:
+# the prompt is capped at roughly half the model's text context (~200+ tokens) and
+# longer text is silently truncated. Bias is probabilistic, not a hard dictionary.
+# Include the proper nouns whisper actually gets wrong; skip common English words
+# it already knows (they just waste the token budget).
+
+glossaries:
+  # Ad tech + AI interview vocabulary (Ostap's recurring proper nouns).
+  adtech-ai: >-
+    This is an interview about ad tech and AI. Names: Sabre, Sizmek, Xenoss,
+    StrikeAd, Voicemod, Kasta, Satori, OpenClaw, Claude Code, agentic, evals,
+    MCP server, OpenRTB, Protobuf, GDS, gcloud, DSP, SSP.

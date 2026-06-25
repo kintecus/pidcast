@@ -1,12 +1,16 @@
 """Configuration constants and loading for pidcast."""
 
+import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import yaml
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 # ============================================================================
 # PATH RESOLUTION
@@ -53,6 +57,7 @@ DEFAULT_TRANSCRIPTS_DIR = PROJECT_ROOT / "data" / "transcripts"
 DEFAULT_STATS_FILE = DEFAULT_TRANSCRIPTS_DIR / "transcription_stats.json"
 DEFAULT_PROMPTS_FILE = PROJECT_ROOT / "config" / "prompts.yaml"
 DEFAULT_MODELS_FILE = PROJECT_ROOT / "config" / "models.yaml"
+DEFAULT_GLOSSARIES_FILE = PROJECT_ROOT / "config" / "glossaries.yaml"
 DEFAULT_DIGESTS_DIR = DEFAULT_TRANSCRIPTS_DIR  # Digests saved alongside transcripts
 
 # Deprecated: kept for backward compatibility
@@ -503,3 +508,36 @@ class PromptsConfig:
                 max_output_tokens=value.get("max_output_tokens", 2000),
             )
         return cls(prompts=prompts)
+
+
+def load_glossaries(config_path: Path = DEFAULT_GLOSSARIES_FILE) -> dict[str, str]:
+    """Load named transcription glossaries from YAML.
+
+    Glossaries are short natural-language strings fed to whisper via --prompt to
+    bias decoding toward domain terms. Unlike the models/prompts config, a missing
+    or invalid file is non-fatal: it just means no glossaries are available, so the
+    transcription path keeps working unbiased.
+
+    Args:
+        config_path: Path to glossaries.yaml.
+
+    Returns:
+        Mapping of glossary name -> prompt text. Empty dict if the file is missing,
+        empty, or invalid.
+    """
+    if not config_path.exists():
+        return {}
+
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except (yaml.YAMLError, OSError) as e:
+        logger.error("Invalid glossaries config (%s): %s", config_path, e)
+        return {}
+
+    if not data:
+        return {}
+
+    glossaries = data.get("glossaries", {})
+    # Normalize to str values; drop anything non-string defensively.
+    return {name: str(text).strip() for name, text in glossaries.items() if text}
