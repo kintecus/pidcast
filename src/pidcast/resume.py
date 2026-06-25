@@ -90,9 +90,12 @@ def resume_job(manifest: JobManifest) -> None:
     else:
         from .providers.whisper_provider import _fmt_clock
 
+        # Count from the JSONL (the source of truth), not the manifest's counter,
+        # so "N segments done" always agrees with the resume offset.
+        segments = manifest.load_segments()
         offset_ms = manifest.resume_offset_ms()
         logger.info(
-            f"Job {manifest.job_id} - {manifest.transcription.segment_count} segments done, "
+            f"Job {manifest.job_id} - {len(segments)} segments done, "
             f"continuing from {_fmt_clock(offset_ms)}."
         )
 
