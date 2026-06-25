@@ -357,6 +357,13 @@ class TranscriptionStats:
     saved_to_obsidian: bool = False
     is_local_file: bool = False
     analysis_only: bool = False
+    # Full resolved path to the written transcript (absolute). Lets duplicate
+    # detection locate the artifact regardless of the cwd/output-dir of a later
+    # run; smart_filename alone is just a basename and resolves wrong elsewhere.
+    transcript_path: str | None = None
+    # Stable source identifier for duplicate matching across all input types
+    # (YouTube id, RSS/Apple GUID, normalized url, or local abs path).
+    source_id: str | None = None
     # Analysis metadata
     analysis_performed: bool = False
     analysis_type: str | None = None
@@ -392,6 +399,8 @@ class TranscriptionStats:
             "saved_to_obsidian": self.saved_to_obsidian,
             "is_local_file": self.is_local_file,
             "analysis_only": self.analysis_only,
+            "transcript_path": self.transcript_path,
+            "source_id": self.source_id,
             "analysis_performed": self.analysis_performed,
             "analysis_type": self.analysis_type,
             "analysis_name": self.analysis_name,
@@ -423,10 +432,15 @@ class PreviousTranscription:
     output_dir: Path
     analysis_performed: bool = False
     analysis_type: str | None = None
+    # Resolved transcript path from the stats entry (full path survives a different
+    # cwd/output-dir); falls back to output_dir/smart_filename when absent.
+    transcript_path_override: Path | None = None
 
     @property
     def transcript_path(self) -> Path:
         """Full path to the transcript file."""
+        if self.transcript_path_override is not None:
+            return self.transcript_path_override
         return self.output_dir / self.smart_filename
 
     @property

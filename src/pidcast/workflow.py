@@ -551,6 +551,7 @@ def run_analyze_existing_mode(
 
         # Store the original transcript filename
         transcript_filename = Path(transcript_path).name
+        from .utils import compute_source_id
 
         stats = TranscriptionStats(
             run_uid=run_uid,
@@ -565,6 +566,8 @@ def run_analyze_existing_mode(
             saved_to_obsidian=args.save_to_obsidian,
             is_local_file=True,
             analysis_only=True,
+            transcript_path=str(Path(transcript_path).resolve()),
+            source_id=compute_source_id(str(transcript_path)),
             analysis_performed=True,
             analysis_type=analysis_metadata.get("analysis_type"),
             analysis_name=analysis_metadata.get("analysis_name"),
@@ -1220,23 +1223,40 @@ def process_input_source(
             if args.verbose:
                 log_success(f"Kept transcript file: {transcript_file}")
 
-        # Store statistics
+        # Store statistics. Guard: never record success unless the transcript
+        # actually exists at its final path - otherwise a missing/misplaced .md
+        # becomes a phantom "duplicate" that blocks future re-transcription.
+        if not markdown_file or not Path(markdown_file).exists():
+            raise FileProcessingError(
+                f"Transcript file was not written to its expected path: {markdown_file}"
+            )
+
         end_time = time.time()
         duration = end_time - start_time
         filename_for_stats = markdown_file.name if markdown_file else ""
+
+        # On resume, key the stat to the ORIGINAL source (from the manifest's
+        # video_info), not the checkpoint source.wav, so duplicate detection matches
+        # the user's real input later.
+        stats_source = input_source
+        if video_info_override and video_info_override.webpage_url:
+            stats_source = video_info_override.webpage_url
+        from .utils import compute_source_id
 
         stats = TranscriptionStats(
             run_uid=run_uid,
             run_timestamp=run_timestamp,
             video_title=video_info.title,
             smart_filename=filename_for_stats,
-            video_url=input_source,
+            video_url=stats_source,
             run_duration=duration,
             transcription_duration=transcription_duration,
             audio_duration=audio_duration,
             success=True,
             saved_to_obsidian=args.save_to_obsidian,
             is_local_file=is_local_file,
+            transcript_path=str(Path(markdown_file).resolve()),
+            source_id=compute_source_id(stats_source),
             analysis_performed=analysis_performed,
             analysis_type=analysis_metadata.get("analysis_type"),
             analysis_name=analysis_metadata.get("analysis_name"),

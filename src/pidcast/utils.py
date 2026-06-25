@@ -413,6 +413,50 @@ def extract_youtube_video_id(url: str) -> str | None:
         return None
 
 
+def compute_source_id(input_source: str) -> str:
+    """Stable identifier for an input, for duplicate detection across all source types.
+
+    - Local file -> ``file:<absolute-path>``
+    - YouTube URL -> ``yt:<video-id>`` (normalized, strips tracking params)
+    - Apple Podcasts URL -> ``apple:<collection-id>:<track-id>``
+    - Any other URL -> ``url:<scheme://host/path>`` (query/fragment stripped, lowercased host)
+    - Fallback -> the raw string
+
+    Used both when writing a stats entry and when checking for a duplicate, so the
+    two always agree. Replaces the old YouTube-only matching that silently failed
+    for podcasts, RSS items, and direct media URLs.
+    """
+    if os.path.exists(input_source):
+        return f"file:{os.path.abspath(input_source)}"
+
+    yt = extract_youtube_video_id(input_source)
+    if yt:
+        return f"yt:{yt}"
+
+    # Apple Podcasts: match by collection/track id, not the full marketing URL.
+    try:
+        from .apple_podcasts import is_apple_podcasts_url, parse_apple_podcasts_url
+
+        if is_apple_podcasts_url(input_source):
+            collection_id, track_id = parse_apple_podcasts_url(input_source)
+            return f"apple:{collection_id}:{track_id or ''}"
+    except Exception:
+        pass
+
+    # Generic URL: normalize to scheme://host/path, dropping query/fragment and
+    # case-folding the host so equivalent links collapse to one id.
+    try:
+        parsed = urlparse(input_source)
+        if parsed.scheme and parsed.netloc:
+            host = parsed.netloc.lower()
+            path = parsed.path.rstrip("/")
+            return f"url:{parsed.scheme.lower()}://{host}{path}"
+    except Exception:
+        pass
+
+    return input_source
+
+
 def find_existing_transcription(
     stats_file: Path,
     input_source: str,
@@ -430,58 +474,41 @@ def find_existing_transcription(
     """
     from .config import PreviousTranscription
 
-    # Load stats
     stats = load_json_file(stats_file, default=[])
     if not stats:
         return None
 
-    # Determine what to match on
-    if os.path.exists(input_source):
-        # Local file: match by absolute path
-        abs_path = os.path.abspath(input_source)
-        for entry in reversed(stats):  # Most recent first
-            entry_url = entry.get("video_url", "")
-            if (
-                entry.get("is_local_file")
-                and os.path.abspath(entry_url) == abs_path
-                and entry.get("success")
-                and entry.get("smart_filename")
-            ):
-                return PreviousTranscription(
-                    video_id="",
-                    video_title=entry.get("video_title", "Unknown"),
-                    video_url=entry_url,
-                    run_timestamp=entry.get("run_timestamp", ""),
-                    smart_filename=entry.get("smart_filename", ""),
-                    output_dir=output_dir,
-                    analysis_performed=entry.get("analysis_performed", False),
-                    analysis_type=entry.get("analysis_type"),
-                )
-    else:
-        # YouTube URL: match by normalized video ID
-        current_video_id = extract_youtube_video_id(input_source)
-        if not current_video_id:
-            return None
+    current_id = compute_source_id(input_source)
 
-        for entry in reversed(stats):  # Most recent first
-            entry_url = entry.get("video_url", "")
-            entry_video_id = extract_youtube_video_id(entry_url)
+    for entry in reversed(stats):  # Most recent first
+        if not (entry.get("success") and entry.get("smart_filename")):
+            continue
 
-            if (
-                entry_video_id == current_video_id
-                and entry.get("success")
-                and entry.get("smart_filename")
-            ):
-                return PreviousTranscription(
-                    video_id=current_video_id,
-                    video_title=entry.get("video_title", "Unknown"),
-                    video_url=entry_url,
-                    run_timestamp=entry.get("run_timestamp", ""),
-                    smart_filename=entry.get("smart_filename", ""),
-                    output_dir=output_dir,
-                    analysis_performed=entry.get("analysis_performed", False),
-                    analysis_type=entry.get("analysis_type"),
-                )
+        # Match by stable source id. Fall back to recomputing the id from the
+        # entry's stored url for older entries written before source_id existed.
+        entry_id = entry.get("source_id") or compute_source_id(entry.get("video_url", ""))
+        if entry_id != current_id:
+            continue
+
+        # Validate the artifact still exists before calling it a duplicate -
+        # a missing transcript must NOT block re-transcription (issue #20). Prefer
+        # the full stored path; fall back to <output_dir>/<smart_filename>.
+        stored_path = entry.get("transcript_path")
+        candidate = Path(stored_path) if stored_path else (output_dir / entry["smart_filename"])
+        if not candidate.exists():
+            continue
+
+        return PreviousTranscription(
+            video_id=entry.get("source_id", ""),
+            video_title=entry.get("video_title", "Unknown"),
+            video_url=entry.get("video_url", ""),
+            run_timestamp=entry.get("run_timestamp", ""),
+            smart_filename=entry.get("smart_filename", ""),
+            output_dir=output_dir,
+            analysis_performed=entry.get("analysis_performed", False),
+            analysis_type=entry.get("analysis_type"),
+            transcript_path_override=candidate,
+        )
 
     return None
 
@@ -521,6 +548,36 @@ def cleanup_temp_files(audio_file: str | Path, verbose: bool = False) -> None:
 # ============================================================================
 # STATISTICS
 # ============================================================================
+
+
+def find_phantom_stats(stats_file: Path) -> list[dict]:
+    """Return successful stats entries whose transcript file no longer exists.
+
+    These are the entries that pollute duplicate detection (a "duplicate" pointing
+    at a missing file). Uses the full ``transcript_path`` when present; older
+    entries with only a basename can't be located, so they are NOT reported as
+    phantoms (we can't prove they're missing).
+    """
+    stats = load_json_file(stats_file, default=[])
+    return [e for e in stats if _is_phantom(e)]
+
+
+def _is_phantom(entry: dict) -> bool:
+    """A successful stat whose recorded full transcript path no longer exists."""
+    if not (entry.get("success") and entry.get("smart_filename")):
+        return False
+    path = entry.get("transcript_path")
+    return bool(path) and not Path(path).exists()
+
+
+def prune_phantom_stats(stats_file: Path, verbose: bool = False) -> int:
+    """Drop successful stats entries whose transcript file is gone. Returns count removed."""
+    stats = load_json_file(stats_file, default=[])
+    kept = [e for e in stats if not _is_phantom(e)]
+    removed = len(stats) - len(kept)
+    if removed:
+        save_json_file(stats_file, kept, verbose=verbose)
+    return removed
 
 
 def save_statistics(stats_file: Path, stats: "TranscriptionStats", verbose: bool = False) -> bool:
