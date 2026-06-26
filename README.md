@@ -78,6 +78,10 @@ uv run pidcast "URL" --no-analyze
 # Custom front matter tags (overrides auto-inferred source tags)
 uv run pidcast "/path/to/meeting.mp3" --tags meeting,standup,weekly
 
+# Strip silence before decoding to curb whisper hallucinations (needs a Silero VAD model)
+uv run pidcast "URL" --vad
+uv run pidcast "URL" --vad --vad-threshold 0.6   # raise the speech-probability cutoff
+
 # Test settings on a 2-minute slice before committing to a long run
 uv run pidcast "URL" --test-segment
 
@@ -95,6 +99,8 @@ uv run pidcast -P     # list presets
 Available analysis types: `executive_summary` (default), `summary`, `key_points`, `action_items`, `comprehensive`. Every type ends with a **Shareable Brief** — a punchy headline (≤ 15 words) plus a 3–5 sentence quick-take suitable for sending to a friend.
 
 Claude model aliases: `sonnet` (claude-sonnet-4-6, default), `opus` (claude-opus-4-6), `haiku` (claude-haiku-4-5).
+
+**Whisper anti-hallucination:** on the whisper path, `--suppress-nst` is ON by default (suppresses non-speech tokens), and repeated identical lines are collapsed in post-processing. For long files with stretches of silence, add `--vad` to strip silence before decoding — it needs a Silero VAD model pointed at by `WHISPER_VAD_MODEL` in `.env` (no-ops with a warning if none is found; `pidcast doctor` reports its status). Tune the speech-probability cutoff with `--vad-threshold` (default 0.50).
 
 ## 🎙️ Library <a name="library"></a>
 

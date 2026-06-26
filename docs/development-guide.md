@@ -17,7 +17,7 @@ cd pidcast
 uv sync --group dev          # runtime + dev deps (ruff, pytest)
 cp .env.example .env         # fill in keys
 uv run pidcast setup         # interactive wizard for paths and models
-pre-commit install           # ruff + mermaid validation on commit
+pre-commit install           # framework hooks: ruff + markdownlint (see Plugin-driven automation)
 ```
 
 `pidcast setup` walks through whisper.cpp paths, model selection, and API keys. Run `pidcast doctor` at any time to check the current state of your tooling and env.
@@ -33,6 +33,7 @@ Set in `.env`. See `.env.example` for the up-to-date list.
 | `HUGGINGFACE_TOKEN` | Downloads pyannote diarization model on first use | Required for `--diarize` on the whisper path |
 | `WHISPER_CPP_PATH` | Path to `whisper-cli` binary | Required for local whisper transcription |
 | `WHISPER_MODEL` | Path to a `ggml-*.bin` model file | Required for local whisper transcription |
+| `WHISPER_VAD_MODEL` | Path to a Silero VAD model (`ggml-silero-*.bin`); enables `--vad` to strip silence before decoding | Optional (required only when passing `--vad`) |
 | `FFMPEG_PATH` | Custom ffmpeg location | Optional (defaults to PATH lookup) |
 | `OBSIDIAN_VAULT_PATH` | Target vault root for `--save-to-obsidian` | Optional |
 
@@ -125,6 +126,14 @@ This repo opts into several Claude Code plugins. Their config lives in `.claude-
 
 - `semver.json` — auto bumps `pyproject.toml` version on feature/fix commits (excludes `*.md`, `docs/**`)
 - `kb-grooming.json` — documentation health check scope
-- pre-commit hook in `.githooks/pre-commit` — ruff, PlantUML, and Mermaid validation
 
 The session entry points (`/semver:setup`, `/kb-grooming:kb-groom`, `/playbook:playbook-browse`) are usable from Claude Code but not from regular shells.
+
+### Commit-time validation
+
+Two independent hook mechanisms run on commit — keep both in mind:
+
+- **Native git hook** — `.githooks/pre-commit`, wired in via `core.hooksPath = .githooks` (already set in the repo). Runs `ruff check` + `ruff format --check` on staged `*.py`, then PlantUML URL-sync and Mermaid syntax validation on staged `*.md`. This is the authoritative gate and runs even without the pre-commit framework installed.
+- **pre-commit framework** — `.pre-commit-config.yaml`, activated by running `pre-commit install` (see First-time setup). Runs `ruff` (with `--fix`), `ruff-format`, and `markdownlint --fix`. Complements the native hook; mainly autofixes formatting.
+
+Don't bypass either with `--no-verify` — fix the underlying issue.
