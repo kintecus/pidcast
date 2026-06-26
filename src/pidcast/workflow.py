@@ -19,6 +19,7 @@ from .apple_podcasts import is_apple_podcasts_url, resolve_apple_podcasts_url
 from .config import (
     TranscriptionStats,
     VideoInfo,
+    load_glossaries,
 )
 from .download import download_audio
 from .exceptions import (
@@ -837,6 +838,44 @@ def run_diarize_existing_mode(
         return False
 
 
+def _resolve_whisper_prompt(args: argparse.Namespace) -> str | None:
+    """Resolve the whisper initial-prompt from CLI args.
+
+    Precedence: an explicit --whisper-prompt wins over --glossary (and warns if
+    both are given). A --glossary name is looked up in config/glossaries.yaml; an
+    unknown name is fatal (raises ConfigurationError) before transcription starts,
+    so a typo fails loudly with the available names rather than silently running
+    unbiased. Returns None when neither is set (command stays byte-identical).
+    """
+    whisper_prompt = getattr(args, "whisper_prompt", None)
+    glossary = getattr(args, "glossary", None)
+
+    if whisper_prompt and glossary:
+        logger.warning("--whisper-prompt overrides --glossary")
+        return whisper_prompt
+    if whisper_prompt:
+        return whisper_prompt
+    if not glossary:
+        return None
+
+    glossaries = load_glossaries()
+    if glossary not in glossaries:
+        available = ", ".join(sorted(glossaries)) or "(none configured)"
+        raise ConfigurationError(f"Unknown glossary {glossary!r}. Available: {available}")
+
+    # Computable .en/language mismatch warning: an English-only model fed a
+    # non-English language with an English glossary compounds errors.
+    language = getattr(args, "language", None)
+    model = str(getattr(args, "whisper_model", "") or "")
+    if language and not language.lower().startswith("en") and ".en" in model:
+        logger.warning(
+            ".en model with non-English language (%s) + glossary may degrade output",
+            language,
+        )
+
+    return glossaries[glossary]
+
+
 def process_input_source(
     input_source: str,
     args: argparse.Namespace,
@@ -1050,6 +1089,7 @@ def process_input_source(
                 "temperature": getattr(args, "temperature", None),
                 "no_fallback": getattr(args, "no_fallback", False),
                 "suppress_nst": getattr(args, "suppress_nst", True),
+                "prompt": _resolve_whisper_prompt(args),
             }
 
             # Set up the resume/pause checkpoint (whisper only). Disabled for

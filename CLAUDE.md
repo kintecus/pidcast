@@ -80,3 +80,4 @@ Source lives under `src/pidcast/`. Hot-path modules (read these first when debug
 - [docs/adr/](docs/adr/) — Architecture Decision Records (provider abstractions)
 - `config/prompts.yaml` — analysis prompt templates
 - `config/models.yaml` — LLM model definitions and fallback chains
+- `config/glossaries.yaml` — named domain glossaries for whisper `--prompt` biasing (used via `--glossary`)

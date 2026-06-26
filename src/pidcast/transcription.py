@@ -641,6 +641,7 @@ def run_whisper_transcription(
     temperature: float | None = None,
     no_fallback: bool = False,
     suppress_nst: bool = False,
+    prompt: str | None = None,
     audio_duration: float | None = None,
     offset_ms: int | None = None,
     segment_callback: "Callable[[dict], None] | None" = None,
@@ -670,6 +671,12 @@ def run_whisper_transcription(
         no_fallback: Disable temperature fallback while decoding (whisper -nf).
         suppress_nst: Suppress non-speech tokens (whisper -sns). Reduces boilerplate
             hallucinations on low-speech audio.
+        prompt: Initial-prompt text passed to whisper --prompt to bias decoding
+            toward domain terms (proper nouns, jargon). None omits the flag. When
+            set, --carry-initial-prompt is also passed so the bias persists across
+            all decode windows, not just the first (whisper applies the initial
+            prompt only to the first window otherwise). Limited to roughly half the
+            model's text context (~200+ tokens); longer prompts are truncated.
         offset_ms: Resume offset in milliseconds (whisper -ot). Decoding starts here;
             emitted timestamps remain absolute (relative to file start).
         segment_callback: Invoked once per completed segment as it streams off
@@ -713,6 +720,12 @@ def run_whisper_transcription(
         command.extend(["--vad", "-vm", str(vad_model)])
         if vad_threshold is not None:
             command.extend(["-vt", str(vad_threshold)])
+
+    # Glossary/initial-prompt biasing. --carry-initial-prompt makes whisper apply
+    # the prompt to every decode window (not just the first), so the bias holds
+    # across a long file. NOTE: -p is --processors, NOT prompt - do not use it.
+    if prompt:
+        command.extend(["--prompt", prompt, "--carry-initial-prompt"])
 
     # Resume: start decoding at a time offset. whisper.cpp emits ABSOLUTE
     # timestamps under -ot (verified), so the streamed segments need no

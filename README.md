@@ -81,6 +81,11 @@ uv run pidcast "/path/to/meeting.mp3" --tags meeting,standup,weekly
 # Test settings on a 2-minute slice before committing to a long run
 uv run pidcast "URL" --test-segment
 
+# Bias transcription toward domain terms (proper nouns, jargon) via whisper --prompt.
+# Cheapest accuracy win for niche vocabulary - beats jumping to a bigger model.
+uv run pidcast "/path/to/interview.mp3" --glossary adtech-ai     # named glossary from config/glossaries.yaml
+uv run pidcast "URL" --whisper-prompt "Names: Acme, Foobar, gRPC."  # raw inline prompt
+
 # Reuse an existing transcript
 uv run pidcast --analyze-existing transcript.md          # re-analyze
 uv run pidcast --diarize-existing transcript.md          # retry diarization
