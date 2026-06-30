@@ -529,6 +529,40 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(_inject_default_verb(argv))
 
 
+def _suppress_all_defaults(parser: argparse.ArgumentParser) -> None:
+    """Set every action's default to SUPPRESS, recursing into subparsers.
+
+    After this, a parse only populates dests the user actually supplied — the
+    basis for robust explicit-flag detection across any flag spelling.
+    """
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for sub in action.choices.values():
+                _suppress_all_defaults(sub)
+        else:
+            action.default = argparse.SUPPRESS
+
+
+def _explicitly_set_dests(argv: list[str]) -> set[str]:
+    """Return the dests the user explicitly passed, by any spelling.
+
+    Re-parses ``argv`` through a shadow parser whose defaults are all SUPPRESS,
+    so only supplied options appear in the result. This correctly catches short
+    aliases (``-m``) and ``BooleanOptionalAction`` (``--no-suppress-nst``) that a
+    naive ``sys.argv`` substring scan misses.
+    """
+    shadow = _build_parser()
+    _suppress_all_defaults(shadow)
+    try:
+        ns, _ = shadow.parse_known_args(_inject_default_verb(argv))
+    except SystemExit:
+        # A parse error here shouldn't crash preset handling; fall back to "none
+        # detected" so explicit flags simply aren't protected (preset still safe).
+        return set()
+    # `command`/`func` are structural, not user flags; drop them.
+    return {k for k in vars(ns) if k not in ("command", "func")}
+
+
 def _inject_default_verb(argv: list[str]) -> list[str]:
     """Inject the implicit ``transcribe`` verb for the bare-input shortcut.
 
@@ -577,16 +611,12 @@ def main() -> None:
 
     setup_logging(getattr(args, "verbose", False))
 
-    # Apply preset if specified (transcribe/lib paths carry -p).
+    # Apply preset if specified (transcribe/lib paths carry -p). Detect which
+    # flags the user passed (by any spelling) so the preset never clobbers them.
     if getattr(args, "preset", None):
         import sys
 
-        explicitly_set = set()
-        for arg in vars(args):
-            if any(
-                a in (f"--{arg}", f"-{arg}", f"--{arg.replace('_', '-')}") for a in sys.argv[1:]
-            ):
-                explicitly_set.add(arg)
+        explicitly_set = _explicitly_set_dests(sys.argv[1:])
         try:
             apply_preset(args, explicitly_set=explicitly_set)
         except ValueError as e:
