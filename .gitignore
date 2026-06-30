@@ -4,14 +4,11 @@
 .LSOverride
 
 ### APP ###
-data/
-# Keep eval reference transcripts and cost tracking
-!data/evals/
-!data/evals/references/
-data/evals/runs/
-data/evals/batches/
-data/evals/comparisons/
-data/evals/cost_tracking.json
+# Generated artifacts (transcripts, audio, logs, run history) and eval output
+# live in the XDG data dir, NOT the repo (run 'pidcast paths'). Eval fixtures
+# ship inside the package at src/pidcast/evals/data/ (tracked). Anchored to the
+# repo root so it ignores only a stray top-level data/, not nested data/ dirs.
+/data/
 
 ### Python ###
 # Byte-compiled / optimized / DLL files

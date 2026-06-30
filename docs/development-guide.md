@@ -81,14 +81,16 @@ Optional dependency groups (e.g. `[diarize]`) live in `pyproject.toml` under `[p
 src/pidcast/          # main package (src layout)
   providers/          # transcription provider implementations
   evals/              # pidcast-eval CLI for provider comparison
-config/               # prompts.yaml, models.yaml
+    data/             # eval fixtures (prompts + reference transcripts), shipped in the wheel
+config/               # prompts.yaml, models.yaml (force-included into the wheel)
 tests/                # pytest suite
-data/                 # repo-local data: eval fixtures (committed) + any pre-migration transcripts
-  evals/              # eval runs, references, comparisons (pidcast-eval only)
 docs/                 # this directory
   adr/                # Architecture Decision Records
-scripts/              # diarize-existing.sh and other helpers
+scripts/              # migrate_data.py and other one-shot helpers
 ```
+
+There is no repo-local `data/` dir: all generated artifacts (transcripts, audio,
+logs, run history, and eval output) live in the XDG data dir. Run `pidcast paths`.
 
 ## Project conventions
 
@@ -108,9 +110,7 @@ uv run pidcast-eval --run-matrix                              # all prompt × mo
 uv run pidcast-eval --run-matrix --models "llama-3.3-70b-versatile,mixtral-8x7b-32768"
 ```
 
-Results land in `data/evals/comparisons/` as Markdown reports. See `src/pidcast/evals/` for the underlying machinery.
-
-> **Source-checkout only.** Unlike the main CLI (whose data moved to the XDG data dir), `pidcast-eval` reads its fixtures and writes its output under the repo's `data/evals/` and `config/` (committed reference data). It is a development tool and is not expected to work from a bare `pip`-installed wheel — run it from a cloned checkout via `uv run`.
+Eval fixtures (prompts registry + reference transcripts) ship inside the package at `src/pidcast/evals/data/` and resolve via `importlib.resources`, so `pidcast-eval` works from an installed wheel as well as a source checkout. Generated output (runs, batches, comparisons, `cost_tracking.json`) is written under the XDG data dir at `<data-dir>/evals/` (run `pidcast paths`). See `src/pidcast/evals/` for the underlying machinery and `src/pidcast/evals/paths.py` for path resolution.
 
 ## CI
 

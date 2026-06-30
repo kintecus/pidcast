@@ -42,7 +42,8 @@ class ReferenceTranscriptManager:
         if not self.registry_file.exists():
             raise ConfigurationError(
                 f"Reference transcripts registry not found: {self.registry_file}. "
-                "Create config/reference_transcripts.json with transcript definitions."
+                "It ships with the package at pidcast/evals/data/reference_transcripts.json; "
+                "reinstall pidcast if it is missing."
             )
 
         try:
