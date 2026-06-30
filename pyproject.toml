@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pidcast"
-version = "0.11.0"
+version = "0.12.0"
 description = "YouTube transcription tool with Whisper and LLM analysis"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -42,6 +42,13 @@ pidcast-eval = "pidcast.evals.cli:eval_main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pidcast"]
+
+# Ship the runtime config (prompts/models) inside the package so a pip-installed
+# wheel works. config.py resolves these via importlib.resources at
+# pidcast/config/<name>, falling back to PROJECT_ROOT/config for source checkouts.
+[tool.hatch.build.targets.wheel.force-include]
+"config/prompts.yaml" = "pidcast/config/prompts.yaml"
+"config/models.yaml" = "pidcast/config/models.yaml"
 
 [dependency-groups]
 dev = [

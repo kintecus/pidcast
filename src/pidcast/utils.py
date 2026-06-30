@@ -34,11 +34,11 @@ def log_error_to_file(
     Args:
         error_type: Category of error (e.g., "json_validation_error", "rate_limit_error")
         error_details: Dictionary of error-specific details to log
-        log_dir: Directory for log files (defaults to data/logs/)
+        log_dir: Directory for log files (defaults to the XDG data dir's logs/)
     """
-    from .config import PROJECT_ROOT
+    from .config import LOGS_DIR
 
-    log_dir = PROJECT_ROOT / "data" / "logs" if log_dir is None else Path(log_dir)
+    log_dir = LOGS_DIR if log_dir is None else Path(log_dir)
 
     # Ensure log directory exists
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -65,17 +65,54 @@ def log_error_to_file(
 # ============================================================================
 
 
+_LOGGING_CONFIGURED = False
+
+
 def setup_logging(verbose: bool = False) -> None:
     """Configure logging for the application.
+
+    Adds a console handler (message-only, matching prior behavior) and a
+    rotating file handler under the XDG data dir's ``logs/`` directory. Safe to
+    call repeatedly: the file handler is only attached once (guarded) so the
+    doctor/setup/resume/main entry points don't stack duplicate handlers.
+
+    Also the single place where the data-dir tree is created on first use.
 
     Args:
         verbose: If True, set DEBUG level; otherwise INFO level.
     """
+    global _LOGGING_CONFIGURED
+
+    from logging.handlers import RotatingFileHandler
+
+    from .config import LOG_FILE, ensure_data_dirs
+
     level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        format="%(message)s",
-        level=level,
-    )
+    root = logging.getLogger()
+    root.setLevel(level)
+
+    if _LOGGING_CONFIGURED:
+        # Already attached handlers; just adjust the level for a later call.
+        return
+
+    ensure_data_dirs()
+
+    console = logging.StreamHandler()
+    console.setFormatter(logging.Formatter("%(message)s"))
+    root.addHandler(console)
+
+    try:
+        file_handler = RotatingFileHandler(
+            LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        )
+        file_handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+        root.addHandler(file_handler)
+    except Exception as e:  # never let logging setup crash the app
+        logger.debug(f"Could not attach file log handler at {LOG_FILE}: {e}")
+
+    _LOGGING_CONFIGURED = True
 
 
 def log_success(message: str) -> None:
@@ -473,8 +510,9 @@ def find_existing_transcription(
         PreviousTranscription if found, None otherwise
     """
     from .config import PreviousTranscription
+    from .history import RunHistory
 
-    stats = load_json_file(stats_file, default=[])
+    stats = RunHistory(stats_file).get_runs_for_estimation()
     if not stats:
         return None
 
@@ -551,51 +589,45 @@ def cleanup_temp_files(audio_file: str | Path, verbose: bool = False) -> None:
 
 
 def find_phantom_stats(stats_file: Path) -> list[dict]:
-    """Return successful stats entries whose transcript file no longer exists.
+    """Return successful run entries whose transcript file no longer exists.
 
     These are the entries that pollute duplicate detection (a "duplicate" pointing
     at a missing file). Uses the full ``transcript_path`` when present; older
     entries with only a basename can't be located, so they are NOT reported as
-    phantoms (we can't prove they're missing).
+    phantoms (we can't prove they're missing). Delegates to the unified
+    RunHistory store.
     """
-    stats = load_json_file(stats_file, default=[])
-    return [e for e in stats if _is_phantom(e)]
+    from .history import RunHistory
 
-
-def _is_phantom(entry: dict) -> bool:
-    """A successful stat whose recorded full transcript path no longer exists."""
-    if not (entry.get("success") and entry.get("smart_filename")):
-        return False
-    path = entry.get("transcript_path")
-    return bool(path) and not Path(path).exists()
+    return RunHistory(stats_file).phantom_records()
 
 
 def prune_phantom_stats(stats_file: Path, verbose: bool = False) -> int:
-    """Drop successful stats entries whose transcript file is gone. Returns count removed."""
-    stats = load_json_file(stats_file, default=[])
-    kept = [e for e in stats if not _is_phantom(e)]
-    removed = len(stats) - len(kept)
-    if removed:
-        save_json_file(stats_file, kept, verbose=verbose)
-    return removed
+    """Drop successful run entries whose transcript file is gone. Returns count removed."""
+    from .history import RunHistory
+
+    return RunHistory(stats_file).prune_phantoms()
 
 
 def save_statistics(stats_file: Path, stats: "TranscriptionStats", verbose: bool = False) -> bool:
-    """Save transcription statistics to a JSON file.
+    """Record a transcription run in the unified run-history store.
 
     Args:
-        stats_file: Path to stats file
+        stats_file: Path to the unified runs store (config.RUNS_FILE)
         stats: Statistics to save (TranscriptionStats object)
-        verbose: Enable verbose output
+        verbose: Enable verbose output (unused; kept for call-site compatibility)
 
     Returns:
         True if successful
     """
-    from .config import TranscriptionStats  # noqa: F401
+    from .history import RunHistory
 
-    existing_stats = load_json_file(stats_file, default=[])
-    existing_stats.append(stats.to_dict())
-    return save_json_file(stats_file, existing_stats, verbose=verbose)
+    try:
+        RunHistory(stats_file).record_run(stats)
+        return True
+    except Exception as e:
+        log_error(f"Failed to record run statistics: {e}")
+        return False
 
 
 # ============================================================================

@@ -11,8 +11,8 @@ from .config import (
     CONFIG_FILE,
     DEFAULT_BACKFILL_LIMIT,
     DEFAULT_FEED_CACHE_HOURS,
-    DEFAULT_TRANSCRIPTS_DIR,
     OBSIDIAN_PATH,
+    TRANSCRIPTS_DIR,
 )
 
 logger = logging.getLogger(__name__)
@@ -159,7 +159,7 @@ class ConfigManager:
         """
         return {
             "backfill_limit": DEFAULT_BACKFILL_LIMIT,
-            "output_dir": str(DEFAULT_TRANSCRIPTS_DIR),
+            "output_dir": str(TRANSCRIPTS_DIR),
             "obsidian_vault": OBSIDIAN_PATH,
             "feed_cache_hours": DEFAULT_FEED_CACHE_HOURS,
             "chrome_profile": None,

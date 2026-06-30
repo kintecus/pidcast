@@ -83,9 +83,8 @@ src/pidcast/          # main package (src layout)
   evals/              # pidcast-eval CLI for provider comparison
 config/               # prompts.yaml, models.yaml
 tests/                # pytest suite
-data/                 # runtime output (gitignored except eval references)
-  transcripts/        # canonical transcript location
-  evals/              # eval runs, references, comparisons
+data/                 # repo-local data: eval fixtures (committed) + any pre-migration transcripts
+  evals/              # eval runs, references, comparisons (pidcast-eval only)
 docs/                 # this directory
   adr/                # Architecture Decision Records
 scripts/              # diarize-existing.sh and other helpers
@@ -97,7 +96,7 @@ scripts/              # diarize-existing.sh and other helpers
 - **LLM responses:** all analysis prompts return JSON with `analysis` and `contextual_tags` fields. Add fields via `config/prompts.yaml`, not via prompt-string surgery in code.
 - **Chunking threshold:** 120 000 characters triggers semantic chunking with synthesis. Threshold lives in `config.py`.
 - **Filenames:** smart-prefixed `YYYY-MM-DD_Title.md`. Logic in `utils.py`.
-- **Transcripts canonical location:** `data/transcripts/`. The repo gitignores stray `YYYY-MM-DD_*.md` files at the root.
+- **Transcripts canonical location:** the XDG data dir, `$XDG_DATA_HOME/pidcast/transcripts/` (default `~/.local/share/pidcast/`; override with `PIDCAST_DATA_DIR`; run `pidcast paths`). Audio (`audio/`), logs (`logs/`), and the unified run history (`state/runs.json`) live alongside it; config and the podcast library stay in `~/.config/pidcast/`. The repo gitignores stray `YYYY-MM-DD_*.md` files at the root.
 
 ## Provider comparison evals
 
@@ -110,6 +109,8 @@ uv run pidcast-eval --run-matrix --models "llama-3.3-70b-versatile,mixtral-8x7b-
 ```
 
 Results land in `data/evals/comparisons/` as Markdown reports. See `src/pidcast/evals/` for the underlying machinery.
+
+> **Source-checkout only.** Unlike the main CLI (whose data moved to the XDG data dir), `pidcast-eval` reads its fixtures and writes its output under the repo's `data/evals/` and `config/` (committed reference data). It is a development tool and is not expected to work from a bare `pip`-installed wheel — run it from a cloned checkout via `uv run`.
 
 ## CI
 

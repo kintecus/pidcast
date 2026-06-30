@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path
 
 from .checkpoint import DONE, JobManifest
-from .config import DEFAULT_STATS_FILE, WHISPER_CPP_PATH
+from .config import RUNS_FILE, TRANSCRIPTS_DIR, WHISPER_CPP_PATH
 from .utils import log_error, log_section
 
 logger = logging.getLogger(__name__)
@@ -115,8 +115,11 @@ def resume_job(manifest: JobManifest) -> None:
     from .cli import _run_with_pause_handler
     from .workflow import process_input_source
 
-    output_dir = Path(args.output_dir) if getattr(args, "output_dir", None) else Path.cwd()
-    stats_file = Path(args.stats_file) if getattr(args, "stats_file", None) else DEFAULT_STATS_FILE
+    # Honor the manifest's pinned output_dir (reconstructed onto args); fall back
+    # to the canonical transcripts dir, never the cwd. Resume deliberately does
+    # NOT use resolve_output_dir - a resumed job must land where it originally did.
+    output_dir = Path(args.output_dir) if getattr(args, "output_dir", None) else TRANSCRIPTS_DIR
+    stats_file = Path(args.stats_file) if getattr(args, "stats_file", None) else RUNS_FILE
     analysis_output_dir = output_dir
     if getattr(args, "save_to_obsidian", False):
         from .config import OBSIDIAN_PATH
