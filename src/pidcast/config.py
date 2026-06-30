@@ -3,6 +3,7 @@
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,52 @@ PROJECT_ROOT = get_project_root()
 load_dotenv(PROJECT_ROOT / ".env")
 
 
+def get_data_dir() -> Path:
+    """Get the data directory for large generated artifacts (XDG compliant).
+
+    Resolution order:
+      1. ``PIDCAST_DATA_DIR`` env override (single knob, all platforms)
+      2. POSIX: ``$XDG_DATA_HOME/pidcast`` else ``~/.local/share/pidcast``
+      3. Windows: ``%LOCALAPPDATA%/pidcast`` else ``~/AppData/Local/pidcast``
+
+    Note: resolved once at import time into the module-level ``DATA_DIR``
+    constant, mirroring ``get_config_dir()``. Set ``PIDCAST_DATA_DIR`` before
+    importing pidcast; tests should call this function directly rather than
+    asserting on the frozen constant.
+    """
+    override = os.environ.get("PIDCAST_DATA_DIR")
+    if override:
+        return Path(override).expanduser()
+    if os.name == "posix":
+        xdg_data = os.environ.get("XDG_DATA_HOME")
+        if xdg_data:
+            return Path(xdg_data) / "pidcast"
+        return Path.home() / ".local" / "share" / "pidcast"
+    else:  # Windows
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            return Path(local_appdata) / "pidcast"
+        return Path.home() / "AppData" / "Local" / "pidcast"
+
+
+def _resolve_packaged_config(filename: str) -> Path:
+    """Resolve a shipped config file (prompts.yaml/models.yaml).
+
+    Prefers the copy bundled inside the installed package
+    (``pidcast/config/<filename>`` via importlib.resources) so a pip-installed
+    wheel works; falls back to ``PROJECT_ROOT/config/<filename>`` for source
+    checkouts where the file is not packaged.
+    """
+    try:
+        packaged = resources.files("pidcast") / "config" / filename
+        path = Path(str(packaged))
+        if path.exists():
+            return path
+    except (ModuleNotFoundError, FileNotFoundError, TypeError):
+        pass
+    return PROJECT_ROOT / "config" / filename
+
+
 # ============================================================================
 # EXTERNAL TOOLS CONFIGURATION
 # ============================================================================
@@ -46,17 +93,46 @@ ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
 
 
 # ============================================================================
-# PATHS
+# PATHS (XDG data dir for generated artifacts)
 # ============================================================================
 
-DEFAULT_TRANSCRIPTS_DIR = PROJECT_ROOT / "data" / "transcripts"
-DEFAULT_STATS_FILE = DEFAULT_TRANSCRIPTS_DIR / "transcription_stats.json"
-DEFAULT_PROMPTS_FILE = PROJECT_ROOT / "config" / "prompts.yaml"
-DEFAULT_MODELS_FILE = PROJECT_ROOT / "config" / "models.yaml"
-DEFAULT_DIGESTS_DIR = DEFAULT_TRANSCRIPTS_DIR  # Digests saved alongside transcripts
+# Large generated artifacts live OUTSIDE the source tree, under the XDG data
+# dir (override with PIDCAST_DATA_DIR). Config/library state stays under the
+# XDG config dir (see get_config_dir below).
+DATA_DIR = get_data_dir()
+TRANSCRIPTS_DIR = DATA_DIR / "transcripts"
+AUDIO_DIR = DATA_DIR / "audio"
+LOGS_DIR = DATA_DIR / "logs"
+STATE_DIR = DATA_DIR / "state"
 
-# Deprecated: kept for backward compatibility
-DEFAULT_ANALYSIS_PROMPTS_FILE = DEFAULT_PROMPTS_FILE
+DIGESTS_DIR = TRANSCRIPTS_DIR  # Digests saved alongside transcripts
+RUNS_FILE = STATE_DIR / "runs.json"  # Unified run history (sync + dedup index)
+ERROR_LOG_FILE = LOGS_DIR / "errors.jsonl"
+LOG_FILE = LOGS_DIR / "pidcast.log"
+
+# Source files shipped with the package (NOT user data). Resolved from the
+# installed package first, falling back to the repo for source checkouts.
+PROMPTS_FILE = _resolve_packaged_config("prompts.yaml")
+MODELS_FILE = _resolve_packaged_config("models.yaml")
+
+
+def ensure_data_dirs() -> None:
+    """Create the data-dir tree on first use. Idempotent."""
+    for directory in (TRANSCRIPTS_DIR, AUDIO_DIR, LOGS_DIR, STATE_DIR):
+        directory.mkdir(parents=True, exist_ok=True)
+
+
+# ----------------------------------------------------------------------------
+# Backward-compatibility aliases (deprecated; prefer the names above).
+# ----------------------------------------------------------------------------
+DEFAULT_TRANSCRIPTS_DIR = TRANSCRIPTS_DIR
+DEFAULT_DIGESTS_DIR = DIGESTS_DIR
+DEFAULT_PROMPTS_FILE = PROMPTS_FILE
+DEFAULT_MODELS_FILE = MODELS_FILE
+DEFAULT_ANALYSIS_PROMPTS_FILE = PROMPTS_FILE
+# The legacy stats file is absorbed by the unified run history; old import
+# sites resolve to RUNS_FILE and route through the RunHistory API.
+DEFAULT_STATS_FILE = RUNS_FILE
 
 
 def get_digest_output_path(date: datetime | None = None) -> Path:
@@ -72,7 +148,7 @@ def get_digest_output_path(date: datetime | None = None) -> Path:
         date = datetime.now()
 
     filename = f"{date.strftime('%Y-%m-%d')}_podcast-digest.md"
-    return DEFAULT_DIGESTS_DIR / filename
+    return DIGESTS_DIR / filename
 
 
 # ============================================================================
@@ -98,8 +174,7 @@ def get_config_dir() -> Path:
 CONFIG_DIR = get_config_dir()
 LIBRARY_FILE = CONFIG_DIR / "library.yaml"
 CONFIG_FILE = CONFIG_DIR / "config.yaml"
-HISTORY_FILE = CONFIG_DIR / "history.json"
-SYNC_LOGS_DIR = CONFIG_DIR / "logs"
+HISTORY_FILE = CONFIG_DIR / "history.json"  # Legacy sync history (pre-unification)
 COOKIE_CACHE_DIR = CONFIG_DIR / "cache"
 COOKIE_CACHE_MAX_AGE_HOURS = 24
 
@@ -364,6 +439,10 @@ class TranscriptionStats:
     # Stable source identifier for duplicate matching across all input types
     # (YouTube id, RSS/Apple GUID, normalized url, or local abs path).
     source_id: str | None = None
+    # Full path to a kept audio file (--keep-audio / diarization), if any. Lets
+    # diarization-retry resolve audio that no longer sits next to the transcript
+    # (audio now lives in AUDIO_DIR, transcripts in TRANSCRIPTS_DIR).
+    audio_path: str | None = None
     # Analysis metadata
     analysis_performed: bool = False
     analysis_type: str | None = None
@@ -401,6 +480,7 @@ class TranscriptionStats:
             "analysis_only": self.analysis_only,
             "transcript_path": self.transcript_path,
             "source_id": self.source_id,
+            "audio_path": self.audio_path,
             "analysis_performed": self.analysis_performed,
             "analysis_type": self.analysis_type,
             "analysis_name": self.analysis_name,

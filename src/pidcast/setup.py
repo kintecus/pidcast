@@ -142,13 +142,30 @@ def check_env_file() -> CheckResult:
     )
 
 
+def check_data_dirs() -> CheckResult:
+    """Report where pidcast stores generated data (and create the tree)."""
+    from .config import DATA_DIR, ensure_data_dirs
+
+    try:
+        ensure_data_dirs()
+    except Exception as e:
+        return CheckResult("data dir", False, f"could not create {DATA_DIR}: {e}", required=False)
+    return CheckResult(
+        "data dir",
+        True,
+        f"ok ({DATA_DIR})",
+        hint="Override with PIDCAST_DATA_DIR or XDG_DATA_HOME. See 'pidcast paths'.",
+        required=False,
+    )
+
+
 def check_stats_integrity() -> CheckResult:
-    """Check for phantom stats entries (success recorded, transcript file gone)."""
-    from .config import DEFAULT_STATS_FILE
+    """Check for phantom run entries (success recorded, transcript file gone)."""
+    from .config import RUNS_FILE
     from .utils import find_phantom_stats
 
     try:
-        phantoms = find_phantom_stats(DEFAULT_STATS_FILE)
+        phantoms = find_phantom_stats(RUNS_FILE)
     except Exception as e:
         return CheckResult("stats integrity", True, f"skipped ({e})", required=False)
     if not phantoms:
@@ -170,6 +187,7 @@ def run_all_checks() -> list[CheckResult]:
         check_whisper(),
         check_whisper_model(),
         check_vad_model(),
+        check_data_dirs(),
         check_stats_integrity(),
         check_env_var(
             "GROQ_API_KEY",

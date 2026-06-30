@@ -210,7 +210,11 @@ def test_processing_history_corrupted_file():
 
 
 def test_processing_history_atomic_save():
-    """Test that saves are atomic (using temp file)."""
+    """Test that saves are atomic (using temp file).
+
+    ProcessingHistory is now a shim over the unified RunHistory store, so guid
+    records persist under the ``by_guid`` section rather than at the top level.
+    """
     with tempfile.TemporaryDirectory() as tmpdir:
         history_path = Path(tmpdir) / "history.json"
         history = ProcessingHistory(history_path)
@@ -221,4 +225,4 @@ def test_processing_history_atomic_save():
         assert history_path.exists()
         with open(history_path, encoding="utf-8") as f:
             data = json.load(f)
-            assert "test-guid" in data
+            assert "test-guid" in data["by_guid"]

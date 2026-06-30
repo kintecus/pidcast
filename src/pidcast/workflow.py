@@ -631,13 +631,15 @@ def resolve_existing_audio(
       1. The ``url`` recorded in the transcript front matter (local-file captures
          store the source audio there, even when its filename differs from the
          transcript's).
-      2. A single audio file sitting next to the transcript.
-      3. ``<transcript-stem>.wav`` next to the transcript (legacy heuristic).
+      2. The ``audio_path`` recorded in the run history (kept audio now lives in
+         AUDIO_DIR, no longer next to the transcript).
+      3. A single audio file sitting next to the transcript.
+      4. ``<transcript-stem>.wav`` next to the transcript (legacy heuristic).
 
     Returns the resolved Path, or None if nothing matched. The transcript and
     its audio are NOT guaranteed to share a stem — pidcast writes the audio with
     a smart-filtered name and the transcript with a date-prefixed name — so the
-    front-matter url is the authoritative source.
+    front-matter url and the recorded audio_path are the authoritative sources.
     """
     parent = transcript_path.parent
 
@@ -646,14 +648,24 @@ def resolve_existing_audio(
     if from_meta and from_meta.exists():
         return from_meta
 
-    # 2. Single sibling audio file
+    # 2. Recorded audio_path from the run history (audio lives in AUDIO_DIR now)
+    from .config import RUNS_FILE
+    from .history import RunHistory
+
+    record = RunHistory(RUNS_FILE).find_by_transcript(transcript_path)
+    if record and record.audio_path:
+        recorded = Path(record.audio_path)
+        if recorded.exists():
+            return recorded
+
+    # 3. Single sibling audio file
     siblings = sorted(
         p for p in parent.iterdir() if p.is_file() and p.suffix.lower() in _AUDIO_EXTENSIONS
     )
     if len(siblings) == 1:
         return siblings[0]
 
-    # 3. Legacy stem-swap
+    # 4. Legacy stem-swap
     stem_wav = parent / f"{transcript_path.stem}.wav"
     if stem_wav.exists():
         return stem_wav
@@ -1109,7 +1121,10 @@ def process_input_source(
         # Auto-save audio when diarizing (for diarization retry)
         saved_audio_path = None
         if diarize and audio_file and Path(audio_file).exists():
-            saved_audio_path = output_dir / f"{smart_filename}.wav"
+            from .config import AUDIO_DIR
+
+            AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+            saved_audio_path = AUDIO_DIR / f"{smart_filename}.wav"
             if not saved_audio_path.exists():
                 shutil.copy2(audio_file, saved_audio_path)
                 if args.verbose:
@@ -1257,6 +1272,7 @@ def process_input_source(
             is_local_file=is_local_file,
             transcript_path=str(Path(markdown_file).resolve()),
             source_id=compute_source_id(stats_source),
+            audio_path=str(saved_audio_path) if saved_audio_path else None,
             analysis_performed=analysis_performed,
             analysis_type=analysis_metadata.get("analysis_type"),
             analysis_name=analysis_metadata.get("analysis_name"),
@@ -1303,9 +1319,13 @@ def process_input_source(
 
         # Save audio file if requested (skip if already auto-saved for diarization)
         if getattr(args, "keep_audio", False) and audio_file and Path(audio_file).exists():
-            saved_audio = output_dir / f"{smart_filename}.wav"
+            from .config import AUDIO_DIR
+
+            AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+            saved_audio = AUDIO_DIR / f"{smart_filename}.wav"
             if not saved_audio.exists():
                 shutil.copy2(audio_file, saved_audio)
+            saved_audio_path = saved_audio
             logger.info(f"Audio saved to: file://{saved_audio.absolute()}")
 
         # Success: drop the checkpoint unless the user wants to keep it.

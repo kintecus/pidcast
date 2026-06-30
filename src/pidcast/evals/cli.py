@@ -8,9 +8,9 @@ from pathlib import Path
 
 from rich.console import Console
 
-from pidcast.config import PROJECT_ROOT
 from pidcast.exceptions import ConfigurationError, PidcastError
 
+from . import paths as eval_paths
 from .batch_runner import BatchConfig, BatchRunner
 from .comparison import ComparisonGenerator
 from .cost_tracker import CostTracker
@@ -134,10 +134,10 @@ def run_single_eval(args, groq_api_key: str) -> None:
         )
         sys.exit(1)
 
-    # Setup paths
-    prompts_file = PROJECT_ROOT / "config" / "eval_prompts.json"
-    registry_file = PROJECT_ROOT / "config" / "reference_transcripts.json"
-    results_dir = PROJECT_ROOT / "data" / "evals" / "runs"
+    # Setup paths (fixtures ship in the package; output goes to the XDG data dir)
+    prompts_file = eval_paths.prompts_file()
+    registry_file = eval_paths.registry_file()
+    results_dir = eval_paths.runs_dir()
 
     # Initialize managers
     if args.verbose:
@@ -145,7 +145,7 @@ def run_single_eval(args, groq_api_key: str) -> None:
         console.print(f"[dim]Loading transcripts from: {registry_file}[/dim]")
 
     prompt_manager = PromptManager(prompts_file)
-    transcript_manager = ReferenceTranscriptManager(registry_file, PROJECT_ROOT)
+    transcript_manager = ReferenceTranscriptManager(registry_file, eval_paths.fixtures_dir())
     eval_runner = EvalRunner(prompt_manager, transcript_manager, results_dir)
 
     # Find prompt type for this version
@@ -186,7 +186,7 @@ def run_single_eval(args, groq_api_key: str) -> None:
     result = eval_runner.run_eval(config, verbose=args.verbose)
 
     # Track cost
-    cost_tracking_file = PROJECT_ROOT / "data" / "evals" / "cost_tracking.json"
+    cost_tracking_file = eval_paths.cost_tracking_file()
     cost_tracker = CostTracker(cost_tracking_file)
     cost_tracker.record_eval(result)
 
@@ -206,16 +206,16 @@ def run_single_eval(args, groq_api_key: str) -> None:
 
 def run_batch_evals(args, groq_api_key: str) -> None:
     """Run matrix batch evals."""
-    # Setup paths
-    prompts_file = PROJECT_ROOT / "config" / "eval_prompts.json"
-    registry_file = PROJECT_ROOT / "config" / "reference_transcripts.json"
-    results_dir = PROJECT_ROOT / "data" / "evals" / "runs"
-    batches_dir = PROJECT_ROOT / "data" / "evals" / "batches"
-    comparisons_dir = PROJECT_ROOT / "data" / "evals" / "comparisons"
+    # Setup paths (fixtures ship in the package; output goes to the XDG data dir)
+    prompts_file = eval_paths.prompts_file()
+    registry_file = eval_paths.registry_file()
+    results_dir = eval_paths.runs_dir()
+    batches_dir = eval_paths.batches_dir()
+    comparisons_dir = eval_paths.comparisons_dir()
 
     # Initialize managers
     prompt_manager = PromptManager(prompts_file)
-    transcript_manager = ReferenceTranscriptManager(registry_file, PROJECT_ROOT)
+    transcript_manager = ReferenceTranscriptManager(registry_file, eval_paths.fixtures_dir())
     eval_runner = EvalRunner(prompt_manager, transcript_manager, results_dir)
     batch_runner = BatchRunner(
         eval_runner, prompt_manager, transcript_manager, results_dir, batches_dir
@@ -266,7 +266,7 @@ def run_batch_evals(args, groq_api_key: str) -> None:
     )
 
     # Track costs
-    cost_tracking_file = PROJECT_ROOT / "data" / "evals" / "cost_tracking.json"
+    cost_tracking_file = eval_paths.cost_tracking_file()
     cost_tracker = CostTracker(cost_tracking_file)
     cost_tracker.record_batch(summary.eval_results)
 
@@ -327,7 +327,7 @@ def run_comparison_eval(args) -> None:
 
     from .provider_comparison import run_provider_comparison, save_comparison_report
 
-    comparisons_dir = PROJECT_ROOT / "data" / "evals" / "comparisons"
+    comparisons_dir = eval_paths.comparisons_dir()
 
     console.print(f"\n[bold cyan]Provider Comparison:[/bold cyan] {providers[0]} vs {providers[1]}")
     console.print(f"  Analysis type: {args.analysis_type}")

@@ -19,7 +19,6 @@ from .config import (
     WHISPER_VAD_MODEL,
 )
 from .exceptions import TranscriptionError, TranscriptionPaused
-from .utils import load_json_file
 
 # whisper.cpp stdout segment line: "[HH:MM:SS.mmm --> HH:MM:SS.mmm]   text".
 # Tolerant of '.' or ',' as the ms separator (varies by build) and inner spacing.
@@ -383,7 +382,9 @@ def estimate_transcription_time(
     Returns:
         Estimated time in seconds, or None if not enough data
     """
-    existing_stats = load_json_file(stats_file, default=[])
+    from .history import RunHistory
+
+    existing_stats = RunHistory(stats_file).get_runs_for_estimation()
 
     if not existing_stats:
         return None
