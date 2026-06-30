@@ -760,11 +760,12 @@ def resolve_analysis_type(user_input: str, prompts_file: Path | None = None) -> 
         if suggestion:
             raise ValueError(
                 f"Unknown analysis type: '{user_input}'. Did you mean '{suggestion}'?\n"
-                f"Use -L to list all available types."
+                f"Run 'pidcast list analyses' to list all available types."
             )
         else:
             raise ValueError(
-                f"Unknown analysis type: '{user_input}'.\nUse -L to list all available types."
+                f"Unknown analysis type: '{user_input}'.\n"
+                f"Run 'pidcast list analyses' to list all available types."
             )
 
     except FileNotFoundError:
@@ -833,11 +834,12 @@ def resolve_model_name(user_input: str, models_file: Path | None = None) -> str:
         if suggestion:
             raise ValueError(
                 f"Unknown model: '{user_input}'. Did you mean '{suggestion}'?\n"
-                f"Use -M to list all available models."
+                f"Run 'pidcast list models' to list all available models."
             )
         else:
             raise ValueError(
-                f"Unknown model: '{user_input}'.\nUse -M to list all available models."
+                f"Unknown model: '{user_input}'.\n"
+                f"Run 'pidcast list models' to list all available models."
             )
 
     except FileNotFoundError:

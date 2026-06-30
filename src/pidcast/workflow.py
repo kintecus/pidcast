@@ -953,7 +953,7 @@ def process_input_source(
             if video_info_override.upload_date:
                 video_info.upload_date = video_info_override.upload_date
             # Preserve the original source url (resume): otherwise the front matter
-            # would point at the checkpoint's source.wav, breaking --diarize-existing.
+            # would point at the checkpoint's source.wav, breaking `pidcast diarize`.
             if video_info_override.webpage_url:
                 video_info.webpage_url = video_info_override.webpage_url
 
@@ -1150,7 +1150,7 @@ def process_input_source(
                 f"Segment: {test_segment:.0f} min"
                 + (f" from {start_at:.0f}:00" if start_at else "")
             )
-            logger.info("\nResults look good? Run without --test-segment for full transcription.")
+            logger.info("\nResults look good? Run without --test for full transcription.")
             success = True
             return True
 
@@ -1385,7 +1385,7 @@ def process_input_source(
                     pass  # Best-effort fallback
 
             logger.info("Retry diarization without re-transcribing:")
-            logger.info(f"  pidcast --diarize-existing {fallback_md}")
+            logger.info(f"  pidcast diarize {fallback_md}")
         if args.verbose:
             traceback.print_exc()
         return False

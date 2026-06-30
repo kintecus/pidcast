@@ -8,8 +8,7 @@ import argparse
 from pathlib import Path
 from unittest.mock import patch
 
-from pidcast.cli import resolve_output_dir
-from pidcast.config import TRANSCRIPTS_DIR
+from pidcast.config import TRANSCRIPTS_DIR, resolve_output_dir
 
 
 def _args(output_dir=None):
