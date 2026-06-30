@@ -6,7 +6,7 @@
 
 Analysis (summarization, key points, action items, comprehensive briefing) was Groq-only since the project's first release. Groq is fast and cheap, but two problems pushed for a second option:
 
-1. **Quality ceiling.** On long, dense audio (technical talks, multi-speaker debates), Groq's Llama 3.x outputs lose nuance compared to frontier models. A handful of evals (`data/evals/comparisons/`) confirmed the gap on accuracy and completeness scores.
+1. **Quality ceiling.** On long, dense audio (technical talks, multi-speaker debates), Groq's Llama 3.x outputs lose nuance compared to frontier models. A handful of evals (output under the data dir's `evals/comparisons/`; run `pidcast paths`) confirmed the gap on accuracy and completeness scores.
 2. **No use of local Claude Code.** Many users already have an authenticated Claude Code CLI installed locally for other workflows. Reusing that subscription for pidcast analysis sidesteps yet another API key.
 
 ## Decision

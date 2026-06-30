@@ -94,7 +94,10 @@ uv run pidcast -L     # list analysis types
 uv run pidcast -M     # list LLM models
 uv run pidcast -W     # list Whisper models
 uv run pidcast -P     # list presets
+uv run pidcast paths  # show where transcripts, audio, logs, and run history live
 ```
+
+By default, transcripts, kept audio, logs, and the run history live under the XDG data dir (`~/.local/share/pidcast/`, or `$XDG_DATA_HOME/pidcast/`) — not in the repo. Override the whole tree with `PIDCAST_DATA_DIR`, set a fixed transcript directory with `--output-dir` or the `output_dir` key in `~/.config/pidcast/config.yaml`, and run `pidcast paths` to see what resolves.
 
 Available analysis types: `executive_summary` (default), `summary`, `key_points`, `action_items`, `comprehensive`. Every type ends with a **Shareable Brief** — a punchy headline (≤ 15 words) plus a 3–5 sentence quick-take suitable for sending to a friend.
 
@@ -150,7 +153,7 @@ uv run pidcast-eval --compare groq,claude --transcript-file transcript.txt --tit
 uv run pidcast-eval --run-matrix           # all prompt × model × reference combos
 ```
 
-Reports land in `data/evals/comparisons/`. See [docs/development-guide.md](docs/development-guide.md#provider-comparison-evals) for the full eval matrix flags.
+Reports land under the data dir, in `evals/comparisons/` (run `pidcast paths` to resolve it; default `~/.local/share/pidcast/evals/comparisons/`). See [docs/development-guide.md](docs/development-guide.md#provider-comparison-evals) for the full eval matrix flags.
 
 ## 📚 Documentation <a name="documentation"></a>
 
