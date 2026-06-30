@@ -4,14 +4,11 @@
 .LSOverride
 
 ### APP ###
-data/
-# Keep eval reference transcripts and cost tracking
-!data/evals/
-!data/evals/references/
-data/evals/runs/
-data/evals/batches/
-data/evals/comparisons/
-data/evals/cost_tracking.json
+# Generated artifacts (transcripts, audio, logs, run history) and eval output
+# live in the XDG data dir, NOT the repo (run 'pidcast paths'). Eval fixtures
+# ship inside the package at src/pidcast/evals/data/ (tracked). Anchored to the
+# repo root so it ignores only a stray top-level data/, not nested data/ dirs.
+/data/
 
 ### Python ###
 # Byte-compiled / optimized / DLL files
@@ -209,7 +206,9 @@ pyrightconfig.json
 .claude/settings.local.json
 .claude/skills/
 
-# Stray transcripts dropped in repo root (canonical location is data/transcripts/)
+# Stray transcripts dropped in repo root. Canonical location moved out of the
+# repo to the XDG data dir ($XDG_DATA_HOME/pidcast/transcripts/; run 'pidcast
+# paths'). These guards catch any that still leak into the repo root.
 /20[0-9][0-9]-[01][0-9]-[0-3][0-9]_*.md
 /20[0-9][0-9]-[01][0-9]-[0-3][0-9]_*.whisper.json
 

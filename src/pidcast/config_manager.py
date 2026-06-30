@@ -11,7 +11,6 @@ from .config import (
     CONFIG_FILE,
     DEFAULT_BACKFILL_LIMIT,
     DEFAULT_FEED_CACHE_HOURS,
-    DEFAULT_TRANSCRIPTS_DIR,
     OBSIDIAN_PATH,
 )
 
@@ -154,12 +153,17 @@ class ConfigManager:
     def _default_config() -> dict[str, Any]:
         """Default configuration.
 
+        Note: ``output_dir`` is intentionally NOT seeded. Baking the resolved
+        transcripts dir into config as an absolute string just goes stale if the
+        data dir ever moves (and pins the old path). Leaving it absent lets
+        ``resolve_output_dir`` use the live XDG default; a user who wants a fixed
+        location can still set ``output_dir`` explicitly.
+
         Returns:
             Default configuration dictionary
         """
         return {
             "backfill_limit": DEFAULT_BACKFILL_LIMIT,
-            "output_dir": str(DEFAULT_TRANSCRIPTS_DIR),
             "obsidian_vault": OBSIDIAN_PATH,
             "feed_cache_hours": DEFAULT_FEED_CACHE_HOURS,
             "chrome_profile": None,

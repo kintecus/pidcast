@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pidcast"
-version = "0.11.0"
+version = "0.13.0"
 description = "YouTube transcription tool with Whisper and LLM analysis"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -42,6 +42,18 @@ pidcast-eval = "pidcast.evals.cli:eval_main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pidcast"]
+
+# Ship non-Python data inside the package so a pip-installed wheel works:
+#  - runtime config (prompts/models), resolved via importlib.resources at
+#    pidcast/config/<name> (falling back to PROJECT_ROOT/config for checkouts).
+#  - eval fixtures (prompts registry + reference transcripts) under
+#    pidcast/evals/data/, resolved via importlib.resources.
+# Hatchling's package include ships only .py by default, so data files need
+# explicit inclusion here.
+[tool.hatch.build.targets.wheel.force-include]
+"config/prompts.yaml" = "pidcast/config/prompts.yaml"
+"config/models.yaml" = "pidcast/config/models.yaml"
+"src/pidcast/evals/data" = "pidcast/evals/data"
 
 [dependency-groups]
 dev = [

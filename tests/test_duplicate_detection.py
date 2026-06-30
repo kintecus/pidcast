@@ -187,7 +187,11 @@ def test_find_and_prune_phantom_stats(tmp_path):
 
     removed = prune_phantom_stats(stats)
     assert removed == 1
-    remaining = json.loads(stats.read_text())
+    # Pruning rewrites the file in the unified RunHistory shape; read the
+    # surviving runs back through the store rather than as a bare list.
+    from pidcast.history import RunHistory
+
+    remaining = RunHistory(stats).get_runs_for_estimation()
     names = {e["smart_filename"] for e in remaining}
     assert names == {"present.md", "failed.md"}
 

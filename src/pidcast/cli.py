@@ -12,8 +12,9 @@ from pathlib import Path
 
 from .config import (
     DEFAULT_PROMPTS_FILE,
-    DEFAULT_STATS_FILE,
     OBSIDIAN_PATH,
+    RUNS_FILE,
+    TRANSCRIPTS_DIR,
     WHISPER_MODEL,
 )
 from .exceptions import DuplicateShowError, FeedFetchError, FeedParseError, ShowNotFoundError
@@ -465,7 +466,8 @@ Short Flags:
         "--output-dir",
         dest="output_dir",
         default=None,
-        help="Output directory for Markdown files (default: current directory)",
+        help="Output directory for Markdown files (default: config.yaml output_dir, "
+        "else the XDG data dir's transcripts/; see 'pidcast paths')",
     )
     parser.add_argument(
         "-o",
@@ -582,7 +584,7 @@ Short Flags:
         "--stats-file",
         dest="stats_file",
         default=None,
-        help=f"File to store statistics (default: {DEFAULT_STATS_FILE})",
+        help=f"File to store run history/statistics (default: {RUNS_FILE})",
     )
     parser.add_argument(
         "--keep-transcript",
@@ -787,7 +789,7 @@ def cmd_process(args: argparse.Namespace) -> None:
     """Handle 'pidcast lib process' command."""
     import uuid
 
-    from .config import DEFAULT_STATS_FILE, OBSIDIAN_PATH, VideoInfo
+    from .config import OBSIDIAN_PATH, VideoInfo
     from .library import LibraryManager, Show
 
     library = LibraryManager()
@@ -892,8 +894,8 @@ def cmd_process(args: argparse.Namespace) -> None:
             return
 
     # Run workflow
-    output_dir = Path(args.output_dir) if args.output_dir else Path.cwd()
-    stats_file = Path(args.stats_file) if args.stats_file else DEFAULT_STATS_FILE
+    output_dir = resolve_output_dir(args)
+    stats_file = Path(args.stats_file) if args.stats_file else RUNS_FILE
     analysis_output_dir = Path(OBSIDIAN_PATH) if args.save_to_obsidian else output_dir
 
     process_input_source(
@@ -1245,8 +1247,8 @@ def cmd_digest(args: argparse.Namespace) -> None:
         # Display in terminal
         DigestFormatter.format_terminal(digest)
 
-        # Save to file
-        output_dir = Path(args.output_dir) if args.output_dir else Path.cwd()
+        # Save to file (digest path comes from DIGESTS_DIR via get_digest_output_path)
+        output_dir = resolve_output_dir(args)
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = get_digest_output_path(date_filter or datetime.now())
 
@@ -1274,7 +1276,7 @@ def cmd_sync(args: argparse.Namespace) -> None:
     history = ProcessingHistory(HISTORY_FILE)
 
     # Get output directory
-    output_dir = Path(args.output_dir) if args.output_dir else Path.cwd()
+    output_dir = resolve_output_dir(args)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Get Whisper model
@@ -1379,7 +1381,7 @@ def cmd_sync(args: argparse.Namespace) -> None:
 
 def cmd_doctor(prune_stats: bool = False) -> None:
     """Run health checks and display configuration status."""
-    from .config import DEFAULT_STATS_FILE
+    from .config import RUNS_FILE
     from .setup import determine_status, run_all_checks
     from .utils import prune_phantom_stats
 
@@ -1387,7 +1389,7 @@ def cmd_doctor(prune_stats: bool = False) -> None:
     print("=" * 40)
 
     if prune_stats:
-        removed = prune_phantom_stats(DEFAULT_STATS_FILE)
+        removed = prune_phantom_stats(RUNS_FILE)
         print(f"  Pruned {removed} phantom stats entr(y/ies) with a missing transcript.\n")
 
     checks = run_all_checks()
@@ -1534,12 +1536,82 @@ def cmd_setup() -> None:
     print()
 
 
+def resolve_output_dir(args: argparse.Namespace) -> Path:
+    """Resolve the transcript output directory.
+
+    Precedence (highest first):
+      1. ``--output-dir`` flag
+      2. ``config.yaml``'s ``output_dir`` (an explicit value the user set),
+         UNLESS it points at the legacy in-repo ``data/transcripts`` dir - older
+         configs pinned that absolute path before storage moved to the XDG data
+         dir, so we treat it as stale and fall through rather than sending new
+         transcripts back into the source tree.
+      3. the XDG ``TRANSCRIPTS_DIR`` default
+
+    Never falls back to the current working directory, so a run with no flag
+    lands artifacts in the canonical data dir instead of wherever you happen to
+    be standing.
+    """
+    flag = getattr(args, "output_dir", None)
+    if flag:
+        return Path(flag)
+
+    from .config import PROJECT_ROOT
+    from .config_manager import ConfigManager
+
+    configured = ConfigManager.load_config().get("output_dir")
+    if configured and not _is_legacy_repo_path(Path(configured), PROJECT_ROOT):
+        return Path(configured)
+
+    return TRANSCRIPTS_DIR
+
+
+def _is_legacy_repo_path(path: Path, project_root: Path) -> bool:
+    """True if ``path`` is the old in-repo data/transcripts location (now stale)."""
+    legacy = project_root / "data" / "transcripts"
+    try:
+        return path.resolve() == legacy.resolve()
+    except OSError:
+        return False
+
+
+def print_paths() -> None:
+    """Print resolved data/config directories ('pidcast paths')."""
+    from .config import (
+        AUDIO_DIR,
+        CONFIG_DIR,
+        DATA_DIR,
+        LOGS_DIR,
+        RUNS_FILE,
+        STATE_DIR,
+        TRANSCRIPTS_DIR,
+        ensure_data_dirs,
+    )
+
+    ensure_data_dirs()
+    print("pidcast paths")
+    print(f"  data dir:     {DATA_DIR}")
+    print(f"  transcripts:  {TRANSCRIPTS_DIR}")
+    print(f"  audio:        {AUDIO_DIR}")
+    print(f"  logs:         {LOGS_DIR}")
+    print(f"  state:        {STATE_DIR}")
+    print(f"  run history:  {RUNS_FILE}")
+    print(f"  config dir:   {CONFIG_DIR}")
+    print("\n  Override the data dir with PIDCAST_DATA_DIR or XDG_DATA_HOME.")
+
+
 def main() -> None:
     """Main entry point for pidcast CLI."""
     import sys
 
     # Handle setup/doctor subcommands before arg parsing
     if len(sys.argv) > 1:
+        if sys.argv[1] == "paths":
+            from dotenv import load_dotenv
+
+            load_dotenv()
+            print_paths()
+            return
         if sys.argv[1] == "doctor":
             from dotenv import load_dotenv
 
@@ -1736,8 +1808,8 @@ def main() -> None:
             return
 
     # Set defaults for paths
-    output_dir = Path(args.output_dir) if args.output_dir else Path.cwd()
-    stats_file = Path(args.stats_file) if args.stats_file else DEFAULT_STATS_FILE
+    output_dir = resolve_output_dir(args)
+    stats_file = Path(args.stats_file) if args.stats_file else RUNS_FILE
 
     # Determine where analysis files should go
     analysis_output_dir = Path(OBSIDIAN_PATH) if args.save_to_obsidian else output_dir

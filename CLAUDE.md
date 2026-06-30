@@ -66,12 +66,12 @@ Source lives under `src/pidcast/`. Hot-path modules (read these first when debug
 - **Chunking threshold:** transcripts > 120k chars use semantic chunking with synthesis.
 - **LLM responses:** every analysis prompt returns JSON with `analysis` and `contextual_tags` fields.
 - **Filenames:** smart-filtered with `YYYY-MM-DD_Title.md` date prefix.
-- **Transcripts location:** `data/transcripts/` is canonical — never drop stray transcripts in the repo root (ignored via `.gitignore`).
+- **Transcripts location:** the canonical store is the XDG data dir, `$XDG_DATA_HOME/pidcast/transcripts/` (default `~/.local/share/pidcast/transcripts/`; override with `PIDCAST_DATA_DIR`; run `pidcast paths` to print the resolved dirs). Audio, logs, and the unified run history (`state/runs.json`) live alongside it under the data dir. Never drop stray transcripts in the repo root (ignored via `.gitignore`).
 - **Linting:** ruff is the single source of truth (config in `pyproject.toml` under `[tool.ruff]`).
 
 ## Data handling
 
-`data/transcripts/` contains large text files (some > 200 KB). **Do NOT read these into context** unless the user explicitly approves a specific file. For test fixtures, ask the user to point at one or create a dedicated minimal fixture under `tests/`.
+The transcripts dir (`$XDG_DATA_HOME/pidcast/transcripts/`, run `pidcast paths`) contains large text files (some > 200 KB). The repo's `data/transcripts/` may still hold pre-migration files. **Do NOT read these into context** unless the user explicitly approves a specific file. For test fixtures, ask the user to point at one or create a dedicated minimal fixture under `tests/`.
 
 ## Further reading
 

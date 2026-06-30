@@ -39,7 +39,8 @@ class PromptManager:
         if not self.prompts_file.exists():
             raise ConfigurationError(
                 f"Prompts file not found: {self.prompts_file}. "
-                "Create config/eval_prompts.json with prompt definitions."
+                "It ships with the package at pidcast/evals/data/eval_prompts.json; "
+                "reinstall pidcast if it is missing."
             )
 
         try:
