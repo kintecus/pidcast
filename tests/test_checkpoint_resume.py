@@ -165,6 +165,53 @@ def test_segments_append_and_resume_offset(checkpoint_dir):
     assert len(m.load_segments()) == 2
 
 
+def test_elapsed_seconds_defaults_to_zero(checkpoint_dir):
+    m = _make_manifest()
+    assert m.transcription.elapsed_seconds == 0.0
+
+
+def test_add_transcription_elapsed_accumulates_across_legs(checkpoint_dir):
+    m = _make_manifest()
+    # Three resume legs: 12s + 8s + 5s = 25s of true cumulative compute.
+    assert m.add_transcription_elapsed(12.0) == pytest.approx(12.0)
+    assert m.add_transcription_elapsed(8.0) == pytest.approx(20.0)
+    total = m.add_transcription_elapsed(5.0)
+    assert total == pytest.approx(25.0)
+    assert m.transcription.elapsed_seconds == pytest.approx(25.0)
+
+
+def test_add_transcription_elapsed_persists(checkpoint_dir):
+    m = _make_manifest()
+    m.add_transcription_elapsed(7.5)
+    # Reload from disk: the accumulator survived the save().
+    loaded = cp.JobManifest.load(m.job_dir)
+    assert loaded is not None
+    assert loaded.transcription.elapsed_seconds == pytest.approx(7.5)
+
+
+def test_add_transcription_elapsed_clamps_negative(checkpoint_dir):
+    # A clock skew shouldn't subtract from the accumulated total.
+    m = _make_manifest()
+    m.add_transcription_elapsed(10.0)
+    assert m.add_transcription_elapsed(-3.0) == pytest.approx(10.0)
+
+
+def test_elapsed_seconds_survives_legacy_manifest_without_field(checkpoint_dir):
+    # A pre-upgrade manifest JSON has no elapsed_seconds; it must load with the
+    # 0.0 default rather than erroring.
+    import json
+
+    m = _make_manifest()
+    m.save()
+    raw = json.loads((m.job_dir / cp.MANIFEST_NAME).read_text())
+    raw["transcription"].pop("elapsed_seconds", None)
+    (m.job_dir / cp.MANIFEST_NAME).write_text(json.dumps(raw))
+
+    loaded = cp.JobManifest.load(m.job_dir)
+    assert loaded is not None
+    assert loaded.transcription.elapsed_seconds == 0.0
+
+
 def test_load_segments_tolerates_partial_trailing_line(checkpoint_dir):
     m = _make_manifest()
     m.append_segment({"from_ms": 0, "to_ms": 5000, "text": "a"})
@@ -374,3 +421,36 @@ def test_streaming_pause_raises_with_offset(fake_whisper):
     # Paused partway: at least the 3 we saw, fewer than all 10, offset matches last.
     assert 3 <= len(collected) < 10
     assert exc.value.last_offset_ms == collected[-1]["to_ms"]
+
+
+def test_checkpointed_transcribe_reports_cumulative_duration(
+    fake_whisper, checkpoint_dir, tmp_path
+):
+    """transcribe() on the checkpointed path returns total elapsed across legs.
+
+    A resumed run must report leg1 + leg2 + ..., not just the final leg, so the
+    estimate-vs-actual line and the persisted ETA stat reflect the true
+    end-to-end transcription time rather than a falsely-fast partial.
+    """
+    from pidcast.providers.whisper_provider import WhisperTranscriptionProvider
+
+    manifest = _make_manifest(job_id="cumuljob00001")
+    # Simulate a prior resume leg that already burned 42s of compute.
+    manifest.add_transcription_elapsed(42.0)
+
+    provider = WhisperTranscriptionProvider(
+        whisper_model="m",
+        output_format="json",
+        output_dir=tmp_path,
+        checkpoint=manifest,
+    )
+    result = provider.transcribe("dummy.wav", verbose=False)
+
+    # Reported duration includes the prior 42s plus this (small) leg's compute,
+    # i.e. the cumulative total - not just the final leg.
+    assert result.duration >= 42.0
+    # And the manifest's accumulator advanced past the seeded 42s.
+    reloaded = cp.JobManifest.load(manifest.job_dir)
+    assert reloaded is not None
+    assert reloaded.transcription.elapsed_seconds >= 42.0
+    assert reloaded.transcription.elapsed_seconds == pytest.approx(result.duration, abs=0.01)

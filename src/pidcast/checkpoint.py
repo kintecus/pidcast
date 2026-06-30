@@ -97,6 +97,13 @@ class PhaseState:
     # Transcription-only; advisory mirror of the JSONL tail.
     last_offset_ms: int = 0
     segment_count: int = 0
+    # Transcription-only: cumulative active compute seconds across all resume
+    # legs. Each leg adds its own wall-clock delta; paused/idle time between
+    # sessions is never counted (only time spent actually transcribing). Lets a
+    # multi-session run report its TRUE total transcription time rather than just
+    # the final leg, so the estimate-vs-actual line and the ETA training data
+    # stay honest. Defaults to 0.0 so pre-upgrade manifests load unchanged.
+    elapsed_seconds: float = 0.0
     # Diarization-only.
     requested: bool = False
     speaker_count: int | None = None
@@ -204,6 +211,18 @@ class JobManifest:
         if not segments:
             return 0
         return int(segments[-1].get("to_ms", 0))
+
+    def add_transcription_elapsed(self, leg_seconds: float) -> float:
+        """Accumulate one transcription leg's compute time and persist.
+
+        Called once per session with that session's active transcription
+        wall-clock. Returns the new cumulative total across all legs so the
+        caller can report the true end-to-end transcription time of a job that
+        spanned multiple ``pidcast resume`` invocations.
+        """
+        self.transcription.elapsed_seconds += max(0.0, leg_seconds)
+        self.save()
+        return self.transcription.elapsed_seconds
 
 
 def find_resumable_jobs() -> list[JobManifest]:
