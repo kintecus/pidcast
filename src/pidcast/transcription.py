@@ -4,7 +4,6 @@ import contextlib
 import logging
 import re
 import subprocess
-import time
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -615,9 +614,10 @@ def _run_whisper_streaming(
     whether a duration estimate is available. whisper.cpp prints each completed
     segment to stdout and flushes, so we parse those lines live.
 
-    In verbose mode stdout is inherited (whisper prints directly) so we cannot
-    parse segments - pause still works via process polling, but per-segment
-    checkpointing does not. Callers needing checkpointing run non-verbose.
+    stdout is always captured (even in verbose) so we can parse segments and
+    keep the progress display stable; verbose surfaces the raw non-segment lines
+    above the display (or to the debug log) rather than inheriting the terminal.
+    This means per-segment checkpointing and pause now work in verbose too.
 
     Raises:
         TranscriptionPaused: if ``pause_check`` returns True mid-run.
@@ -636,10 +636,31 @@ def _run_whisper_streaming(
         total = int(estimated_duration * 1000)
 
     label = "Resuming transcription" if offset_base > 0 else "Transcribing"
+
+    # Prefer the run's single shared Live display when one is active: drive a
+    # task on it instead of spawning a competing Progress. Fall back to a local
+    # Progress only for standalone calls with no active reporter.
+    from .ui import active_reporter
+
+    reporter = active_reporter()
     progress_ctx = None
     progress = None
     task = None
-    if show_progress and not verbose:
+    shared_task = None
+
+    import sys
+
+    stdout_is_tty = False
+    with contextlib.suppress(Exception):
+        stdout_is_tty = bool(sys.stdout.isatty())
+
+    if reporter is not None and reporter.is_live:
+        shared_task = reporter.task(f"{label}...", total=total)
+        if total and offset_base > 0:
+            shared_task.update(completed=min(offset_base, total - 1))
+    elif show_progress and stdout_is_tty:
+        # Standalone (no active reporter) AND a real terminal: own a local
+        # Progress. Off a TTY (piped/CI) we stay silent so no bar leaks into logs.
         try:
             from rich.progress import (
                 BarColumn,
@@ -664,11 +685,12 @@ def _run_whisper_streaming(
         except ImportError:
             logger.info(f"{label} (install 'rich' for progress display)...")
 
-    # Verbose: inherit stdout so whisper prints directly; only poll for pause.
-    stdout_target = None if verbose else subprocess.PIPE
+    # Always capture stdout so we can parse segments (and keep the bar stable);
+    # verbose surfaces the raw lines above the display via the reporter instead
+    # of inheriting the terminal, so the progress bar is never pushed down.
     proc = subprocess.Popen(
         command,
-        stdout=stdout_target,
+        stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
@@ -681,6 +703,13 @@ def _run_whisper_streaming(
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+
+    def _advance(completed: int) -> None:
+        """Push a position update to whichever display is active."""
+        if shared_task is not None:
+            shared_task.update(completed=completed)
+        elif progress is not None and task is not None and total:
+            progress.update(task, completed=completed)
 
     last_to_ms = offset_base
     try:
@@ -700,28 +729,34 @@ def _run_whisper_streaming(
 
                 seg = parse_whisper_segment_line(line)
                 if seg is None:
+                    # Non-segment line: in verbose, surface it above the live
+                    # display (or to the log) instead of dropping it silently.
+                    if verbose:
+                        stripped = line.rstrip()
+                        if stripped:
+                            if reporter is not None and reporter.is_live:
+                                reporter.log(stripped, style="dim")
+                            else:
+                                logger.debug(stripped)
                     continue
                 last_to_ms = seg["to_ms"]
                 if segment_callback is not None:
                     segment_callback(seg)
-                if progress is not None and task is not None and total:
-                    progress.update(task, completed=min(seg["to_ms"], total - 1))
-        else:
-            # Verbose path: no stdout to read; poll for pause.
-            while proc.poll() is None:
-                if pause_check is not None and pause_check():
-                    _terminate_for_pause()
-                    raise TranscriptionPaused(last_offset_ms=last_to_ms)
-                time.sleep(0.2)
+                if total:
+                    _advance(min(seg["to_ms"], total - 1))
 
         proc.wait()
-        if progress is not None and task is not None and total:
-            progress.update(task, completed=total)
+        if total:
+            _advance(total)
 
         if proc.returncode != 0:
             stderr = proc.stderr.read() if proc.stderr else ""
             raise subprocess.CalledProcessError(proc.returncode, command, stderr=stderr)
     finally:
+        # Hide the finished shared task so the completed bar isn't redrawn under
+        # the run summary; stop a locally-owned Progress.
+        if shared_task is not None:
+            shared_task.finish()
         if progress_ctx is not None:
             progress_ctx.stop()
         if proc.stdout is not None:
@@ -856,8 +891,9 @@ def run_whisper_transcription(
             pause_check=pause_check,
         )
 
-        if verbose:
-            logger.info("✓ Transcription completed successfully.")
+        # The user-facing completion line is emitted once at the workflow level;
+        # keep this as a debug breadcrumb so verbose runs don't double-report it.
+        logger.debug("whisper transcription returned successfully")
 
         return True
 

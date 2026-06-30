@@ -160,19 +160,22 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
             run_uid,
             run_timestamp,
             start_time,
-        )
+        ),
+        verbose=args.verbose,
     )
 
 
-def _run_with_pause_handler(run_fn) -> None:
-    """Run ``run_fn`` with Ctrl-C wired to a clean transcription pause.
+def _run_with_pause_handler(run_fn, verbose: bool = False) -> None:
+    """Run ``run_fn`` under the run's single Live display and a pause-aware SIGINT.
 
-    First Ctrl-C requests a pause (the whisper stream loop stops at the next
-    segment boundary and the job is checkpointed). A second Ctrl-C restores the
-    default handler and hard-quits.
+    The ``RunReporter`` owns one progress display for the whole run so output is
+    stable (no pushed-down bar). First Ctrl-C requests a clean pause (the whisper
+    stream loop stops at the next segment boundary and the job is checkpointed);
+    a second Ctrl-C restores the default handler and hard-quits.
     """
     import signal
 
+    from ..ui import RunReporter
     from ..workflow import request_pause
 
     state = {"count": 0}
@@ -192,6 +195,7 @@ def _run_with_pause_handler(run_fn) -> None:
 
     signal.signal(signal.SIGINT, _handler)
     try:
-        run_fn()
+        with RunReporter(verbose=verbose):
+            run_fn()
     finally:
         signal.signal(signal.SIGINT, original)

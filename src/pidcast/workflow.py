@@ -923,14 +923,12 @@ def process_input_source(
                 start_offset=segment_offset,
                 max_duration=segment_duration,
             )
-            logger.info("\n✓ Local file processed successfully!")
+            log_success("Processed local file")
         elif is_apple_podcasts_url(source):
             logger.info("Resolving Apple Podcasts URL...")
             audio_url, video_info = resolve_apple_podcasts_url(source, args.verbose)
-            logger.info(f"Found: {video_info.title}")
-            logger.info("Downloading podcast audio...")
             audio_file, _ = download_audio(audio_url, "temp_audio.%(ext)s", args.verbose)
-            logger.info("\n✓ Audio downloaded successfully!")
+            log_success("Downloaded audio")
         else:
             logger.info("Downloading audio from YouTube...")
             audio_file, video_info = download_audio(
@@ -942,7 +940,7 @@ def process_input_source(
                 cookies=getattr(args, "cookies", None),
                 chrome_profile=getattr(args, "chrome_profile", None),
             )
-            logger.info("\n✓ Audio downloaded successfully!")
+            log_success("Downloaded audio")
 
         # Apply override if provided
         if video_info_override and video_info:
@@ -957,7 +955,7 @@ def process_input_source(
             if video_info_override.webpage_url:
                 video_info.webpage_url = video_info_override.webpage_url
 
-        logger.info(f"Title: {video_info.title}")
+        log_success(f"Title: {video_info.title}")
 
         # Create smart filename
         smart_filename = create_smart_filename(video_info.title, max_length=60, include_date=True)

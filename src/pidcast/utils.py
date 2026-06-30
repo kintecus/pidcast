@@ -115,26 +115,54 @@ def setup_logging(verbose: bool = False) -> None:
     _LOGGING_CONFIGURED = True
 
 
+def _reporter():
+    """The active RunReporter, or None. Function-local import avoids cycles."""
+    from .ui import active_reporter
+
+    return active_reporter()
+
+
 def log_success(message: str) -> None:
     """Log success message with checkmark."""
-    logger.info(f"✓ {message}")
+    reporter = _reporter()
+    if reporter is not None and reporter.is_live:
+        reporter.log(f"✓ {message}", style="green")
+    else:
+        logger.info(f"✓ {message}")
 
 
 def log_error(message: str) -> None:
     """Log error message with X mark."""
-    logger.error(f"✗ {message}")
+    reporter = _reporter()
+    if reporter is not None and reporter.is_live:
+        reporter.error(message)
+    else:
+        logger.error(f"✗ {message}")
 
 
 def log_warning(message: str) -> None:
     """Log warning message."""
-    logger.warning(f"⚠ {message}")
+    reporter = _reporter()
+    if reporter is not None and reporter.is_live:
+        reporter.warn(message)
+    else:
+        logger.warning(f"⚠ {message}")
 
 
 def log_section(title: str, width: int = 60) -> None:
-    """Log section header with separator line."""
-    logger.info(f"\n{'=' * width}")
-    logger.info(title)
-    logger.info(f"{'=' * width}")
+    """Log a section header.
+
+    With an active Live reporter, render a single clean phase line above the
+    progress region; otherwise fall back to the classic separator-bracketed
+    header (kept for no-Live commands and piped output).
+    """
+    reporter = _reporter()
+    if reporter is not None and reporter.is_live:
+        reporter.phase(title)
+    else:
+        logger.info(f"\n{'=' * width}")
+        logger.info(title)
+        logger.info(f"{'=' * width}")
 
 
 # ============================================================================
