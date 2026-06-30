@@ -23,7 +23,7 @@ Diarization follows the same pluggability: whisper uses pyannote post-hoc, Eleve
 
 - New users can be productive in under 5 minutes with just an ElevenLabs API key. Local-first users keep their existing flow.
 - Workflow code is provider-agnostic. Future providers (Deepgram, AssemblyAI) plug into `providers/` without touching `workflow.py`.
-- The eval matrix in `data/evals/` can compare providers head-to-head on the same audio.
+- The eval matrix (output under the data dir's `evals/`; run `pidcast paths`) can compare providers head-to-head on the same audio.
 
 **Negative:**
 

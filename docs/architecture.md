@@ -10,7 +10,7 @@ This document maps the runtime data flow and the module boundaries. Start here w
 %%{init: {'theme':'base','flowchart':{'curve':'basis','nodeSpacing':60,'rankSpacing':80}}}%%
 flowchart TD
     accTitle: pidcast single-shot transcription and analysis pipeline
-    accDescr: A URL or file is resolved to audio, normalized to WAV, transcribed by the chosen provider, optionally diarized, optionally analyzed by a Groq or Claude model, then written as Markdown to disk or an Obsidian vault. Run history and stats are persisted.
+    accDescr: A URL or file is resolved to audio, normalized to WAV, transcribed by the chosen provider, optionally diarized, optionally analyzed by a Groq or Claude model, then written as Markdown to the XDG data dir or an Obsidian vault. Run history is persisted to a unified runs.json store.
 
     User([User]) -->|pidcast URL_OR_PATH| CLI{{cli.py}}
     CLI --> Workflow{{workflow.py}}
@@ -60,15 +60,14 @@ flowchart TD
 
     Markdown --> Out{--save-to-obsidian?}
     Out -->|yes| Vault[(Obsidian vault)]
-    Out -->|no| Disk[(data/transcripts/)]
+    Out -->|no| Disk[(XDG data dir<br/>transcripts/)]
 
-    Markdown --> Stats[(transcription_stats.json)]
-    Markdown --> History[(history.py)]
+    Markdown --> History[(state/runs.json<br/>unified run history)]
 
     classDef storage fill:#ecfdf5,stroke:#16a34a,color:#064e3b;
     classDef external fill:#fef3c7,stroke:#d97706,color:#78350f;
     classDef orchestrator fill:#ede9fe,stroke:#7c3aed,color:#4c1d95;
-    class Vault,Disk,Stats,History storage;
+    class Vault,Disk,History storage;
     class Whisper,EL,Pyannote,Groq,Claude external;
     class CLI,Workflow orchestrator;
 
@@ -98,7 +97,7 @@ flowchart LR
     Sync --> Workflow{{workflow.py}}
 
     User -->|pidcast lib digest| Digest(digest.py)
-    Digest --> Hist[(processing history)]
+    Digest --> Hist[(state/runs.json<br/>run history)]
 
     classDef storage fill:#ecfdf5,stroke:#16a34a,color:#064e3b;
     classDef external fill:#fef3c7,stroke:#d97706,color:#78350f;
