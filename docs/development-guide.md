@@ -90,7 +90,7 @@ scripts/              # migrate_data.py and other one-shot helpers
 ```
 
 There is no repo-local `data/` dir: all generated artifacts (transcripts, audio,
-logs, run history, and eval output) live in the XDG data dir. Run `pidcast paths`.
+logs, run history, and eval output) live in the XDG data dir. Run `pidcast info`.
 
 ## Project conventions
 
@@ -98,7 +98,7 @@ logs, run history, and eval output) live in the XDG data dir. Run `pidcast paths
 - **LLM responses:** all analysis prompts return JSON with `analysis` and `contextual_tags` fields. Add fields via `config/prompts.yaml`, not via prompt-string surgery in code.
 - **Chunking threshold:** 120 000 characters triggers semantic chunking with synthesis. Threshold lives in `config.py`.
 - **Filenames:** smart-prefixed `YYYY-MM-DD_Title.md`. Logic in `utils.py`.
-- **Transcripts canonical location:** the XDG data dir, `$XDG_DATA_HOME/pidcast/transcripts/` (default `~/.local/share/pidcast/transcripts/`; override the tree with `PIDCAST_DATA_DIR`; run `pidcast paths`). Audio (`audio/`), logs (`logs/`), and the unified run history (`state/runs.json`) live alongside it; config and the podcast library stay in `~/.config/pidcast/`. The repo gitignores stray `YYYY-MM-DD_*.md` files at the root.
+- **Transcripts canonical location:** the XDG data dir, `$XDG_DATA_HOME/pidcast/transcripts/` (default `~/.local/share/pidcast/transcripts/`; override the tree with `PIDCAST_DATA_DIR`; run `pidcast info`). Audio (`audio/`), logs (`logs/`), and the unified run history (`state/runs.json`) live alongside it; config and the podcast library stay in `~/.config/pidcast/`. The repo gitignores stray `YYYY-MM-DD_*.md` files at the root.
 
 ## Provider comparison evals
 
@@ -110,7 +110,7 @@ uv run pidcast-eval --run-matrix                              # all prompt × mo
 uv run pidcast-eval --run-matrix --models "llama-3.3-70b-versatile,mixtral-8x7b-32768"
 ```
 
-Eval fixtures (prompts registry + reference transcripts) ship inside the package at `src/pidcast/evals/data/` and resolve via `importlib.resources`, so `pidcast-eval` works from an installed wheel as well as a source checkout. Generated output (runs, batches, comparisons, `cost_tracking.json`) is written under the XDG data dir at `<data-dir>/evals/` (run `pidcast paths`). See `src/pidcast/evals/` for the underlying machinery and `src/pidcast/evals/paths.py` for path resolution.
+Eval fixtures (prompts registry + reference transcripts) ship inside the package at `src/pidcast/evals/data/` and resolve via `importlib.resources`, so `pidcast-eval` works from an installed wheel as well as a source checkout. Generated output (runs, batches, comparisons, `cost_tracking.json`) is written under the XDG data dir at `<data-dir>/evals/` (run `pidcast info`). See `src/pidcast/evals/` for the underlying machinery and `src/pidcast/evals/paths.py` for path resolution.
 
 ## CI
 
