@@ -97,14 +97,19 @@ class WhisperTranscriptionProvider:
                 "Required for speaker diarization with Whisper."
             )
 
-        start_time = time.time()
         json_file = Path(f"{temp_output}.json")
 
         if self._checkpoint is not None:
             # Resumable path: stream segments into the manifest's JSONL, resume
-            # from the persisted offset, then materialize the merged JSON.
+            # from the persisted offset, then materialize the merged JSON. The
+            # leg's compute time is accumulated into the manifest inside
+            # _transcribe_checkpointed; report the CUMULATIVE total across all
+            # resume sessions so a multi-session run's duration reflects the true
+            # end-to-end transcription time (not just this leg).
             self._transcribe_checkpointed(audio_file, output_format, temp_output, language, verbose)
+            duration = self._checkpoint.transcription.elapsed_seconds
         else:
+            start_time = time.time()
             try:
                 run_whisper_transcription(
                     audio_file,
@@ -120,8 +125,7 @@ class WhisperTranscriptionProvider:
                 )
             except Exception as e:
                 raise TranscriptionError(f"Whisper transcription failed: {e}") from e
-
-        duration = time.time() - start_time
+            duration = time.time() - start_time
 
         # Save whisper JSON before diarization (so it survives diarization failures)
         whisper_json_path = None
@@ -216,6 +220,12 @@ class WhisperTranscriptionProvider:
             manifest.transcription.last_offset_ms = seg["to_ms"]
             manifest.transcription.segment_count += 1
 
+        # Time this leg and fold it into the manifest's cumulative total in a
+        # finally so a pause (TranscriptionPaused) or crash still records the
+        # active compute it consumed. Without this, a multi-session run would
+        # report only the final leg's duration - skewing the estimate-vs-actual
+        # line and poisoning the ETA training data with a falsely-fast ratio.
+        leg_start = time.time()
         try:
             run_whisper_transcription(
                 audio_file,
@@ -232,9 +242,11 @@ class WhisperTranscriptionProvider:
                 **self._opts,
             )
         except Exception:
-            # TranscriptionPaused and real failures both propagate; the JSONL holds
-            # everything decoded so far either way.
+            # TranscriptionPaused and real failures both propagate; the JSONL
+            # holds everything decoded so far either way.
             raise
+        finally:
+            manifest.add_transcription_elapsed(time.time() - leg_start)
 
         # Materialize the full, de-overlapped whisper JSON from the JSONL (single
         # source of truth across the resume seam).
