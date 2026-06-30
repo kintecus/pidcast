@@ -21,6 +21,13 @@ logger = logging.getLogger(__name__)
 
 _TRANSCRIPT_GLOBS = ("*.md", "*.whisper.json")
 _AUDIO_GLOBS = ("*.wav",)
+# Date-prefixed stray transcripts that landed at the repo root (the same
+# YYYY-MM-DD_ pattern .gitignore guards). Restricting to this pattern avoids
+# sweeping up README.md / CLAUDE.md / etc. at the root.
+_STRAY_ROOT_GLOBS = (
+    "20[0-9][0-9]-[01][0-9]-[0-3][0-9]_*.md",
+    "20[0-9][0-9]-[01][0-9]-[0-3][0-9]_*.whisper.json",
+)
 # Path keys in a record that may hold an absolute in-repo path to rewrite.
 _PATH_KEYS = ("transcript_path", "output_file", "analysis_file", "audio_path")
 
@@ -156,6 +163,13 @@ def migrate_data(
                 moved = _move_one(src, new_audio / src.name, dry_run, report)
                 if moved:
                     report.audio_moved += 1
+
+    # --- Move stray date-prefixed transcripts left at the repo root --------
+    for pattern in _STRAY_ROOT_GLOBS:
+        for src in sorted(legacy_repo_root.glob(pattern)):
+            moved = _move_one(src, new_transcripts / src.name, dry_run, report)
+            if moved:
+                report.transcripts_moved += 1
 
     # --- Move error log ----------------------------------------------------
     legacy_errors = legacy_logs / "errors.jsonl"

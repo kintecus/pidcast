@@ -140,6 +140,25 @@ def test_migrate_idempotent(tmp_path):
     assert report2.audio_moved == 0
 
 
+def test_migrate_moves_stray_root_transcripts(tmp_path):
+    repo, _ = _legacy_repo(tmp_path)
+    xdg = tmp_path / "xdg"
+    # Date-prefixed strays at the repo root (not in data/transcripts).
+    (repo / "2026-02-02_Stray.md").write_text("stray transcript")
+    (repo / "2026-02-02_Stray.whisper.json").write_text("{}")
+    # A non-transcript root file that must NOT be swept up.
+    (repo / "README.md").write_text("readme")
+
+    report = migrate_data(legacy_repo_root=repo, data_dir=xdg, dry_run=False)
+
+    assert (xdg / "transcripts" / "2026-02-02_Stray.md").exists()
+    assert (xdg / "transcripts" / "2026-02-02_Stray.whisper.json").exists()
+    # README stays put.
+    assert (repo / "README.md").exists()
+    assert not (xdg / "transcripts" / "README.md").exists()
+    assert report.transcripts_moved >= 4  # 2 from data/ + 2 strays
+
+
 def test_migrate_missing_legacy_dirs(tmp_path):
     repo = tmp_path / "empty-repo"
     repo.mkdir()
