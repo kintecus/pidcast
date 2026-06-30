@@ -187,6 +187,10 @@ class RunHistory:
         self._runs.append(stats.to_dict())
         self.save()
 
+    def append_run_dict(self, entry: dict) -> None:
+        """Append a raw run dict to the runs list (used by migration). No save."""
+        self._runs.append(entry)
+
     def find_by_source(self, source_id: str) -> RunRecord | None:
         """Most recent successful run for a source id, else None."""
         for entry in reversed(self._runs):

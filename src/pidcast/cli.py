@@ -1600,6 +1600,40 @@ def print_paths() -> None:
     print("\n  Override the data dir with PIDCAST_DATA_DIR or XDG_DATA_HOME.")
 
 
+def cmd_migrate_data(dry_run: bool = False) -> None:
+    """Migrate legacy in-repo data to the XDG data dir ('pidcast migrate-data')."""
+    from .config import DATA_DIR, HISTORY_FILE, PROJECT_ROOT
+    from .migrate import migrate_data
+
+    legacy_transcripts = PROJECT_ROOT / "data" / "transcripts"
+    print("\npidcast migrate-data" + (" (dry run)" if dry_run else ""))
+    print("=" * 40)
+    print(f"  from: {PROJECT_ROOT / 'data'}")
+    print(f"  to:   {DATA_DIR}")
+
+    if not legacy_transcripts.is_dir() and not HISTORY_FILE.exists():
+        print("\n  Nothing to migrate (no legacy data/transcripts or history.json found).")
+        return
+
+    report = migrate_data(
+        legacy_repo_root=PROJECT_ROOT,
+        data_dir=DATA_DIR,
+        legacy_history_file=HISTORY_FILE,
+        dry_run=dry_run,
+    )
+
+    print()
+    print(report.summary())
+    for note in report.notes:
+        print(f"  ! {note}")
+
+    if dry_run:
+        print("\n  Dry run - nothing was moved. Re-run without --dry-run to apply.")
+    else:
+        print("\n  Done. Run 'pidcast paths' to confirm, 'pidcast doctor' to verify integrity.")
+        print("  The legacy history.json is left in place; remove it manually once happy.")
+
+
 def main() -> None:
     """Main entry point for pidcast CLI."""
     import sys
@@ -1611,6 +1645,13 @@ def main() -> None:
 
             load_dotenv()
             print_paths()
+            return
+        if sys.argv[1] == "migrate-data":
+            from dotenv import load_dotenv
+
+            load_dotenv()
+            setup_logging("--verbose" in sys.argv or "-v" in sys.argv)
+            cmd_migrate_data(dry_run="--dry-run" in sys.argv)
             return
         if sys.argv[1] == "doctor":
             from dotenv import load_dotenv
