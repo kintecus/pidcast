@@ -171,3 +171,97 @@ class RunReporter:
             self._console.print(f"[red]✗ {message}[/red]")
         else:
             logger.error(message)
+
+
+# ---------------------------------------------------------------------------
+# Single-keypress selector
+# ---------------------------------------------------------------------------
+
+
+def _read_raw_key() -> str:
+    """Read one keypress from stdin in cbreak mode and return it as a string.
+
+    Restores the terminal in a ``finally`` so a ``KeyboardInterrupt`` mid-read
+    never leaves stdin in raw mode. Returns ``""`` on EOF. Raises if termios is
+    unavailable or the terminal can't enter cbreak (caller falls back to line
+    input).
+    """
+    import sys
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        ch = sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    return ch
+
+
+def select_key(prompt: str, choices: list[tuple[str, str]], *, default: str) -> str:
+    """Single-keypress selector. Returns the chosen key (lowercase).
+
+    Args:
+        prompt: Hint line printed once in the non-TTY fallback (may be empty).
+        choices: Ordered ``(key, label)`` pairs; each ``key`` is one lowercase char.
+        default: Key returned on Enter / empty input. Must be a choice key.
+
+    Behaviour:
+        - TTY: reads one raw key (no Enter). Case-insensitive match. Enter selects
+          the default. Esc / Ctrl-C / EOF select the cancel key (``"c"`` if present,
+          else the default). An unrecognized key re-reads until a valid/exit key.
+        - Non-TTY or no termios: prints the hint once, then loops on ``input()``;
+          the first character is matched the same way. Empty line → default,
+          EOF → cancel/default.
+    """
+    import sys
+
+    keys = {k.lower() for k, _ in choices}
+    cancel = "c" if "c" in keys else default
+
+    def _resolve(ch: str) -> str | None:
+        """Map a single character to a choice key, or None to re-read."""
+        if ch in ("\r", "\n"):
+            return default
+        if ch in ("\x1b", "\x03"):  # Esc, Ctrl-C
+            return cancel
+        low = ch.lower()
+        if low in keys:
+            return low
+        return None
+
+    use_tty = False
+    try:
+        use_tty = bool(sys.stdin.isatty())
+    except Exception:
+        use_tty = False
+
+    if use_tty:
+        try:
+            while True:
+                ch = _read_raw_key()
+                if ch == "":  # EOF
+                    return cancel
+                resolved = _resolve(ch)
+                if resolved is not None:
+                    return resolved
+        except Exception:
+            # termios import / tcgetattr failure (e.g. Windows, odd terminal) ->
+            # fall through to the line-based input() fallback below.
+            pass
+
+    # Non-TTY / no-termios fallback: line-based input.
+    if prompt:
+        print(prompt)
+    while True:
+        try:
+            line = input()
+        except EOFError:
+            return cancel
+        if line == "":
+            return default
+        resolved = _resolve(line[0])
+        if resolved is not None:
+            return resolved
