@@ -6,6 +6,7 @@ import re
 import subprocess
 import time
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from .config import (
@@ -352,6 +353,18 @@ def build_ffmpeg_audio_conversion_command(
 # TIME ESTIMATION
 # ============================================================================
 
+# Recency-weighted estimation tunables. Historical runs are weighted by a
+# half-life decay so recent runs dominate and stale (often unlabeled) runs fade
+# out instead of polluting the average. A median-anchored outlier filter drops
+# flukes (thermal throttle, background load) but only kicks in once a tier has
+# enough samples for the median to be meaningful.
+ETA_HALFLIFE_DAYS = 30.0  # weight halves every 30 days of age
+ETA_OUTLIER_FACTOR = 3.0  # keep ratios within [median/f, median*f]
+ETA_OUTLIER_MIN_N = 5  # only reject outliers once a tier has >= this many ratios
+ETA_MIN_RECORDS = 3  # a tier must have >= this many raw records to fire
+ETA_FLOOR_WEIGHT = 1.0  # weight for runs with no/unparseable timestamp
+ETA_WEIGHT_EPSILON = 1e-9  # below this total weight, fall back to unweighted mean
+
 
 def estimate_transcription_time(
     stats_file: str | Path,
@@ -359,33 +372,45 @@ def estimate_transcription_time(
     provider: str = "whisper",
     whisper_model: str | None = None,
     diarize: bool = False,
-    max_records: int = 100,
+    max_records: int = 300,
+    now: datetime | None = None,
 ) -> float | None:
-    """Estimate transcription time based on historical data, filtered by provider.
+    """Estimate transcription time from history, recency-weighted and provider-aware.
 
     Uses tiered filtering with fallback to provide the most relevant estimate:
-    1. Provider + whisper_model + diarization (if whisper with model specified)
+    1. Provider + whisper_model + diarization (whisper with a named model only;
+       runs without that model are excluded so they can't pollute the average)
     2. Provider + diarization
     3. Provider only
     4. All records (cold-start fallback)
 
-    Each tier requires >= 3 records to be used.
+    Within a tier, each run's audio-to-transcription ratio is weighted by a
+    half-life decay on its ``run_timestamp`` (``ETA_HALFLIFE_DAYS``) so recent
+    runs dominate and stale, often-unlabeled migrated runs fade out. Outlier
+    ratios are dropped once a tier is large enough (``ETA_OUTLIER_MIN_N``). A
+    tier fires on its *raw* record count (``ETA_MIN_RECORDS``); weighting and
+    outlier rejection only refine the average, never starve the gate.
 
     Args:
-        stats_file: Path to statistics JSON file
-        audio_duration: Duration of audio in seconds
-        provider: Transcription provider ("whisper" or "elevenlabs")
-        whisper_model: Whisper model name (e.g. "large-v3") for model-specific estimates
-        diarize: Whether diarization is enabled (affects whisper speed significantly)
-        max_records: Maximum historical records to consider
+        stats_file: Path to the run-history store.
+        audio_duration: Duration of audio in seconds.
+        provider: Transcription provider ("whisper" or "elevenlabs").
+        whisper_model: Whisper model name (e.g. "large-v3") for model-specific estimates.
+        diarize: Whether diarization is enabled (affects whisper speed significantly).
+        max_records: Ceiling on candidate runs after sorting newest-first.
+        now: Reference instant for recency decay (defaults to ``datetime.now()``).
+            Tz-aware values are normalized to naive-local before comparison.
 
     Returns:
-        Estimated time in seconds, or None if not enough data
+        Estimated time in seconds, or None if not enough data.
     """
     from .history import RunHistory
 
-    existing_stats = RunHistory(stats_file).get_runs_for_estimation()
+    if now is None:
+        now = datetime.now()
+    now = _as_naive(now)
 
+    existing_stats = RunHistory(stats_file).get_runs_for_estimation()
     if not existing_stats:
         return None
 
@@ -394,47 +419,128 @@ def estimate_transcription_time(
         for s in existing_stats
         if s.get("success") and "transcription_duration" in s and "audio_duration" in s
     ]
-
     if not successful_runs:
         return None
 
-    recent_runs = successful_runs[-max_records:]
+    # Sort newest-first so the max_records ceiling keeps the most relevant runs;
+    # runs with no/unparseable timestamp sort last (treated as oldest).
+    successful_runs.sort(key=lambda r: _run_age_days(r, now), reverse=False)
+    recent_runs = successful_runs[:max_records]
 
-    min_records = 3
+    def matches_provider(r: dict) -> bool:
+        return (r.get("transcription_provider") or "whisper") == provider
 
-    # Tier 1: provider + whisper_model + diarization (most specific)
+    # Tier 1: provider + named whisper_model + diarization (most specific).
     if provider == "whisper" and whisper_model:
         tier1 = [
             r
             for r in recent_runs
-            if (r.get("transcription_provider") or "whisper") == provider
+            if matches_provider(r)
             and r.get("whisper_model") == whisper_model
             and r.get("diarization_performed", False) == diarize
         ]
-        if len(tier1) >= min_records:
-            return _avg_ratio(tier1, audio_duration)
+        if len(tier1) >= ETA_MIN_RECORDS:
+            return _weighted_avg_ratio(tier1, audio_duration, now)
 
-    # Tier 2: provider + diarization
+    # Tier 2: provider + diarization.
     tier2 = [
         r
         for r in recent_runs
-        if (r.get("transcription_provider") or "whisper") == provider
-        and r.get("diarization_performed", False) == diarize
+        if matches_provider(r) and r.get("diarization_performed", False) == diarize
     ]
-    if len(tier2) >= min_records:
-        return _avg_ratio(tier2, audio_duration)
+    if len(tier2) >= ETA_MIN_RECORDS:
+        return _weighted_avg_ratio(tier2, audio_duration, now)
 
-    # Tier 3: provider only
-    tier3 = [r for r in recent_runs if (r.get("transcription_provider") or "whisper") == provider]
-    if len(tier3) >= min_records:
-        return _avg_ratio(tier3, audio_duration)
+    # Tier 3: provider only.
+    tier3 = [r for r in recent_runs if matches_provider(r)]
+    if len(tier3) >= ETA_MIN_RECORDS:
+        return _weighted_avg_ratio(tier3, audio_duration, now)
 
-    # Tier 4: all records (cold-start fallback)
-    return _avg_ratio(recent_runs, audio_duration)
+    # Tier 4: all records (cold-start fallback).
+    return _weighted_avg_ratio(recent_runs, audio_duration, now)
+
+
+def _as_naive(dt: datetime) -> datetime:
+    """Coerce a datetime to naive-local so naive/aware mixes never raise."""
+    if dt.tzinfo is not None:
+        return dt.astimezone().replace(tzinfo=None)
+    return dt
+
+
+def _run_age_days(run: dict, now: datetime) -> float:
+    """Age of a run in days. Missing/unparseable timestamps sort as oldest."""
+    ts = run.get("run_timestamp")
+    if not ts:
+        return float("inf")
+    try:
+        parsed = _as_naive(datetime.fromisoformat(ts))
+    except (ValueError, TypeError):
+        return float("inf")
+    return max(0.0, (now - parsed).total_seconds() / 86400.0)
+
+
+def _recency_weight(run: dict, now: datetime) -> float:
+    """Half-life decay weight for a run. Untimestamped runs get the floor weight.
+
+    When a whole tier is untimestamped, every run gets ``ETA_FLOOR_WEIGHT`` and
+    the weighted mean collapses to the simple mean (preserving legacy behavior).
+    """
+    age = _run_age_days(run, now)
+    if age == float("inf"):
+        return ETA_FLOOR_WEIGHT
+    return 0.5 ** (age / ETA_HALFLIFE_DAYS)
+
+
+def _reject_outliers(pairs: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Drop (ratio, weight) pairs whose ratio is far from the median.
+
+    Only applied once there are enough samples for the median to mean something
+    (``ETA_OUTLIER_MIN_N``); below that, every pair is kept. Bounds inclusive.
+    """
+    if len(pairs) < ETA_OUTLIER_MIN_N:
+        return pairs
+    ratios = sorted(r for r, _ in pairs)
+    mid = len(ratios) // 2
+    median = ratios[mid] if len(ratios) % 2 else (ratios[mid - 1] + ratios[mid]) / 2
+    if median <= 0:
+        return pairs
+    lo, hi = median / ETA_OUTLIER_FACTOR, median * ETA_OUTLIER_FACTOR
+    return [(r, w) for r, w in pairs if lo <= r <= hi]
+
+
+def _weighted_avg_ratio(runs: list[dict], audio_duration: float, now: datetime) -> float | None:
+    """Recency-weighted, outlier-rejected estimate from historical runs.
+
+    Falls back to an unweighted mean if total weight underflows (e.g. every run
+    is ancient), so a far-past history still yields a sane number.
+    """
+    pairs = [
+        (run["transcription_duration"] / run["audio_duration"], _recency_weight(run, now))
+        for run in runs
+        if run["audio_duration"] > 0
+    ]
+    if not pairs:
+        return None
+
+    pairs = _reject_outliers(pairs)
+    if not pairs:
+        return None
+
+    total_weight = sum(w for _, w in pairs)
+    if total_weight < ETA_WEIGHT_EPSILON:
+        # Weights underflowed (all runs far past many half-lives) -> equal-weight.
+        mean_ratio = sum(r for r, _ in pairs) / len(pairs)
+    else:
+        mean_ratio = sum(r * w for r, w in pairs) / total_weight
+    return audio_duration * mean_ratio
 
 
 def _avg_ratio(runs: list[dict], audio_duration: float) -> float | None:
-    """Compute estimated transcription time from average ratio of historical runs."""
+    """Compute estimated transcription time from the simple average ratio.
+
+    Unweighted helper retained for direct callers/tests; the tiered estimator
+    uses ``_weighted_avg_ratio``.
+    """
     ratios = []
     for run in runs:
         audio_dur = run["audio_duration"]
