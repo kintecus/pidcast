@@ -962,6 +962,41 @@ def _analyze_with_chunking_rich(
     This is a thin wrapper that sets up Rich progress and delegates to
     _analyze_with_chunking with a progress callback.
     """
+    from .ui import active_reporter
+
+    # Estimate chunk count for the progress total.
+    effective_limit = selector.get_effective_token_limit(preferred_model)
+    chunk_target_tokens = max(effective_limit - 3000, 2000)
+    estimated_chunks = max(1, estimate_tokens(transcript) // chunk_target_tokens)
+
+    reporter = active_reporter()
+    if reporter is not None and reporter.is_live:
+        # Drive the run's single shared display instead of a competing Progress.
+        shared = reporter.task("Analyzing chunks...", total=estimated_chunks)
+
+        def progress_callback(prog: ChunkProgress) -> None:
+            if prog.phase == "chunk":
+                shared.update(
+                    completed=prog.current,
+                    description=f"Analyzing chunk {prog.current}/{prog.total}",
+                )
+            elif prog.phase == "synthesis":
+                shared.update(description="Synthesizing results...")
+
+        try:
+            return _analyze_with_chunking(
+                transcript,
+                video_info,
+                prompts_config,
+                client,
+                selector,
+                preferred_model,
+                verbose,
+                progress_callback=progress_callback,
+            )
+        finally:
+            shared.finish()
+
     try:
         from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
     except ImportError:
@@ -970,7 +1005,7 @@ def _analyze_with_chunking_rich(
             transcript, video_info, prompts_config, client, selector, preferred_model, verbose
         )
 
-    # Create progress context and callback
+    # Create progress context and callback (standalone: own the Progress).
     progress_context = Progress(
         SpinnerColumn(),
         TextColumn("[cyan]{task.description}"),
@@ -992,10 +1027,6 @@ def _analyze_with_chunking_rich(
             progress_context.update(task_id, description="Synthesizing results...")
 
     with progress_context as progress:
-        # Estimate chunks for progress bar (rough estimate based on token limit)
-        effective_limit = selector.get_effective_token_limit(preferred_model)
-        chunk_target_tokens = max(effective_limit - 3000, 2000)
-        estimated_chunks = max(1, estimate_tokens(transcript) // chunk_target_tokens)
         task_id = progress.add_task("Analyzing chunks...", total=estimated_chunks)
 
         return _analyze_with_chunking(

@@ -153,7 +153,7 @@ Transcripts whose text length exceeds **120 000 characters** are routed through 
 | Audio normalize | `ffmpeg: command not found` | `pidcast doctor` flags it |
 | Transcription (whisper) | Missing model file | `pidcast doctor` flags it; `setup.py` can download |
 | Transcription (elevenlabs) | 401, 413 (payload too large) | `transcription.py` retries with smaller chunks for 413 |
-| Diarization | HUGGINGFACE_TOKEN missing or model license not accepted | Raises `DiarizationError`; see `--diarize-existing` to retry separately |
+| Diarization | HUGGINGFACE_TOKEN missing or model license not accepted | Raises `DiarizationError`; see `pidcast diarize <transcript>` to retry separately |
 | Analysis | Rate limit, JSON parse failure | `model_selector.py` falls back through `config/models.yaml` chain |
 
 ## Related docs

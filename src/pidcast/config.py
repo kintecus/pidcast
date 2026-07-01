@@ -122,6 +122,46 @@ def ensure_data_dirs() -> None:
         directory.mkdir(parents=True, exist_ok=True)
 
 
+def resolve_output_dir(args: Any) -> Path:
+    """Resolve the transcript output directory.
+
+    Precedence (highest first):
+      1. ``--output-dir`` flag
+      2. ``config.yaml``'s ``output_dir`` (an explicit value the user set),
+         UNLESS it points at the legacy in-repo ``data/transcripts`` dir - older
+         configs pinned that absolute path before storage moved to the XDG data
+         dir, so we treat it as stale and fall through rather than sending new
+         transcripts back into the source tree.
+      3. the XDG ``TRANSCRIPTS_DIR`` default
+
+    Never falls back to the current working directory, so a run with no flag
+    lands artifacts in the canonical data dir instead of wherever you happen to
+    be standing.
+    """
+    flag = getattr(args, "output_dir", None)
+    if flag:
+        return Path(flag)
+
+    # Function-local import: config_manager imports constants from this module,
+    # so a top-level import would be circular.
+    from .config_manager import ConfigManager
+
+    configured = ConfigManager.load_config().get("output_dir")
+    if configured and not _is_legacy_repo_path(Path(configured), PROJECT_ROOT):
+        return Path(configured)
+
+    return TRANSCRIPTS_DIR
+
+
+def _is_legacy_repo_path(path: Path, project_root: Path) -> bool:
+    """True if ``path`` is the old in-repo data/transcripts location (now stale)."""
+    legacy = project_root / "data" / "transcripts"
+    try:
+        return path.resolve() == legacy.resolve()
+    except OSError:
+        return False
+
+
 # ----------------------------------------------------------------------------
 # Backward-compatibility aliases (deprecated; prefer the names above).
 # ----------------------------------------------------------------------------
