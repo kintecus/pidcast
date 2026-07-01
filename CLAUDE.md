@@ -16,17 +16,20 @@ Run with `uv run pidcast <input>`. Useful entry points:
 
 | Command | Purpose |
 |---------|---------|
-| `pidcast <URL_OR_PATH>` | Transcribe + analyze |
+| `pidcast <URL_OR_PATH>` | Transcribe + analyze (bare = `transcribe`) |
+| `pidcast transcribe <URL_OR_PATH>` | Transcribe + analyze (explicit verb) |
 | `pidcast setup` | Interactive setup wizard (env, deps, API keys) |
 | `pidcast doctor` | Diagnose tooling/env configuration |
-| `pidcast --analyze-existing transcript.md` | Re-analyze without re-transcribing |
-| `pidcast --diarize-existing transcript.md [--audio file]` | Retry diarization only |
-| `pidcast --test-segment [MIN] [--start-at MIN]` | Dry-run transcription on a slice |
-| `pidcast --transcription-provider {whisper,elevenlabs}` | Pick transcription backend |
-| `pidcast --vad [--vad-threshold N]` | Whisper anti-hallucination: strip silence via VAD (needs `WHISPER_VAD_MODEL`) |
-| `pidcast --provider {groq,claude}` | Pick LLM analysis backend |
+| `pidcast info` | Print resolved data/config dirs |
+| `pidcast analyze transcript.md` | Re-analyze without re-transcribing |
+| `pidcast diarize transcript.md [--audio file]` | Retry diarization only |
+| `pidcast transcribe <input> --test [MIN] [--start-at MIN]` | Dry-run transcription on a slice |
+| `pidcast transcribe <input> --transcription-provider {whisper,elevenlabs}` | Pick transcription backend |
+| `pidcast transcribe <input> --provider {groq,claude}` | Pick LLM analysis backend |
 | `pidcast lib {add,list,show,remove,sync,process,digest}` | Manage podcast subscriptions |
-| `pidcast -L \| -M \| -W \| -P` | List analysis types / LLM models / Whisper models / presets |
+| `pidcast list {analyses,models,whisper-models,presets,profiles}` | List analysis types / LLM models / Whisper models / presets / Chrome profiles |
+
+The CLI is verb-first (one `argparse` subparser per verb, wired in `cli.py` via `set_defaults(func=...)`); bare `pidcast <input>` injects the `transcribe` verb. Advanced whisper-tuning flags (`--vad`, `--vad-threshold`, `--temperature`, `--no-speech-thold`, `--no-fallback`, `--whisper-threads`) are hidden from `--help` (still settable; supply via config.yaml presets).
 
 Environment: copy `.env.example` → `.env`. See [docs/development-guide.md](docs/development-guide.md) for the full var list.
 
@@ -44,7 +47,9 @@ pre-commit install           # enable pre-commit hooks (ruff, mermaid)
 
 Source lives under `src/pidcast/`. Hot-path modules (read these first when debugging a workflow):
 
-- `cli.py` — argparse surface; dispatches to `workflow.py` and the `lib` subcommands
+- `cli.py` — thin argparse surface: builds the verb subparser tree + shared parent parsers, then `args.func(args)`
+- `commands/` — one module per verb (`transcribe`, `analyze`, `diarize`, `listing`, `info`, `lib`); handler bodies live here, not in `cli.py`
+- `duplicate.py` — duplicate-detection prompt UI (consumed by `commands/transcribe.py`)
 - `workflow.py` — orchestration: download → transcribe → diarize → analyze → write
 - `transcription.py` + `providers/` — provider dispatch for whisper/ElevenLabs
 - `diarization.py` — pyannote integration; consumes whisper JSON or ElevenLabs speakers
@@ -66,12 +71,12 @@ Source lives under `src/pidcast/`. Hot-path modules (read these first when debug
 - **Chunking threshold:** transcripts > 120k chars use semantic chunking with synthesis.
 - **LLM responses:** every analysis prompt returns JSON with `analysis` and `contextual_tags` fields.
 - **Filenames:** smart-filtered with `YYYY-MM-DD_Title.md` date prefix.
-- **Transcripts location:** the canonical store is the XDG data dir, `$XDG_DATA_HOME/pidcast/transcripts/` (default `~/.local/share/pidcast/transcripts/`; override with `PIDCAST_DATA_DIR`; run `pidcast paths` to print the resolved dirs). Audio, logs, and the unified run history (`state/runs.json`) live alongside it under the data dir. Never drop stray transcripts in the repo root (ignored via `.gitignore`).
+- **Transcripts location:** the canonical store is the XDG data dir, `$XDG_DATA_HOME/pidcast/transcripts/` (default `~/.local/share/pidcast/transcripts/`; override with `PIDCAST_DATA_DIR`; run `pidcast info` to print the resolved dirs). Audio, logs, and the unified run history (`state/runs.json`) live alongside it under the data dir. Never drop stray transcripts in the repo root (ignored via `.gitignore`).
 - **Linting:** ruff is the single source of truth (config in `pyproject.toml` under `[tool.ruff]`).
 
 ## Data handling
 
-The transcripts dir (`$XDG_DATA_HOME/pidcast/transcripts/`, run `pidcast paths`) contains large text files (some > 200 KB). The repo's `data/transcripts/` may still hold pre-migration files. **Do NOT read these into context** unless the user explicitly approves a specific file. For test fixtures, ask the user to point at one or create a dedicated minimal fixture under `tests/`.
+The transcripts dir (`$XDG_DATA_HOME/pidcast/transcripts/`, run `pidcast info`) contains large text files (some > 200 KB). The repo's `data/transcripts/` may still hold pre-migration files. **Do NOT read these into context** unless the user explicitly approves a specific file. For test fixtures, ask the user to point at one or create a dedicated minimal fixture under `tests/`.
 
 ## Further reading
 

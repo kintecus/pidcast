@@ -105,7 +105,7 @@ class ConfigManager:
                 f.write("# RSS feed cache duration (hours)\n")
                 f.write(f"feed_cache_hours: {config['feed_cache_hours']}\n\n")
                 f.write("# Chrome profile for cookie extraction (display name or directory name)\n")
-                f.write("# Run 'pidcast --list-chrome-profiles' to see available profiles\n")
+                f.write("# Run 'pidcast list profiles' to see available profiles\n")
                 f.write("chrome_profile: null\n")
 
             logger.info(f"Created default config at {CONFIG_FILE}")

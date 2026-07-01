@@ -115,26 +115,54 @@ def setup_logging(verbose: bool = False) -> None:
     _LOGGING_CONFIGURED = True
 
 
+def _reporter():
+    """The active RunReporter, or None. Function-local import avoids cycles."""
+    from .ui import active_reporter
+
+    return active_reporter()
+
+
 def log_success(message: str) -> None:
     """Log success message with checkmark."""
-    logger.info(f"✓ {message}")
+    reporter = _reporter()
+    if reporter is not None and reporter.is_live:
+        reporter.log(f"✓ {message}", style="green")
+    else:
+        logger.info(f"✓ {message}")
 
 
 def log_error(message: str) -> None:
     """Log error message with X mark."""
-    logger.error(f"✗ {message}")
+    reporter = _reporter()
+    if reporter is not None and reporter.is_live:
+        reporter.error(message)
+    else:
+        logger.error(f"✗ {message}")
 
 
 def log_warning(message: str) -> None:
     """Log warning message."""
-    logger.warning(f"⚠ {message}")
+    reporter = _reporter()
+    if reporter is not None and reporter.is_live:
+        reporter.warn(message)
+    else:
+        logger.warning(f"⚠ {message}")
 
 
 def log_section(title: str, width: int = 60) -> None:
-    """Log section header with separator line."""
-    logger.info(f"\n{'=' * width}")
-    logger.info(title)
-    logger.info(f"{'=' * width}")
+    """Log a section header.
+
+    With an active Live reporter, render a single clean phase line above the
+    progress region; otherwise fall back to the classic separator-bracketed
+    header (kept for no-Live commands and piped output).
+    """
+    reporter = _reporter()
+    if reporter is not None and reporter.is_live:
+        reporter.phase(title)
+    else:
+        logger.info(f"\n{'=' * width}")
+        logger.info(title)
+        logger.info(f"{'=' * width}")
 
 
 # ============================================================================
@@ -760,11 +788,12 @@ def resolve_analysis_type(user_input: str, prompts_file: Path | None = None) -> 
         if suggestion:
             raise ValueError(
                 f"Unknown analysis type: '{user_input}'. Did you mean '{suggestion}'?\n"
-                f"Use -L to list all available types."
+                f"Run 'pidcast list analyses' to list all available types."
             )
         else:
             raise ValueError(
-                f"Unknown analysis type: '{user_input}'.\nUse -L to list all available types."
+                f"Unknown analysis type: '{user_input}'.\n"
+                f"Run 'pidcast list analyses' to list all available types."
             )
 
     except FileNotFoundError:
@@ -833,11 +862,12 @@ def resolve_model_name(user_input: str, models_file: Path | None = None) -> str:
         if suggestion:
             raise ValueError(
                 f"Unknown model: '{user_input}'. Did you mean '{suggestion}'?\n"
-                f"Use -M to list all available models."
+                f"Run 'pidcast list models' to list all available models."
             )
         else:
             raise ValueError(
-                f"Unknown model: '{user_input}'.\nUse -M to list all available models."
+                f"Unknown model: '{user_input}'.\n"
+                f"Run 'pidcast list models' to list all available models."
             )
 
     except FileNotFoundError:

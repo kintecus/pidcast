@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from pidcast.cli import apply_preset
+from pidcast.cli import _explicitly_set_dests, apply_preset
 from pidcast.config_manager import ConfigManager
 
 
@@ -158,3 +158,35 @@ class TestApplyPreset:
         ):
             apply_preset(args)
         assert "Unknown preset key 'bogus_flag'" in caplog.text
+
+
+class TestExplicitlySetDetection:
+    """Detecting which dests the user passed, regardless of flag spelling.
+
+    Replaces a brittle sys.argv substring scan that missed short aliases and
+    BooleanOptionalAction, letting a preset wrongly clobber a flag the user set.
+    """
+
+    def test_long_flag_detected(self):
+        dests = _explicitly_set_dests(["transcribe", "x.mp3", "--groq-model", "llama33"])
+        assert "groq_model" in dests
+
+    def test_short_alias_detected(self):
+        # The old scan missed `-m` (only matched --groq-model).
+        dests = _explicitly_set_dests(["transcribe", "x.mp3", "-m", "llama33"])
+        assert "groq_model" in dests
+
+    def test_boolean_optional_action_detected(self):
+        # The old scan missed `--no-suppress-nst` (dest is suppress_nst).
+        dests = _explicitly_set_dests(["transcribe", "x.mp3", "--no-suppress-nst"])
+        assert "suppress_nst" in dests
+
+    def test_unset_flag_not_detected(self):
+        dests = _explicitly_set_dests(["transcribe", "x.mp3"])
+        assert "groq_model" not in dests
+        assert "language" not in dests
+
+    def test_preset_flag_itself_not_reported_as_clobberable(self):
+        dests = _explicitly_set_dests(["transcribe", "x.mp3", "-p", "daily"])
+        # `input` is positional and present, but a preset can't target it anyway.
+        assert "groq_model" not in dests

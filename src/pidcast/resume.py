@@ -23,29 +23,25 @@ logger = logging.getLogger(__name__)
 
 def _reconstruct_args(manifest: JobManifest):
     """Rebuild an argparse.Namespace: full defaults overlaid with persisted flags."""
-    # Parse with a throwaway input to populate every default, then overlay.
-    import sys
+    from .cli import build_transcribe_namespace
 
-    from .cli import parse_arguments
+    # A fully-defaulted transcribe Namespace (no sys.argv mutation).
+    args = build_transcribe_namespace(manifest.source_wav_path.as_posix())
 
-    saved_argv = sys.argv
-    try:
-        sys.argv = ["pidcast", manifest.source_wav_path.as_posix()]
-        args = parse_arguments()
-    finally:
-        sys.argv = saved_argv
-
+    # Overlay only the flags that belong to the transcribe surface. Legacy
+    # manifests may carry dropped dests (e.g. analyze_existing/diarize_existing)
+    # from before the verb-grammar refactor; filtering against the live
+    # namespace prevents those dead flags from resurrecting onto args.
     for key, value in manifest.cli_args.items():
-        setattr(args, key, value)
+        if hasattr(args, key):
+            setattr(args, key, value)
 
     # Resume always points at the job-dir source WAV (a local file), forces past
     # duplicate detection, and disables test-segment.
-    args.input_source = str(manifest.source_wav_path)
+    args.input = str(manifest.source_wav_path)
     args.force = True
     args.test_segment = None
     args.start_at = None
-    args.analyze_existing = None
-    args.diarize_existing = None
     args.resume_job_id = manifest.job_id
     args.no_checkpoint = False
     # Keep the checkpoint across a resume that itself gets paused again.
@@ -112,7 +108,7 @@ def resume_job(manifest: JobManifest) -> None:
             manifest.cli_args.get("whisper_model") or manifest.model
         )
 
-    from .cli import _run_with_pause_handler
+    from .commands.transcribe import _run_with_pause_handler
     from .workflow import process_input_source
 
     # Honor the manifest's pinned output_dir (reconstructed onto args); fall back
@@ -137,7 +133,7 @@ def resume_job(manifest: JobManifest) -> None:
 
     _run_with_pause_handler(
         lambda: process_input_source(
-            args.input_source,
+            args.input,
             args,
             output_dir,
             analysis_output_dir,
@@ -148,3 +144,36 @@ def resume_job(manifest: JobManifest) -> None:
             video_info_override=video_info_override,
         )
     )
+
+
+def run_resume(args=None) -> None:
+    """Resume a paused/interrupted transcription job (``pidcast resume [job-id]``)."""
+    from .checkpoint import DONE, find_resumable_jobs
+
+    job_arg = getattr(args, "job_id", None)
+
+    jobs = find_resumable_jobs()
+    if not jobs:
+        logger.info("No resumable jobs found.")
+        return
+
+    manifest: JobManifest | None = None
+    if job_arg:
+        manifest = next((j for j in jobs if j.job_id.startswith(job_arg)), None)
+        if manifest is None:
+            logger.error(f"No resumable job matching '{job_arg}'.")
+            return
+    elif len(jobs) == 1:
+        manifest = jobs[0]
+    else:
+        logger.info("Multiple resumable jobs - pass a job id to pick one:\n")
+        for j in jobs:
+            phase = "diarization" if j.transcription.status == DONE else "transcription"
+            title = (j.video_info or {}).get("title", j.input_source)
+            logger.info(
+                f"  {j.job_id}  [{phase}]  {title}  "
+                f"({j.transcription.segment_count} segments, updated {j.updated_at})"
+            )
+        return
+
+    resume_job(manifest)

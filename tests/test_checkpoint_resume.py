@@ -314,12 +314,36 @@ def test_reconstruct_args_restores_metadata_and_output_dir(checkpoint_dir, monke
     args = _reconstruct_args(m)
 
     # Input is redirected to the checkpoint's source.wav and duplicate detection is off.
-    assert args.input_source == str(m.source_wav_path)
+    assert args.input == str(m.source_wav_path)
     assert args.force is True
     assert args.resume_job_id == m.job_id
     # The original output dir survives (so resume writes to the intended location).
     assert args.output_dir == "/some/original/out"
     # The persisted model name is carried through for re-resolution.
+    assert args.whisper_model == "base.en"
+
+
+def test_reconstruct_args_drops_legacy_dead_flags(checkpoint_dir):
+    """Manifests from before the verb refactor may carry dropped dests.
+
+    ``analyze_existing``/``diarize_existing`` no longer exist on the transcribe
+    namespace; the overlay must filter them out rather than resurrecting them.
+    """
+    from pidcast.resume import _reconstruct_args
+
+    m = _make_manifest()
+    m.cli_args = {
+        "whisper_model": "base.en",
+        "analyze_existing": "/old/transcript.md",
+        "diarize_existing": "/old/other.md",
+    }
+    m.save()
+
+    args = _reconstruct_args(m)
+
+    assert not hasattr(args, "analyze_existing")
+    assert not hasattr(args, "diarize_existing")
+    # Live flags still overlay correctly.
     assert args.whisper_model == "base.en"
 
 

@@ -1,181 +1,44 @@
-"Command-line interface for pidcast."
+"""Command-line interface for pidcast.
+
+Thin parser + dispatch layer. Every verb is a real subparser with a ``func``
+default; command bodies live in ``commands/`` and the domain modules
+(``library``/``setup``/``resume``). ``main()`` loads env, injects the bare-input
+shortcut, parses, configures logging, and calls ``args.func(args)``.
+"""
 
 import argparse
-import datetime
 import logging
-import os
-import time
-import traceback
-import uuid
-from enum import Enum
-from pathlib import Path
 
 from .config import (
     DEFAULT_PROMPTS_FILE,
     OBSIDIAN_PATH,
     RUNS_FILE,
-    TRANSCRIPTS_DIR,
     WHISPER_MODEL,
+    resolve_output_dir,  # re-exported for backwards-compatible imports/tests
 )
-from .exceptions import DuplicateShowError, FeedFetchError, FeedParseError, ShowNotFoundError
-from .utils import (
-    find_existing_transcription,
-    is_interactive,
-    log_error,
-    log_section,
-    setup_logging,
-)
-from .workflow import (
-    process_input_source,
-    run_analyze_existing_mode,
-)
+from .utils import log_error, setup_logging
 
 logger = logging.getLogger(__name__)
 
-
-# ============================================================================
-# DUPLICATE DETECTION
-# ============================================================================
-
-
-class DuplicateAction(Enum):
-    """User's choice when duplicate transcription is detected."""
-
-    RE_TRANSCRIBE = "retranscribe"
-    ANALYZE_EXISTING = "analyze"
-    FORCE_CONTINUE = "force"
-    CANCEL = "cancel"
+# Re-export so callers/tests that did `from .cli import resolve_output_dir`
+# keep working after the move to config.py.
+__all__ = ["main", "parse_arguments", "build_transcribe_namespace", "resolve_output_dir"]
 
 
-def prompt_duplicate_detected(
-    prev,
-    verbose: bool = False,
-) -> DuplicateAction:
-    """Display duplicate detection UI and get user's choice.
-
-    Args:
-        prev: Information about the previous transcription (PreviousTranscription)
-        verbose: Enable verbose output
-
-    Returns:
-        User's selected action
-    """
-
-    try:
-        from rich.console import Console
-        from rich.panel import Panel
-        from rich.prompt import Prompt
-        from rich.table import Table
-    except ImportError:
-        return _prompt_duplicate_basic(prev)
-
-    console = Console()
-
-    # Build info panel
-    console.print()
-    console.print(
-        Panel(
-            "[yellow bold]Duplicate Detected![/yellow bold]\n\n"
-            "This recording was previously transcribed.",
-            border_style="yellow",
-        )
-    )
-
-    # Show previous transcription details
-    table = Table(show_header=False, box=None, padding=(0, 2))
-    table.add_column(style="cyan", width=20)
-    table.add_column(style="white")
-
-    table.add_row("Title", prev.video_title)
-    table.add_row("Transcribed", prev.formatted_date)
-    table.add_row("File", prev.smart_filename)
-
-    # Check if transcript file still exists
-    transcript_exists = prev.transcript_path.exists()
-    if transcript_exists:
-        table.add_row("Status", "[green]Transcript file exists[/green]")
-    else:
-        table.add_row("Status", "[red]Transcript file not found[/red]")
-
-    if prev.analysis_performed:
-        table.add_row("Previous Analysis", prev.analysis_type or "Yes")
-
-    console.print(table)
-    console.print()
-
-    # Build options
-    console.print("[bold]What would you like to do?[/bold]")
-    console.print()
-    console.print("  [cyan]1[/cyan] - Re-transcribe the recording")
-
-    if transcript_exists:
-        console.print("  [cyan]2[/cyan] - Analyze existing transcript (skip re-transcription)")
-    else:
-        console.print("  [dim]2 - Analyze existing (unavailable - file not found)[/dim]")
-
-    console.print("  [cyan]3[/cyan] - Continue anyway (force re-transcription)")
-    console.print("  [cyan]4[/cyan] - Cancel")
-    console.print()
-
-    # Get choice
-    valid_choices = ["1", "2", "3", "4"] if transcript_exists else ["1", "3", "4"]
-    while True:
-        choice = Prompt.ask(
-            "Enter choice",
-            choices=valid_choices,
-            default="4",
-        )
-
-        if choice == "1":
-            return DuplicateAction.RE_TRANSCRIBE
-        elif choice == "2" and transcript_exists:
-            return DuplicateAction.ANALYZE_EXISTING
-        elif choice == "3":
-            return DuplicateAction.FORCE_CONTINUE
-        elif choice == "4":
-            return DuplicateAction.CANCEL
-
-
-def _prompt_duplicate_basic(prev) -> DuplicateAction:
-    """Basic fallback prompt without rich.
-
-    Args:
-        prev: Information about the previous transcription (PreviousTranscription)
-    """
-    print("\n" + "=" * 60)
-    print("DUPLICATE DETECTED!")
-    print("=" * 60)
-    print(f"Title: {prev.video_title}")
-    print(f"Previously transcribed: {prev.formatted_date}")
-    print(f"File: {prev.smart_filename}")
-    print()
-    print("Options:")
-    print("  1 - Re-transcribe the recording")
-    print("  2 - Analyze existing transcript")
-    print("  3 - Continue anyway")
-    print("  4 - Cancel")
-    print()
-
-    transcript_exists = prev.transcript_path.exists()
-    valid_choices = {"1", "3", "4"}
-    if transcript_exists:
-        valid_choices.add("2")
-    else:
-        print("  (Option 2 unavailable - transcript file not found)")
-
-    while True:
-        choice = input("Enter choice [4]: ").strip() or "4"
-        if choice in valid_choices:
-            break
-        print(f"Invalid choice. Please enter: {', '.join(sorted(valid_choices))}")
-
-    mapping = {
-        "1": DuplicateAction.RE_TRANSCRIBE,
-        "2": DuplicateAction.ANALYZE_EXISTING,
-        "3": DuplicateAction.FORCE_CONTINUE,
-        "4": DuplicateAction.CANCEL,
+# Verbs that the bare-input shortcut must NOT treat as a transcription input.
+KNOWN_VERBS = frozenset(
+    {
+        "transcribe",
+        "analyze",
+        "diarize",
+        "lib",
+        "list",
+        "setup",
+        "doctor",
+        "resume",
+        "info",
     }
-    return mapping[choice]
+)
 
 
 # ============================================================================
@@ -221,1474 +84,547 @@ def apply_preset(
 # ============================================================================
 
 
-def parse_arguments() -> argparse.Namespace:
-    """Parse command-line arguments.
+def _build_parent_parsers() -> dict[str, argparse.ArgumentParser]:
+    """Shared flag groups, passed to verbs via ``parents=[...]``.
 
-    Returns:
-        Parsed arguments namespace
+    Keeps the common analysis/whisper/output/global flags defined once instead
+    of duplicated across transcribe / lib process / lib sync.
     """
-    import sys
+    parents: dict[str, argparse.ArgumentParser] = {}
 
-    # Check if first argument is 'lib' to determine which parser to use
-    is_lib_command = len(sys.argv) > 1 and sys.argv[1] == "lib"
-
-    parser = argparse.ArgumentParser(
-        description="Automate audio transcription with Whisper (YouTube URL or local file).",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Common Workflows:
-  # Quick transcription with defaults
-  %(prog)s "https://www.youtube.com/watch?v=VIDEO_ID"
-
-  # Save to Obsidian vault
-  %(prog)s "VIDEO_URL" -o
-
-  # Custom analysis type (supports fuzzy matching)
-  %(prog)s "VIDEO_URL" -o -a exec          # Matches 'executive_summary'
-  %(prog)s "VIDEO_URL" -o -a detailed -v   # Verbose output
-
-  # Choose specific model
-  %(prog)s "VIDEO_URL" -m llama33           # Matches 'llama-3.3-70b-versatile'
-
-  # Test settings on a short segment before full transcription
-  %(prog)s "VIDEO_URL" --test-segment --diarize
-  %(prog)s "VIDEO_URL" --test-segment 5 --start-at 10
-
-  # Analyze existing transcript
-  %(prog)s --analyze-existing transcript.md -a summary
-
-  # Retry diarization on existing transcript (without re-transcribing)
-  %(prog)s --diarize-existing transcript.md
-
-Discovery:
-  %(prog)s -L                              # List analysis types
-  %(prog)s -M                              # List LLM models
-  %(prog)s -W                              # List Whisper models
-
-Library Management:
-  %(prog)s lib add "https://feeds.example.com/podcast.xml"
-  %(prog)s lib process "Lex Fridman" --latest
-  %(prog)s lib list
-  %(prog)s lib sync
-
-Short Flags:
-  -o  --save-to-obsidian    Save to Obsidian vault
-  -a  --analysis-type       Analysis type (fuzzy matching enabled)
-  -m  --groq-model          Model name (fuzzy matching enabled)
-  -l  --language            Language code for transcription
-  -f  --force               Force re-transcription
-  -v  --verbose             Verbose output
-  -p  --preset              Use a named preset
-  -L  --list-analyses       List available analysis types
-  -M  --list-models         List available LLM models
-  -W  --list-whisper-models List available Whisper models
-  -P  --list-presets        List available presets
-        """,
+    # --- global (verbosity / force / preset) ---------------------------------
+    g = argparse.ArgumentParser(add_help=False)
+    g.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")
+    g.add_argument(
+        "-f", "--force", action="store_true", help="Skip duplicate detection and force the run"
     )
-
-    # Only create subparsers if 'lib' command is used
-    if is_lib_command:
-        subparsers = parser.add_subparsers(dest="mode", help="Command mode", required=False)
-
-        # Library subcommand with nested subparsers
-        lib_parser = subparsers.add_parser("lib", help="Podcast library management")
-        lib_subparsers = lib_parser.add_subparsers(
-            dest="lib_command", help="Library management commands", required=True
-        )
-
-        # Add command
-        add_parser = lib_subparsers.add_parser("add", help="Add podcast to library")
-        add_parser.add_argument("feed_url", help="RSS feed URL or podcast name to search for")
-        add_parser.add_argument(
-            "--preview", action="store_true", help="Preview episodes before adding"
-        )
-        add_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-
-        # Process command (NEW)
-        process_parser = lib_subparsers.add_parser(
-            "process", help="Process an episode from a library show"
-        )
-        process_parser.add_argument("show_query", help="Show ID or partial name")
-        process_parser.add_argument(
-            "--latest", action="store_true", help="Process the latest episode"
-        )
-        process_parser.add_argument("--match", help="Process episode matching this title string")
-        # Reuse common flags for processing
-        process_parser.add_argument("--output-dir", dest="output_dir", help="Output directory")
-        process_parser.add_argument(
-            "--save-to-obsidian",
-            dest="save_to_obsidian",
-            action="store_true",
-            help="Save to Obsidian",
-        )
-        process_parser.add_argument(
-            "--whisper-model", dest="whisper_model", help="Whisper model path"
-        )
-        process_parser.add_argument("--groq-api-key", dest="groq_api_key", help="Groq API key")
-        process_parser.add_argument(
-            "--analysis-type",
-            dest="analysis_type",
-            default="executive_summary",
-            help="Analysis type",
-        )
-        process_parser.add_argument("--prompts-file", dest="prompts_file", help="Prompts file path")
-        process_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-        process_parser.add_argument("--force", action="store_true", help="Force reprocessing")
-        process_parser.add_argument(
-            "--output-format", dest="output_format", default="otxt", help="Output format"
-        )
-        process_parser.add_argument(
-            "--keep-transcript", dest="keep_transcript", action="store_true", help="Keep transcript"
-        )
-        process_parser.add_argument("--po-token", dest="po_token", help="PO Token")
-        process_parser.add_argument(
-            "--cookies-from-browser",
-            default=None,
-            help="Browser to extract cookies from (e.g., 'chrome', 'firefox', 'safari')",
-        )
-        process_parser.add_argument(
-            "--cookies",
-            default=None,
-            help="Path to Netscape format cookies file",
-        )
-        process_parser.add_argument(
-            "--chrome-profile",
-            default=None,
-            dest="chrome_profile",
-            help="Chrome profile for cookie extraction (display name or directory name)",
-        )
-        process_parser.add_argument(
-            "--front-matter", dest="front_matter", default="{}", help="Front matter JSON"
-        )
-        process_parser.add_argument("--save", action="store_true", help="Save output")
-        process_parser.add_argument(
-            "--no-analyze", dest="no_analyze", action="store_true", help="Skip analysis"
-        )
-        process_parser.add_argument(
-            "--skip-analysis-on-error",
-            dest="skip_analysis_on_error",
-            action="store_true",
-            help="Skip analysis on error",
-        )
-        process_parser.add_argument("--stats-file", dest="stats_file", help="Stats file path")
-        process_parser.add_argument("--groq-model", dest="groq_model", help="Groq model")
-        process_parser.add_argument(
-            "--provider",
-            default="groq",
-            choices=["groq", "claude"],
-            help="LLM provider: 'groq' (default) or 'claude'",
-        )
-        process_parser.add_argument(
-            "--claude-model",
-            dest="claude_model",
-            default=None,
-            help="Claude model alias when --provider claude: sonnet (default), opus, haiku",
-        )
-
-        # List command
-        list_parser = lib_subparsers.add_parser("list", help="List all shows in library")
-        list_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-
-        # Show command
-        show_parser = lib_subparsers.add_parser("show", help="Show details for a podcast")
-        show_parser.add_argument("show_id", type=int, help="Show ID")
-        show_parser.add_argument(
-            "--episodes", type=int, default=5, help="Number of recent episodes to show (default: 5)"
-        )
-        show_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-
-        # Remove command
-        remove_parser = lib_subparsers.add_parser("remove", help="Remove podcast from library")
-        remove_parser.add_argument("show_id", type=int, help="Show ID")
-        remove_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-
-        # Sync command
-        sync_parser = lib_subparsers.add_parser(
-            "sync", help="Sync library shows and process new episodes"
-        )
-        sync_parser.add_argument(
-            "--show", type=int, metavar="ID", help="Sync only specific show by ID"
-        )
-        sync_parser.add_argument("--dry-run", action="store_true", help="Preview only")
-        sync_parser.add_argument("--force", action="store_true", help="Reprocess episodes")
-        sync_parser.add_argument(
-            "--backfill", type=int, metavar="N", help="Override backfill limit"
-        )
-        sync_parser.add_argument("--output-dir", dest="output_dir", help="Output directory")
-        sync_parser.add_argument(
-            "--whisper-model",
-            dest="whisper_model",
-            default=WHISPER_MODEL,
-            help="Whisper model path",
-        )
-        sync_parser.add_argument("--groq-api-key", dest="groq_api_key", help="Groq API key")
-        sync_parser.add_argument(
-            "--analysis-type",
-            dest="analysis_type",
-            default="executive_summary",
-            help="Analysis type",
-        )
-        sync_parser.add_argument("--prompts-file", dest="prompts_file", help="Prompts file path")
-        sync_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-        sync_parser.add_argument("--no-digest", action="store_true", help="Skip digest generation")
-
-        # Digest command
-        digest_parser = lib_subparsers.add_parser("digest", help="Generate podcast digest")
-        digest_parser.add_argument("--date", help="Specific date (YYYY-MM-DD)")
-        digest_parser.add_argument("--range", help="Date range (e.g., 7d)")
-        digest_parser.add_argument("--output-dir", dest="output_dir", help="Output directory")
-        digest_parser.add_argument("--groq-api-key", dest="groq_api_key", help="Groq API key")
-        digest_parser.add_argument("--prompts-file", dest="prompts_file", help="Prompts file path")
-        digest_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-
-    # Input source group (mutually exclusive) - for original workflow
-    input_group = parser.add_mutually_exclusive_group(required=False)
-    input_group.add_argument(
-        "input_source", nargs="?", help="YouTube video URL or path to local audio file"
-    )
-    input_group.add_argument(
-        "--analyze-existing",
-        dest="analyze_existing",
-        help="Path to existing transcript file (.md or .txt) to analyze without re-transcribing",
-    )
-    input_group.add_argument(
-        "--diarize-existing",
-        dest="diarize_existing",
-        help="Path to existing transcript (.md) to run speaker diarization on. "
-        "Requires .whisper.json next to the transcript (auto-saved during transcription).",
-    )
-    parser.add_argument(
-        "--audio",
+    g.add_argument(
+        "-p",
+        "--preset",
         default=None,
-        help="Path to audio file for --diarize-existing (overrides auto-detected .wav).",
+        help="Use a named preset from config.yaml (e.g., 'daily'). Explicit flags override it.",
     )
-    parser.add_argument(
+    parents["global"] = g
+
+    # --- output --------------------------------------------------------------
+    o = argparse.ArgumentParser(add_help=False)
+    o.add_argument(
         "--output-dir",
         dest="output_dir",
         default=None,
         help="Output directory for Markdown files (default: config.yaml output_dir, "
-        "else the XDG data dir's transcripts/; see 'pidcast paths')",
+        "else the XDG data dir's transcripts/; see 'pidcast info')",
     )
-    parser.add_argument(
+    o.add_argument(
         "-o",
         "--save-to-obsidian",
         dest="save_to_obsidian",
         action="store_true",
-        help=f"Save analysis files to Obsidian vault (transcripts still saved to --output-dir) at: {OBSIDIAN_PATH}",
+        help=f"Save analysis files to Obsidian vault at: {OBSIDIAN_PATH}",
     )
-    parser.add_argument(
+    o.add_argument(
+        "--save",
+        action="store_true",
+        help="Save analysis output to file (default: terminal only)",
+    )
+    o.add_argument(
+        "--front-matter",
+        dest="front_matter",
+        default="{}",
+        help="JSON string for Markdown front matter",
+    )
+    o.add_argument(
+        "--tags",
+        default=None,
+        help="Comma-separated tags for front matter (overrides auto-inferred source tags).",
+    )
+    o.add_argument(
+        "--stats-file",
+        dest="stats_file",
+        default=None,
+        help=f"File to store run history/statistics (default: {RUNS_FILE})",
+    )
+    o.add_argument(
+        "--keep-transcript",
+        dest="keep_transcript",
+        action="store_true",
+        help="Keep the .txt transcript file alongside the .md file",
+    )
+    o.add_argument(
+        "--keep-audio",
+        dest="keep_audio",
+        action="store_true",
+        help="Save the converted WAV audio file to the output directory",
+    )
+    parents["output"] = o
+
+    # --- analysis ------------------------------------------------------------
+    a = argparse.ArgumentParser(add_help=False)
+    a.add_argument(
+        "--no-analyze",
+        action="store_true",
+        dest="no_analyze",
+        help="Skip LLM analysis (default: analyze is enabled)",
+    )
+    a.add_argument(
+        "-a",
+        "--analysis-type",
+        dest="analysis_type",
+        default="executive_summary",
+        help="Analysis type/prompt template (default: executive_summary). "
+        "See 'pidcast list analyses'.",
+    )
+    a.add_argument(
+        "--prompts-file",
+        dest="prompts_file",
+        default=None,
+        help=f"Path to prompts YAML file (default: {DEFAULT_PROMPTS_FILE})",
+    )
+    a.add_argument(
+        "--groq-api-key",
+        dest="groq_api_key",
+        default=None,
+        help="Groq API key (default: GROQ_API_KEY environment variable)",
+    )
+    a.add_argument(
+        "-m",
+        "--groq-model",
+        dest="groq_model",
+        default=None,
+        help="Groq model for analysis (default: from config/models.yaml). "
+        "See 'pidcast list models'.",
+    )
+    a.add_argument(
+        "--skip-analysis-on-error",
+        dest="skip_analysis_on_error",
+        action="store_true",
+        help="Continue if analysis fails instead of aborting",
+    )
+    a.add_argument(
+        "--provider",
+        default="groq",
+        choices=["groq", "claude"],
+        help="LLM provider for analysis: 'groq' (default) or 'claude' (uses local Claude CLI)",
+    )
+    a.add_argument(
+        "--claude-model",
+        dest="claude_model",
+        default=None,
+        help="Claude model alias when --provider claude: 'sonnet' (default), 'opus', 'haiku'",
+    )
+    parents["analysis"] = a
+
+    # --- whisper / transcription ---------------------------------------------
+    w = argparse.ArgumentParser(add_help=False)
+    w.add_argument(
         "--whisper-model",
         dest="whisper_model",
         default=WHISPER_MODEL,
-        help="Whisper model name (e.g., 'medium', 'large-v3-turbo') or path to model file",
+        help="Whisper model name (e.g., 'large-v3-turbo') or path to model file",
     )
-    parser.add_argument(
+    w.add_argument(
         "-l",
         "--language",
         default=None,
         help="Language code for transcription (e.g., 'uk', 'en', 'de'). Default: auto-detect.",
     )
-    parser.add_argument(
+    w.add_argument(
         "--transcription-provider",
         dest="transcription_provider",
         choices=["whisper", "elevenlabs"],
         default="whisper",
         help="Transcription backend: whisper (local) or elevenlabs (cloud). Default: whisper.",
     )
-    parser.add_argument(
+    w.add_argument(
         "--diarize",
         action="store_true",
         default=False,
-        help="Run speaker diarization (whisper: pyannote.audio + HUGGINGFACE_TOKEN, elevenlabs: built-in)",
+        help="Run speaker diarization (whisper: pyannote.audio + HUGGINGFACE_TOKEN; "
+        "elevenlabs: built-in)",
     )
-    parser.add_argument(
+    w.add_argument(
         "--output-format",
         dest="output_format",
         default="otxt",
         help="Whisper output format (txt, vtt, srt, json). Prefix with 'o' for original filename.",
     )
 
-    # Whisper quality / anti-hallucination options (whisper provider only)
-    whisper_quality = parser.add_argument_group("Whisper Quality Options")
-    whisper_quality.add_argument(
-        "--vad",
-        action="store_true",
-        default=False,
-        help="Enable Voice Activity Detection to strip silence before decoding "
-        "(reduces hallucinations). Needs a Silero VAD model; no-ops with a warning "
-        "if none is found. See WHISPER_VAD_MODEL / 'pidcast doctor'.",
+    # Expert / tuning knobs. Hidden from the default --help; still settable and
+    # preset-supplied. Help text is SUPPRESSed to keep the surface slim.
+    w.add_argument("--vad", action="store_true", default=False, help=argparse.SUPPRESS)
+    w.add_argument("--vad-model", dest="vad_model", default=None, help=argparse.SUPPRESS)
+    w.add_argument(
+        "--vad-threshold", dest="vad_threshold", type=float, default=None, help=argparse.SUPPRESS
     )
-    whisper_quality.add_argument(
-        "--vad-model",
-        dest="vad_model",
-        default=None,
-        help="Path to a Silero VAD model (overrides WHISPER_VAD_MODEL and auto-detect).",
-    )
-    whisper_quality.add_argument(
-        "--vad-threshold",
-        dest="vad_threshold",
-        type=float,
-        default=None,
-        help="VAD speech-probability threshold (whisper -vt). Default: whisper's 0.50.",
-    )
-    whisper_quality.add_argument(
+    w.add_argument(
         "--no-speech-thold",
         dest="no_speech_thold",
         type=float,
         default=None,
-        help="No-speech threshold (whisper -nth). Default: whisper's 0.60. "
-        "Raise (e.g. 0.8) to reject more low-speech audio.",
+        help=argparse.SUPPRESS,
     )
-    whisper_quality.add_argument(
-        "--temperature",
-        type=float,
-        default=None,
-        help="Sampling temperature (whisper -tp). Default: whisper's 0.00.",
-    )
-    whisper_quality.add_argument(
+    w.add_argument("--temperature", type=float, default=None, help=argparse.SUPPRESS)
+    w.add_argument(
         "--no-fallback",
         dest="no_fallback",
         action="store_true",
         default=False,
-        help="Disable temperature fallback while decoding (whisper -nf).",
+        help=argparse.SUPPRESS,
     )
-    whisper_quality.add_argument(
+    w.add_argument(
         "--suppress-nst",
         "--no-suppress-nst",
         dest="suppress_nst",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Suppress non-speech tokens (whisper -sns). On by default to curb "
-        "boilerplate hallucinations; use --no-suppress-nst to disable.",
+        help=argparse.SUPPRESS,
     )
-    whisper_quality.add_argument(
-        "--whisper-threads",
-        dest="whisper_threads",
-        type=int,
-        default=8,
-        help="Number of whisper decoding threads (whisper -t). Default: 8.",
+    w.add_argument(
+        "--whisper-threads", dest="whisper_threads", type=int, default=8, help=argparse.SUPPRESS
     )
-    parser.add_argument(
-        "--front-matter",
-        dest="front_matter",
-        default="{}",
-        help="JSON string for Markdown front matter",
-    )
-    parser.add_argument(
-        "--tags",
-        default=None,
-        help="Comma-separated tags for front matter (overrides auto-inferred source tags). "
-        "Example: --tags meeting,standup,weekly",
-    )
-    parser.add_argument(
-        "--stats-file",
-        dest="stats_file",
-        default=None,
-        help=f"File to store run history/statistics (default: {RUNS_FILE})",
-    )
-    parser.add_argument(
-        "--keep-transcript",
-        dest="keep_transcript",
-        action="store_true",
-        help="Keep the .txt transcript file alongside the .md file",
-    )
-    parser.add_argument(
-        "--keep-audio",
-        dest="keep_audio",
-        action="store_true",
-        help="Save the converted WAV audio file to the output directory",
-    )
+    parents["whisper"] = w
 
-    checkpoint_group = parser.add_argument_group("Checkpoint / Resume Options")
-    checkpoint_group.add_argument(
-        "--no-checkpoint",
-        dest="no_checkpoint",
-        action="store_true",
-        help="Disable resume checkpointing (one-shot transcription, no pause/resume).",
-    )
-    checkpoint_group.add_argument(
-        "--keep-checkpoint",
-        dest="keep_checkpoint",
-        action="store_true",
-        help="Keep the checkpoint directory after a successful run (default: delete).",
-    )
-    # Internal: set by `pidcast resume` to re-enter a specific job. Hidden from help.
-    parser.add_argument(
-        "--resume-job-id", dest="resume_job_id", default=None, help=argparse.SUPPRESS
-    )
-    parser.add_argument(
+    # --- download / cookies (transcribe + lib process) -----------------------
+    d = argparse.ArgumentParser(add_help=False)
+    d.add_argument(
         "--po-token",
         dest="po_token",
         default=None,
         help="PO Token for bypassing YouTube restrictions (format: 'client.type+TOKEN')",
     )
-    parser.add_argument(
+    d.add_argument(
         "--cookies-from-browser",
         default=None,
         help="Browser to extract cookies from (e.g., 'chrome', 'firefox', 'safari')",
     )
-    parser.add_argument(
-        "--cookies",
-        default=None,
-        help="Path to Netscape format cookies file",
-    )
-    parser.add_argument(
+    d.add_argument("--cookies", default=None, help="Path to Netscape format cookies file")
+    d.add_argument(
         "--chrome-profile",
         default=None,
         dest="chrome_profile",
         help="Chrome profile for cookie extraction (display name or directory name)",
     )
-    parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-    parser.add_argument(
-        "--force",
-        "-f",
-        action="store_true",
-        help="Skip duplicate detection and force transcription",
-    )
+    parents["download"] = d
 
-    # Test segment arguments
-    segment_group = parser.add_argument_group("Test Segment Options")
-    segment_group.add_argument(
-        "--test-segment",
+    return parents
+
+
+def _add_lib_subparsers(lib_subparsers, parents) -> None:
+    """Wire the ``pidcast lib <command>`` tree."""
+    from .commands import lib as lib_cmds
+
+    g = parents["global"]
+
+    add_p = lib_subparsers.add_parser("add", parents=[g], help="Add podcast to library")
+    add_p.add_argument("feed_url", help="RSS feed URL or podcast name to search for")
+    add_p.add_argument("--preview", action="store_true", help="Preview episodes before adding")
+    add_p.set_defaults(func=lib_cmds.handle_add)
+
+    list_p = lib_subparsers.add_parser("list", parents=[g], help="List all shows in library")
+    list_p.set_defaults(func=lib_cmds.handle_list)
+
+    show_p = lib_subparsers.add_parser("show", parents=[g], help="Show details for a podcast")
+    show_p.add_argument("show_id", type=int, help="Show ID")
+    show_p.add_argument(
+        "--episodes", type=int, default=5, help="Number of recent episodes to show (default: 5)"
+    )
+    show_p.set_defaults(func=lib_cmds.handle_show)
+
+    remove_p = lib_subparsers.add_parser("remove", parents=[g], help="Remove podcast from library")
+    remove_p.add_argument("show_id", type=int, help="Show ID")
+    remove_p.set_defaults(func=lib_cmds.handle_remove)
+
+    process_p = lib_subparsers.add_parser(
+        "process",
+        parents=[
+            g,
+            parents["whisper"],
+            parents["analysis"],
+            parents["output"],
+            parents["download"],
+        ],
+        help="Process an episode from a library show",
+    )
+    process_p.add_argument("show_query", help="Show ID or partial name")
+    process_p.add_argument("--latest", action="store_true", help="Process the latest episode")
+    process_p.add_argument("--match", help="Process episode matching this title string")
+    process_p.set_defaults(func=lib_cmds.handle_process)
+
+    sync_p = lib_subparsers.add_parser(
+        "sync",
+        parents=[g, parents["whisper"], parents["analysis"], parents["output"]],
+        help="Sync library shows and process new episodes",
+    )
+    sync_p.add_argument("--show", type=int, metavar="ID", help="Sync only specific show by ID")
+    sync_p.add_argument("--dry-run", action="store_true", help="Preview only")
+    sync_p.add_argument("--backfill", type=int, metavar="N", help="Override backfill limit")
+    sync_p.add_argument("--no-digest", action="store_true", help="Skip digest generation")
+    sync_p.set_defaults(func=lib_cmds.handle_sync)
+
+    digest_p = lib_subparsers.add_parser(
+        "digest",
+        parents=[g, parents["analysis"], parents["output"]],
+        help="Generate podcast digest",
+    )
+    digest_p.add_argument("--date", help="Specific date (YYYY-MM-DD)")
+    digest_p.add_argument("--range", help="Date range (e.g., 7d)")
+    digest_p.set_defaults(func=lib_cmds.handle_digest)
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Construct the full verb-first parser (unconditional subparser tree)."""
+    from .commands.analyze import cmd_analyze
+    from .commands.diarize import cmd_diarize
+    from .commands.info import cmd_info
+    from .commands.listing import cmd_list
+    from .commands.transcribe import cmd_transcribe
+    from .resume import run_resume
+    from .setup import run_doctor, run_setup
+
+    parents = _build_parent_parsers()
+
+    parser = argparse.ArgumentParser(
+        prog="pidcast",
+        description="Turn a URL or audio file into an Obsidian-ready transcript with LLM analysis.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Common workflows:
+  pidcast "https://youtube.com/watch?v=ID"          Transcribe + analyze (bare = transcribe)
+  pidcast transcribe FILE.mp3 -o -a exec            Save to Obsidian, executive summary
+  pidcast transcribe FILE.mp3 --test 5 --start-at 10  Dry-run a 5-min slice from 10:00
+  pidcast analyze transcript.md -a summary          Re-analyze an existing transcript
+  pidcast diarize transcript.md                     Retry diarization only
+  pidcast list models                               Discover analyses/models/presets/...
+  pidcast lib add "Lex Fridman"                     Manage the podcast library
+""",
+    )
+    sub = parser.add_subparsers(dest="command", metavar="<command>")
+
+    # --- transcribe (also the bare-input default) ----------------------------
+    t = sub.add_parser(
+        "transcribe",
+        parents=[
+            parents["global"],
+            parents["whisper"],
+            parents["analysis"],
+            parents["output"],
+            parents["download"],
+        ],
+        help="Transcribe a URL or audio file (and analyze)",
+    )
+    t.add_argument("input", help="YouTube/podcast URL or path to a local audio file")
+    t.add_argument(
+        "--test",
         nargs="?",
         const=2,
         type=float,
         default=None,
         dest="test_segment",
         metavar="MINUTES",
-        help="Test transcription settings on first N minutes of audio (default: 2). "
-        "Skips markdown creation, analysis, and statistics.",
+        help="Dry-run transcription on the first N minutes (default: 2). "
+        "Skips markdown, analysis, and stats.",
     )
-    segment_group.add_argument(
+    t.add_argument(
         "--start-at",
         type=float,
         default=None,
         dest="start_at",
         metavar="MINUTES",
-        help="Start offset in minutes for --test-segment (default: 0). "
-        "Use to skip intros or jump to a specific section.",
+        help="Start offset in minutes for --test (default: 0).",
     )
-
-    # LLM Analysis arguments
-    analysis_group = parser.add_argument_group("LLM Analysis Options")
-    analysis_group.add_argument(
-        "--no-analyze",
+    # Checkpoint / resume options.
+    t.add_argument(
+        "--no-checkpoint",
+        dest="no_checkpoint",
         action="store_true",
-        dest="no_analyze",
-        help="Skip LLM analysis (default: analyze is enabled)",
+        help="Disable resume checkpointing (one-shot transcription).",
     )
-    analysis_group.add_argument(
-        "-a",
-        "--analysis-type",
-        dest="analysis_type",
-        default="executive_summary",
-        help="Analysis type/prompt template to use (default: executive_summary). Use -L to list available types.",
-    )
-    analysis_group.add_argument(
-        "--prompts-file",
-        dest="prompts_file",
-        default=None,
-        help=f"Path to prompts YAML file (default: {DEFAULT_PROMPTS_FILE})",
-    )
-    analysis_group.add_argument(
-        "--groq-api-key",
-        dest="groq_api_key",
-        default=None,
-        help="Groq API key (default: GROQ_API_KEY environment variable)",
-    )
-    analysis_group.add_argument(
-        "-m",
-        "--groq-model",
-        dest="groq_model",
-        default=None,
-        help="Groq model to use for analysis (default: from config/models.yaml). Use -M to list available models.",
-    )
-    analysis_group.add_argument(
-        "--skip-analysis-on-error",
-        dest="skip_analysis_on_error",
+    t.add_argument(
+        "--keep-checkpoint",
+        dest="keep_checkpoint",
         action="store_true",
-        help="Continue if analysis fails instead of aborting",
+        help="Keep the checkpoint directory after a successful run (default: delete).",
     )
-    analysis_group.add_argument(
-        "--provider",
-        default="groq",
-        choices=["groq", "claude"],
-        help="LLM provider for analysis: 'groq' (default) or 'claude' (uses local Claude CLI)",
-    )
-    analysis_group.add_argument(
-        "--claude-model",
-        dest="claude_model",
-        default=None,
-        help="Claude model alias when --provider claude: 'sonnet' (default), 'opus', 'haiku'",
-    )
+    # Internal: set by `pidcast resume` to re-enter a specific job.
+    t.add_argument("--resume-job-id", dest="resume_job_id", default=None, help=argparse.SUPPRESS)
+    t.set_defaults(func=cmd_transcribe)
 
-    # Output options
-    output_group = parser.add_argument_group("Output Options")
-    output_group.add_argument(
-        "--save",
+    # --- analyze -------------------------------------------------------------
+    an = sub.add_parser(
+        "analyze",
+        parents=[parents["global"], parents["analysis"], parents["output"]],
+        help="Analyze an existing transcript without re-transcribing",
+    )
+    an.add_argument("transcript", help="Path to an existing transcript (.md or .txt)")
+    an.set_defaults(func=cmd_analyze)
+
+    # --- diarize -------------------------------------------------------------
+    di = sub.add_parser(
+        "diarize",
+        parents=[parents["global"]],
+        help="Run speaker diarization on an existing transcript",
+    )
+    di.add_argument("transcript", help="Path to an existing transcript (.md). Needs .whisper.json.")
+    di.add_argument(
+        "--audio", default=None, help="Path to audio file (overrides auto-detected .wav)."
+    )
+    di.set_defaults(func=cmd_diarize)
+
+    # --- list ----------------------------------------------------------------
+    li = sub.add_parser(
+        "list", parents=[parents["global"]], help="List analyses/models/presets/..."
+    )
+    li.add_argument(
+        "thing",
+        choices=["analyses", "models", "whisper-models", "presets", "profiles"],
+        help="What to list",
+    )
+    li.set_defaults(func=cmd_list)
+
+    # --- lib -----------------------------------------------------------------
+    lib_p = sub.add_parser("lib", help="Podcast library management")
+    lib_sub = lib_p.add_subparsers(dest="lib_command", metavar="<lib-command>", required=True)
+    _add_lib_subparsers(lib_sub, parents)
+
+    # --- setup / doctor / resume / info --------------------------------------
+    su = sub.add_parser("setup", parents=[parents["global"]], help="Interactive setup wizard")
+    su.set_defaults(func=run_setup)
+
+    do = sub.add_parser("doctor", parents=[parents["global"]], help="Diagnose tooling/env config")
+    do.add_argument(
+        "--prune-stats",
+        dest="prune_stats",
         action="store_true",
-        help="Save analysis output to file (default: terminal only)",
+        help="Remove phantom stats entries with a missing transcript",
     )
+    do.set_defaults(func=run_doctor)
 
-    # Discoverability options
-    discovery_group = parser.add_argument_group("Discovery Options")
-    discovery_group.add_argument(
-        "-L",
-        "--list-analyses",
-        action="store_true",
-        dest="list_analyses",
-        help="List available analysis types and exit",
+    re = sub.add_parser("resume", parents=[parents["global"]], help="Resume a paused transcription")
+    re.add_argument("job_id", nargs="?", default=None, help="Job id to resume (optional)")
+    re.set_defaults(func=run_resume)
+
+    inf = sub.add_parser(
+        "info", parents=[parents["global"]], help="Show resolved data/config paths"
     )
-    discovery_group.add_argument(
-        "-M",
-        "--list-models",
-        action="store_true",
-        dest="list_models",
-        help="List available Groq models and exit",
-    )
-    discovery_group.add_argument(
-        "-W",
-        "--list-whisper-models",
-        action="store_true",
-        dest="list_whisper_models",
-        help="List available Whisper models and exit",
-    )
-    discovery_group.add_argument(
-        "--list-chrome-profiles",
-        action="store_true",
-        dest="list_chrome_profiles",
-        help="List available Chrome profiles for cookie extraction and exit",
-    )
+    inf.set_defaults(func=cmd_info)
 
-    # Preset options
-    preset_group = parser.add_argument_group("Preset Options")
-    preset_group.add_argument(
-        "-p",
-        "--preset",
-        default=None,
-        help="Use a named preset from config.yaml (e.g., 'daily', 'meeting'). "
-        "Explicit flags override preset values. Use -P to list presets.",
-    )
-    preset_group.add_argument(
-        "-P",
-        "--list-presets",
-        action="store_true",
-        dest="list_presets",
-        help="List available presets and exit",
-    )
+    return parser
 
-    return parser.parse_args()
 
+def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse command-line arguments.
 
-# ============================================================================
-# LIBRARY COMMAND HANDLERS
-# ============================================================================
+    Args:
+        argv: Explicit argument list (without prog). Defaults to ``sys.argv[1:]``.
 
-
-def cmd_process(args: argparse.Namespace) -> None:
-    """Handle 'pidcast lib process' command."""
-    import uuid
-
-    from .config import OBSIDIAN_PATH, VideoInfo
-    from .library import LibraryManager, Show
-
-    library = LibraryManager()
-
-    # Find show
-    show_query = args.show_query
-    show: Show | None = None
-
-    # Try as ID
-    try:
-        show_id = int(show_query)
-        show = library.get_show(show_id)
-    except ValueError:
-        pass
-
-    # Try as name (case insensitive partial match)
-    if not show:
-        matches = [s for s in library.list_shows() if show_query.lower() in s.title.lower()]
-        if len(matches) == 1:
-            show = matches[0]
-        elif len(matches) > 1:
-            print(f"Ambiguous show name '{show_query}'. Matches:")
-            for s in matches:
-                print(f"  {s.id}: {s.title}")
-            return
-
-    if not show:
-        log_error(f"Show '{show_query}' not found.")
-        return
-
-    # Fetch episodes
-    episodes = library.get_episodes(show.id, limit=50 if args.match else 20, verbose=args.verbose)
-
-    selected_episode = None
-
-    if args.latest:
-        selected_episode = episodes[0] if episodes else None
-    elif args.match:
-        # fuzzy match title
-        query = args.match.lower()
-        for ep in episodes:
-            if query in ep.title.lower():
-                selected_episode = ep
-                break
-        if not selected_episode:
-            log_error(f"No episode found matching '{args.match}'")
-            return
-    else:
-        # Interactive selection
-        try:
-            from rich.console import Console
-            from rich.prompt import Prompt
-            from rich.table import Table
-
-            console = Console()
-
-            table = Table(show_header=True)
-            table.add_column("#", style="cyan", width=4)
-            table.add_column("Date", style="yellow", width=12)
-            table.add_column("Title", style="white")
-
-            # Show top 10
-            display_episodes = episodes[:10]
-            for i, ep in enumerate(display_episodes, 1):
-                table.add_row(str(i), ep.pub_date.strftime("%Y-%m-%d"), ep.title)
-
-            console.print(table)
-
-            # Ask for selection
-            choices = [str(i) for i in range(1, len(display_episodes) + 1)]
-            choice = Prompt.ask("Select episode", choices=choices)
-            selected_episode = display_episodes[int(choice) - 1]
-        except ImportError:
-            # Fallback
-            print("Rich not installed, and no selection flags used. Defaulting to latest.")
-            selected_episode = episodes[0] if episodes else None
-
-    if not selected_episode:
-        log_error("No episodes found.")
-        return
-
-    logger.info(f"\nProcessing: {selected_episode.title} ({show.title})")
-
-    # Construct override
-    video_info = VideoInfo(
-        title=selected_episode.title,
-        webpage_url=selected_episode.audio_url,
-        channel=show.title,
-        upload_date=selected_episode.pub_date.strftime("%Y%m%d"),
-        description=selected_episode.description,
-        duration=selected_episode.duration or 0,
-    )
-
-    # Resolve whisper model
-    if args.whisper_model:
-        from .transcription import resolve_whisper_model
-
-        try:
-            args.whisper_model = resolve_whisper_model(args.whisper_model)
-        except Exception as e:
-            log_error(str(e))
-            return
-
-    # Run workflow
-    output_dir = resolve_output_dir(args)
-    stats_file = Path(args.stats_file) if args.stats_file else RUNS_FILE
-    analysis_output_dir = Path(OBSIDIAN_PATH) if args.save_to_obsidian else output_dir
-
-    process_input_source(
-        selected_episode.audio_url,
-        args,
-        output_dir,
-        analysis_output_dir,
-        stats_file,
-        str(uuid.uuid4()),
-        datetime.datetime.now().isoformat(),
-        time.time(),
-        video_info_override=video_info,
-    )
-
-
-def cmd_add(args: argparse.Namespace) -> None:
-    """Handle 'pidcast add' command."""
-    from .config_manager import ConfigManager
-    from .library import LibraryManager
-    from .rss import RSSParser
-
-    try:
-        from rich.console import Console
-        from rich.prompt import Confirm
-        from rich.table import Table
-
-        has_rich = True
-    except ImportError:
-        has_rich = False
-
-    # Initialize config and library
-    ConfigManager.init_default_config()
-    library = LibraryManager()
-
-    # Resolve feed URL from name if user didn't pass a URL
-    feed_url = args.feed_url
-    if not feed_url.startswith(("http://", "https://", "feed://")):
-        from .discovery import discover_podcast, prompt_user_selection
-
-        query = feed_url
-        if has_rich:
-            Console().print(f"\nSearching for podcasts matching [bold]{query!r}[/bold]...")
-        else:
-            print(f"\nSearching for podcasts matching {query!r}...")
-
-        results = discover_podcast(query)
-        if not results:
-            log_error(f"No podcasts found for {query!r}. Try using the RSS feed URL directly.")
-            return
-
-        chosen = prompt_user_selection(results)
-        if chosen is None:
-            logger.info("Cancelled.")
-            return
-
-        feed_url = chosen["feed_url"]
-        args.feed_url = feed_url
-
-    try:
-        # Preview mode: show episodes before adding
-        if args.preview:
-            if args.verbose:
-                logger.info(f"Fetching feed preview: {args.feed_url}")
-
-            show_meta, episodes = RSSParser.parse_feed(args.feed_url, verbose=args.verbose)
-
-            if has_rich:
-                console = Console()
-                console.print(f"\n[bold cyan]Show:[/bold cyan] {show_meta['title']}")
-                console.print(f"[bold cyan]Author:[/bold cyan] {show_meta['author']}")
-                console.print("\n[bold]Recent Episodes:[/bold]")
-
-                table = Table(show_header=True)
-                table.add_column("#", style="cyan", width=4)
-                table.add_column("Date", style="yellow", width=12)
-                table.add_column("Title", style="white")
-
-                for i, episode in enumerate(episodes[:5], 1):
-                    date_str = episode.pub_date.strftime("%Y-%m-%d")
-                    table.add_row(str(i), date_str, episode.title)
-
-                console.print(table)
-                console.print(f"\nTotal episodes: {len(episodes)}")
-
-                if not Confirm.ask("\nAdd this show to library?", default=True):
-                    logger.info("Cancelled.")
-                    return
-            else:
-                print(f"\nShow: {show_meta['title']}")
-                print(f"Author: {show_meta['author']}")
-                print("\nRecent Episodes:")
-                for i, episode in enumerate(episodes[:5], 1):
-                    print(f"  {i}. {episode}")
-                print(f"\nTotal episodes: {len(episodes)}")
-
-                confirm = input("\nAdd this show to library? [Y/n]: ").strip().lower()
-                if confirm and confirm not in ["y", "yes"]:
-                    logger.info("Cancelled.")
-                    return
-
-        # Add show to library
-        show = library.add_show(args.feed_url, verbose=args.verbose)
-
-        if has_rich:
-            console = Console()
-            console.print(f"\n[green]✓[/green] Added: [bold]{show.title}[/bold] (ID: {show.id})")
-        else:
-            print(f"\n✓ Added: {show.title} (ID: {show.id})")
-
-    except DuplicateShowError as e:
-        log_error(str(e))
-    except (FeedFetchError, FeedParseError) as e:
-        log_error(f"Failed to add show: {e}")
-        if args.verbose:
-            traceback.print_exc()
-    except Exception as e:
-        log_error(f"An unexpected error occurred: {e}")
-        if args.verbose:
-            traceback.print_exc()
-
-
-def cmd_list(args: argparse.Namespace) -> None:
-    """Handle 'pidcast list' command."""
-    from .library import LibraryManager
-
-    try:
-        from rich.console import Console
-        from rich.table import Table
-
-        has_rich = True
-    except ImportError:
-        has_rich = False
-
-    # Initialize library
-    library = LibraryManager()
-    shows = library.list_shows()
-
-    if not shows:
-        logger.info("No shows in library. Use 'pidcast add <feed-url>' to add shows.")
-        return
-
-    if has_rich:
-        console = Console()
-        table = Table(show_header=True, title=f"Podcast Library ({len(shows)} shows)")
-        table.add_column("ID", style="cyan", width=4)
-        table.add_column("Title", style="white")
-        table.add_column("Author", style="yellow")
-        table.add_column("Added", style="dim", width=12)
-
-        for show in shows:
-            added_str = show.added_at.strftime("%Y-%m-%d")
-            table.add_row(str(show.id), show.title, show.author or "Unknown", added_str)
-
-        console.print(table)
-    else:
-        print(f"\nPodcast Library ({len(shows)} shows):")
-        print("-" * 80)
-        for show in shows:
-            added_str = show.added_at.strftime("%Y-%m-%d")
-            print(f"ID: {show.id}")
-            print(f"  Title: {show.title}")
-            print(f"  Author: {show.author or 'Unknown'}")
-            print(f"  Added: {added_str}")
-            print()
-
-
-def cmd_show(args: argparse.Namespace) -> None:
-    """Handle 'pidcast show' command."""
-    from .library import LibraryManager
-
-    try:
-        from rich.console import Console
-        from rich.panel import Panel
-        from rich.table import Table
-
-        has_rich = True
-    except ImportError:
-        has_rich = False
-
-    # Initialize library
-    library = LibraryManager()
-
-    try:
-        show = library.get_show(args.show_id)
-        if not show:
-            log_error(
-                f"Show ID {args.show_id} not found. Run 'pidcast list' to see available shows."
-            )
-            return
-
-        # Fetch episodes
-        episodes = library.get_episodes(args.show_id, limit=args.episodes, verbose=args.verbose)
-
-        if has_rich:
-            console = Console()
-
-            # Show metadata
-            info_table = Table(show_header=False, box=None, padding=(0, 2))
-            info_table.add_column(style="cyan bold", width=15)
-            info_table.add_column(style="white")
-
-            info_table.add_row("ID", str(show.id))
-            info_table.add_row("Title", show.title)
-            info_table.add_row("Author", show.author or "Unknown")
-            info_table.add_row("Feed URL", show.feed_url)
-            info_table.add_row("Added", show.added_at.strftime("%Y-%m-%d %H:%M"))
-            if show.last_checked:
-                info_table.add_row("Last Checked", show.last_checked.strftime("%Y-%m-%d %H:%M"))
-
-            console.print(
-                Panel(info_table, title=f"[bold]{show.title}[/bold]", border_style="cyan")
-            )
-
-            # Episodes
-            console.print(f"\n[bold]Recent Episodes (showing {len(episodes)}):[/bold]")
-            ep_table = Table(show_header=True)
-            ep_table.add_column("#", style="cyan", width=4)
-            ep_table.add_column("Date", style="yellow", width=12)
-            ep_table.add_column("Duration", style="dim", width=10)
-            ep_table.add_column("Title", style="white")
-
-            for i, episode in enumerate(episodes, 1):
-                date_str = episode.pub_date.strftime("%Y-%m-%d")
-                duration_str = f"{episode.duration // 60}m" if episode.duration else "Unknown"
-                ep_table.add_row(str(i), date_str, duration_str, episode.title)
-
-            console.print(ep_table)
-        else:
-            print(f"\n{'=' * 80}")
-            print(f"Show Details (ID: {show.id})")
-            print(f"{'=' * 80}")
-            print(f"Title: {show.title}")
-            print(f"Author: {show.author or 'Unknown'}")
-            print(f"Feed URL: {show.feed_url}")
-            print(f"Added: {show.added_at.strftime('%Y-%m-%d %H:%M')}")
-            if show.last_checked:
-                print(f"Last Checked: {show.last_checked.strftime('%Y-%m-%d %H:%M')}")
-
-            print(f"\nRecent Episodes (showing {len(episodes)}):")
-            print("-" * 80)
-            for i, episode in enumerate(episodes, 1):
-                print(f"{i}. {episode}")
-            print()
-
-    except ShowNotFoundError as e:
-        log_error(str(e))
-    except (FeedFetchError, FeedParseError) as e:
-        log_error(f"Failed to fetch episodes: {e}")
-        if args.verbose:
-            traceback.print_exc()
-    except Exception as e:
-        log_error(f"An unexpected error occurred: {e}")
-        if args.verbose:
-            traceback.print_exc()
-
-
-def cmd_remove(args: argparse.Namespace) -> None:
-    """Handle 'pidcast remove' command."""
-    from .library import LibraryManager
-
-    try:
-        from rich.console import Console
-
-        has_rich = True
-    except ImportError:
-        has_rich = False
-
-    # Initialize library
-    library = LibraryManager()
-
-    # Get show details before removing
-    show = library.get_show(args.show_id)
-    if not show:
-        log_error(f"Show ID {args.show_id} not found. Run 'pidcast list' to see available shows.")
-        return
-
-    # Remove show
-    if library.remove_show(args.show_id):
-        if has_rich:
-            console = Console()
-            console.print(f"\n[green]✓[/green] Removed: [bold]{show.title}[/bold] (ID: {show.id})")
-        else:
-            print(f"\n✓ Removed: {show.title} (ID: {show.id})")
-    else:
-        log_error(f"Failed to remove show ID {args.show_id}")
-
-
-def cmd_digest(args: argparse.Namespace) -> None:
-    """Handle 'pidcast digest' command."""
-    from datetime import datetime, timedelta
-
-    from .config import DEFAULT_PROMPTS_FILE, HISTORY_FILE, get_digest_output_path
-    from .digest import DigestFormatter, DigestGenerator
-    from .history import ProcessingHistory
-    from .library import LibraryManager
-    from .summarization import Summarizer
-
-    # Get Groq API key
-    groq_api_key = args.groq_api_key or os.environ.get("GROQ_API_KEY")
-    if not groq_api_key:
-        log_error(
-            "Groq API key not found. Set GROQ_API_KEY environment variable or use --groq_api_key"
-        )
-        return
-
-    # Initialize components
-    library = LibraryManager()
-    history = ProcessingHistory(HISTORY_FILE)
-    prompts_file = Path(args.prompts_file) if args.prompts_file else DEFAULT_PROMPTS_FILE
-    summarizer = Summarizer(prompts_file, groq_api_key)
-
-    generator = DigestGenerator(library, history, summarizer)
-
-    # Parse date filters
-    date_filter = None
-    date_range = None
-
-    if args.date:
-        try:
-            date_filter = datetime.strptime(args.date, "%Y-%m-%d")
-        except ValueError:
-            log_error(f"Invalid date format: {args.date}. Use YYYY-MM-DD format.")
-            return
-    elif args.range:
-        # Parse range like "7d", "30d"
-        try:
-            if args.range.endswith("d"):
-                days = int(args.range[:-1])
-                date_range = timedelta(days=days)
-            else:
-                log_error(f"Invalid range format: {args.range}. Use format like '7d' or '30d'.")
-                return
-        except ValueError:
-            log_error(f"Invalid range format: {args.range}. Use format like '7d' or '30d'.")
-            return
-    else:
-        # Default: today's episodes
-        date_filter = datetime.now()
-
-    # Generate digest
-    try:
-        logger.info("Generating digest...")
-        digest = generator.generate_digest(date_filter, date_range)
-
-        if not digest.episodes:
-            logger.info("No episodes found for specified date range.")
-            return
-
-        # Display in terminal
-        DigestFormatter.format_terminal(digest)
-
-        # Save to file (digest path comes from DIGESTS_DIR via get_digest_output_path)
-        output_dir = resolve_output_dir(args)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = get_digest_output_path(date_filter or datetime.now())
-
-        markdown = DigestFormatter.format_markdown(digest)
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(markdown)
-
-        logger.info(f"\nDigest saved to: {output_path}")
-
-    except Exception as e:
-        log_error(f"Failed to generate digest: {e}")
-        if args.verbose:
-            traceback.print_exc()
-
-
-def cmd_sync(args: argparse.Namespace) -> None:
-    """Handle 'pidcast sync' command."""
-    from .config import DEFAULT_BACKFILL_LIMIT, HISTORY_FILE, WHISPER_MODEL
-    from .history import ProcessingHistory
-    from .library import LibraryManager
-    from .sync import SyncEngine
-
-    # Initialize library and history
-    library = LibraryManager()
-    history = ProcessingHistory(HISTORY_FILE)
-
-    # Get output directory
-    output_dir = resolve_output_dir(args)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Get Whisper model
-    whisper_model = args.whisper_model or WHISPER_MODEL
-    if not whisper_model:
-        log_error(
-            "Whisper model not specified. Set WHISPER_MODEL environment variable "
-            "or use --whisper_model flag"
-        )
-        return
-
-    # Resolve model name to path
-    from .transcription import resolve_whisper_model
-
-    try:
-        whisper_model = resolve_whisper_model(whisper_model)
-    except Exception as e:
-        log_error(str(e))
-        return
-
-    # Get Groq API key (optional)
-    groq_api_key = args.groq_api_key or os.environ.get("GROQ_API_KEY")
-
-    # Build config
-    config = {
-        "backfill_limit": DEFAULT_BACKFILL_LIMIT,
-    }
-
-    # Create sync engine
-    engine = SyncEngine(
-        library=library,
-        history=history,
-        config=config,
-        output_dir=output_dir,
-        whisper_model=whisper_model,
-        groq_api_key=groq_api_key,
-        analysis_type=args.analysis_type,
-        prompts_file=Path(args.prompts_file) if args.prompts_file else None,
-        verbose=args.verbose,
-    )
-
-    # Run sync
-    try:
-        stats = engine.sync(
-            show_id=args.show,
-            dry_run=args.dry_run,
-            force=args.force,
-            backfill=args.backfill,
-        )
-
-        # Print summary
-        logger.info(f"\n{'=' * 60}")
-        logger.info("Sync Complete!")
-        logger.info(f"{'=' * 60}")
-        logger.info(f"Processed: {stats['processed']} episodes")
-        logger.info(f"Succeeded: {stats['succeeded']}")
-        logger.info(f"Failed: {stats['failed']}")
-        if stats["skipped"] > 0:
-            logger.info(f"Skipped: {stats['skipped']} (already processed)")
-        logger.info(f"{'=' * 60}\n")
-
-        # Generate digest unless --no-digest flag is set
-        if not args.no_digest and stats["succeeded"] > 0 and groq_api_key:
-            from datetime import datetime
-
-            from .config import get_digest_output_path
-            from .digest import DigestFormatter, DigestGenerator
-            from .summarization import Summarizer
-
-            try:
-                logger.info("Generating digest...")
-                prompts_file = (
-                    Path(args.prompts_file) if args.prompts_file else DEFAULT_PROMPTS_FILE
-                )
-                summarizer = Summarizer(prompts_file, groq_api_key)
-                digest_generator = DigestGenerator(library, history, summarizer)
-
-                # Generate digest for today's processed episodes
-                digest = digest_generator.generate_digest(date_filter=datetime.now())
-
-                if digest.episodes:
-                    DigestFormatter.format_terminal(digest)
-
-                    # Save digest
-                    output_path = get_digest_output_path(datetime.now())
-                    markdown = DigestFormatter.format_markdown(digest)
-                    with open(output_path, "w", encoding="utf-8") as f:
-                        f.write(markdown)
-
-                    logger.info(f"\n✓ Digest saved to: {output_path}")
-
-            except Exception as e:
-                logger.warning(f"Failed to generate digest: {e}")
-                if args.verbose:
-                    traceback.print_exc()
-
-    except Exception as e:
-        log_error(f"Sync failed: {e}")
-        if args.verbose:
-            traceback.print_exc()
-
-
-def cmd_doctor(prune_stats: bool = False) -> None:
-    """Run health checks and display configuration status."""
-    from .config import RUNS_FILE
-    from .setup import determine_status, run_all_checks
-    from .utils import prune_phantom_stats
-
-    print("\npidcast doctor")
-    print("=" * 40)
-
-    if prune_stats:
-        removed = prune_phantom_stats(RUNS_FILE)
-        print(f"  Pruned {removed} phantom stats entr(y/ies) with a missing transcript.\n")
-
-    checks = run_all_checks()
-    max_name = max(len(c.name) for c in checks)
-
-    for check in checks:
-        dots = "." * (max_name + 6 - len(check.name))
-        if check.ok:
-            print(f"  {check.name} {dots} {check.detail}")
-        else:
-            label = "MISSING" if check.required else "not set"
-            msg = check.detail if check.detail != "not set" else label
-            print(f"  {check.name} {dots} {msg}")
-            if check.hint:
-                print(f"    -> {check.hint}")
-
-    status, tip = determine_status(checks)
-    print(f"\n  Status: {status}")
-    if tip:
-        print(f"  Tip: {tip}")
-    print()
-
-
-def cmd_setup() -> None:
-    """Interactive setup wizard for first-time users."""
-
-    from .setup import (
-        ENV_FILE,
-        check_env_var,
-        check_ffmpeg,
-        check_vad_model,
-        check_whisper,
-        check_whisper_model,
-        write_env_var,
-    )
-
-    print("\npidcast setup")
-    print("=" * 40)
-
-    # Step 1: System dependencies
-    print("\nStep 1/3: Checking system dependencies...\n")
-
-    ffmpeg = check_ffmpeg()
-    if ffmpeg.ok:
-        print(f"  ffmpeg: {ffmpeg.detail}")
-    else:
-        print("  ffmpeg: not found")
-        print("    Install: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)")
-        print("    Then re-run: pidcast setup")
-        return
-
-    whisper = check_whisper()
-    whisper_model = check_whisper_model()
-    use_elevenlabs = False
-
-    if whisper.ok and whisper_model.ok:
-        print(f"  whisper.cpp: {whisper.detail}")
-        print(f"  whisper model: {whisper_model.detail}")
-        vad = check_vad_model()
-        if vad.ok:
-            print(f"  VAD model: {vad.detail}")
-        else:
-            print("  VAD model: not found (optional, enables --vad anti-hallucination)")
-            print("    Download: cd whisper.cpp && bash models/download-vad-model.sh silero-v5.1.2")
-            print("    Then set in .env: WHISPER_VAD_MODEL=/path/to/ggml-silero-v5.1.2.bin")
-    else:
-        print("  whisper.cpp: not configured")
-        print("\n  whisper.cpp is needed for local (private) transcription.")
-        print("  You can skip it and use ElevenLabs (cloud) instead.\n")
-        print("  [1] I'll set up whisper.cpp myself (see README for instructions)")
-        print("  [2] Skip - use ElevenLabs cloud transcription")
-        try:
-            choice = input("\n  > ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\n  Setup cancelled.")
-            return
-        if choice == "2":
-            use_elevenlabs = True
-        else:
-            print("\n  To set up whisper.cpp:")
-            print("    1. git clone https://github.com/ggerganov/whisper.cpp.git")
-            print("    2. cd whisper.cpp && make")
-            print("    3. bash models/download-ggml-model.sh base.en")
-            print("    4. Set in .env: WHISPER_CPP_PATH=/path/to/whisper.cpp/build/bin/whisper-cli")
-            print("    5. Set in .env: WHISPER_MODEL=/path/to/whisper.cpp/models/ggml-base.en.bin")
-            print("    6. Re-run: pidcast setup")
-            return
-
-    # Step 2: API keys
-    print("\nStep 2/3: API keys\n")
-
-    # Groq (for analysis)
-    groq = check_env_var("GROQ_API_KEY", "GROQ_API_KEY")
-    if groq.ok:
-        print(f"  GROQ_API_KEY: {groq.detail}")
-    else:
-        print("  GROQ_API_KEY: not set (needed for AI analysis)")
-        print("  Get a free key at: https://console.groq.com/")
-        try:
-            key = input("  Paste your key (or press Enter to skip): ").strip()
-        except (EOFError, KeyboardInterrupt):
-            key = ""
-        if key:
-            write_env_var("GROQ_API_KEY", key)
-            print("  Saved to .env")
-        else:
-            print("  Skipped - transcription will work, but AI analysis will be disabled")
-
-    # ElevenLabs (if chosen or if no whisper)
-    if use_elevenlabs:
-        el = check_env_var("ELEVENLABS_API_KEY", "ELEVENLABS_API_KEY")
-        if el.ok:
-            print(f"  ELEVENLABS_API_KEY: {el.detail}")
-        else:
-            print("\n  ELEVENLABS_API_KEY: not set (needed for cloud transcription)")
-            print("  Get a key at: https://elevenlabs.io/")
-            try:
-                key = input("  Paste your key: ").strip()
-            except (EOFError, KeyboardInterrupt):
-                key = ""
-            if key:
-                write_env_var("ELEVENLABS_API_KEY", key)
-                print("  Saved to .env")
-            else:
-                print("  Without this key, transcription won't work.")
-                print("  Add it to .env later: ELEVENLABS_API_KEY=your_key")
-                return
-
-    # Step 3: Summary
-    print("\nStep 3/3: Ready!\n")
-
-    if not ENV_FILE.exists():
-        print(f"  Note: .env file created at {ENV_FILE}")
-
-    if use_elevenlabs:
-        print("  Provider: ElevenLabs (cloud)")
-        print("\n  Try it:")
-        print('    pidcast "https://youtube.com/watch?v=VIDEO_ID"')
-    else:
-        print("  Provider: whisper.cpp (local)")
-        print("\n  Try it:")
-        print('    pidcast "https://youtube.com/watch?v=VIDEO_ID"')
-
-    print()
-
-
-def resolve_output_dir(args: argparse.Namespace) -> Path:
-    """Resolve the transcript output directory.
-
-    Precedence (highest first):
-      1. ``--output-dir`` flag
-      2. ``config.yaml``'s ``output_dir`` (an explicit value the user set),
-         UNLESS it points at the legacy in-repo ``data/transcripts`` dir - older
-         configs pinned that absolute path before storage moved to the XDG data
-         dir, so we treat it as stale and fall through rather than sending new
-         transcripts back into the source tree.
-      3. the XDG ``TRANSCRIPTS_DIR`` default
-
-    Never falls back to the current working directory, so a run with no flag
-    lands artifacts in the canonical data dir instead of wherever you happen to
-    be standing.
+    Returns:
+        Parsed arguments namespace with ``command`` and ``func`` set.
     """
-    flag = getattr(args, "output_dir", None)
-    if flag:
-        return Path(flag)
+    import sys
 
-    from .config import PROJECT_ROOT
-    from .config_manager import ConfigManager
+    if argv is None:
+        argv = sys.argv[1:]
 
-    configured = ConfigManager.load_config().get("output_dir")
-    if configured and not _is_legacy_repo_path(Path(configured), PROJECT_ROOT):
-        return Path(configured)
-
-    return TRANSCRIPTS_DIR
+    parser = _build_parser()
+    return parser.parse_args(_inject_default_verb(argv))
 
 
-def _is_legacy_repo_path(path: Path, project_root: Path) -> bool:
-    """True if ``path`` is the old in-repo data/transcripts location (now stale)."""
-    legacy = project_root / "data" / "transcripts"
+def _suppress_all_defaults(parser: argparse.ArgumentParser) -> None:
+    """Set every action's default to SUPPRESS, recursing into subparsers.
+
+    After this, a parse only populates dests the user actually supplied — the
+    basis for robust explicit-flag detection across any flag spelling.
+    """
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for sub in action.choices.values():
+                _suppress_all_defaults(sub)
+        else:
+            action.default = argparse.SUPPRESS
+
+
+def _explicitly_set_dests(argv: list[str]) -> set[str]:
+    """Return the dests the user explicitly passed, by any spelling.
+
+    Re-parses ``argv`` through a shadow parser whose defaults are all SUPPRESS,
+    so only supplied options appear in the result. This correctly catches short
+    aliases (``-m``) and ``BooleanOptionalAction`` (``--no-suppress-nst``) that a
+    naive ``sys.argv`` substring scan misses.
+    """
+    shadow = _build_parser()
+    _suppress_all_defaults(shadow)
     try:
-        return path.resolve() == legacy.resolve()
-    except OSError:
-        return False
+        ns, _ = shadow.parse_known_args(_inject_default_verb(argv))
+    except SystemExit:
+        # A parse error here shouldn't crash preset handling; fall back to "none
+        # detected" so explicit flags simply aren't protected (preset still safe).
+        return set()
+    # `command`/`func` are structural, not user flags; drop them.
+    return {k for k in vars(ns) if k not in ("command", "func")}
 
 
-def print_paths() -> None:
-    """Print resolved data/config directories ('pidcast paths')."""
-    from .config import (
-        AUDIO_DIR,
-        CONFIG_DIR,
-        DATA_DIR,
-        LOGS_DIR,
-        RUNS_FILE,
-        STATE_DIR,
-        TRANSCRIPTS_DIR,
-        ensure_data_dirs,
-    )
+def _inject_default_verb(argv: list[str]) -> list[str]:
+    """Inject the implicit ``transcribe`` verb for the bare-input shortcut.
 
-    ensure_data_dirs()
-    print("pidcast paths")
-    print(f"  data dir:     {DATA_DIR}")
-    print(f"  transcripts:  {TRANSCRIPTS_DIR}")
-    print(f"  audio:        {AUDIO_DIR}")
-    print(f"  logs:         {LOGS_DIR}")
-    print(f"  state:        {STATE_DIR}")
-    print(f"  run history:  {RUNS_FILE}")
-    print(f"  config dir:   {CONFIG_DIR}")
-    print("\n  Override the data dir with PIDCAST_DATA_DIR or XDG_DATA_HOME.")
+    Rule: prepend ``transcribe`` only when the first token is a non-empty value
+    that is NOT a known verb and does NOT start with ``-``. So ``pidcast URL``
+    and ``pidcast file.mp3`` route to transcribe, while ``pidcast --help``,
+    ``pidcast lib list``, and ``pidcast info`` are left untouched. A file
+    literally named like a verb is shadowed (use ``transcribe ./info``).
+    """
+    if not argv:
+        return argv
+    first = argv[0]
+    if not first or first.startswith("-") or first in KNOWN_VERBS:
+        return argv
+    return ["transcribe", *argv]
+
+
+def build_transcribe_namespace(input_path: str) -> argparse.Namespace:
+    """Materialize a fully-defaulted ``transcribe`` Namespace for a given input.
+
+    Used by ``resume`` to rebuild the original run's args without mutating
+    ``sys.argv``. Every dest the transcribe workflow reads is present with its
+    default, ready to be overlaid with persisted checkpoint flags.
+    """
+    return parse_arguments(["transcribe", input_path])
+
+
+# ============================================================================
+# ENTRY POINT
+# ============================================================================
 
 
 def main() -> None:
     """Main entry point for pidcast CLI."""
-    import sys
+    from dotenv import load_dotenv
 
-    # Handle setup/doctor subcommands before arg parsing
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "paths":
-            from dotenv import load_dotenv
-
-            load_dotenv()
-            print_paths()
-            return
-        if sys.argv[1] == "doctor":
-            from dotenv import load_dotenv
-
-            load_dotenv()
-            # doctor/setup dispatch before parse_arguments()/setup_logging(), so
-            # configure logging here or logger.* output is silently dropped.
-            setup_logging("--verbose" in sys.argv or "-v" in sys.argv)
-            cmd_doctor(prune_stats="--prune-stats" in sys.argv)
-            return
-        if sys.argv[1] == "setup":
-            from dotenv import load_dotenv
-
-            load_dotenv()
-            setup_logging("--verbose" in sys.argv or "-v" in sys.argv)
-            cmd_setup()
-            return
-        if sys.argv[1] == "resume":
-            from dotenv import load_dotenv
-
-            load_dotenv()
-            # These subcommands dispatch before parse_arguments()/setup_logging(),
-            # so configure logging here or every logger.* call is silently dropped.
-            verbose = "--verbose" in sys.argv or "-v" in sys.argv
-            setup_logging(verbose)
-            job_args = [a for a in sys.argv[2:] if not a.startswith("-")]
-            job_arg = job_args[0] if job_args else None
-            cmd_resume(job_arg)
-            return
+    # Env must load before parsing so env-backed defaults resolve.
+    load_dotenv()
 
     args = parse_arguments()
 
-    # Set up logging
-    setup_logging(getattr(args, "verbose", False))
-
-    # Handle --list-presets
-    if getattr(args, "list_presets", False):
-        from .config_manager import ConfigManager
-
-        presets = ConfigManager.list_presets()
-        if not presets:
-            print("No presets defined. Add presets to ~/.config/pidcast/config.yaml")
-            print("\nExample:")
-            print("  presets:")
-            print("    daily:")
-            print("      whisper_model: large-v3")
-            print("      language: uk")
-            print("      diarize: true")
-            print("      no_analyze: true")
-            print("      vad: true            # strip silence (anti-hallucination)")
-            print("      vad_threshold: 0.5")
-        else:
-            print("Available presets:\n")
-            for name, flags in presets.items():
-                flag_str = ", ".join(f"{k}={v}" for k, v in flags.items())
-                print(f"  {name}: {flag_str}")
-            print("\nUsage: pidcast <input> -p <preset>")
+    # No verb (and no bare input) -> show top-level help.
+    if not getattr(args, "command", None) or not hasattr(args, "func"):
+        _build_parser().print_help()
         return
 
-    # Apply preset if specified
+    setup_logging(getattr(args, "verbose", False))
+
+    # Apply preset if specified (transcribe/lib paths carry -p). Detect which
+    # flags the user passed (by any spelling) so the preset never clobbers them.
     if getattr(args, "preset", None):
         import sys
 
-        # Determine which args were explicitly set on CLI
-        explicitly_set = set()
-        for arg in vars(args):
-            if any(
-                a in (f"--{arg}", f"-{arg}", f"--{arg.replace('_', '-')}") for a in sys.argv[1:]
-            ):
-                explicitly_set.add(arg)
+        explicitly_set = _explicitly_set_dests(sys.argv[1:])
         try:
             apply_preset(args, explicitly_set=explicitly_set)
         except ValueError as e:
             log_error(str(e))
             return
 
-    # Load chrome_profile from config if not explicitly set
-    if not getattr(args, "chrome_profile", None):
+    # Load chrome_profile from config if not explicitly set (download paths).
+    if hasattr(args, "chrome_profile") and not getattr(args, "chrome_profile", None):
         from .config_manager import ConfigManager
 
         config = ConfigManager.load_config()
@@ -1696,317 +632,7 @@ def main() -> None:
         if chrome_profile:
             args.chrome_profile = chrome_profile
 
-    # Handle discovery/list commands first (they exit immediately)
-    if getattr(args, "list_analyses", False):
-        from .utils import list_available_analyses
-
-        list_available_analyses()
-        return
-
-    if getattr(args, "list_models", False):
-        from .utils import list_available_models
-
-        list_available_models()
-        return
-
-    if getattr(args, "list_whisper_models", False):
-        from .transcription import list_whisper_models
-
-        models = list_whisper_models()
-        if not models:
-            print("No whisper models found. Set WHISPER_MODELS_DIR or WHISPER_MODEL env var.")
-        else:
-            print("Available Whisper models:\n")
-            for m in models:
-                print(f"  {m['name']:<25} {m['size']:>10}")
-            print(f"\nUsage: pidcast <input> --whisper_model {models[0]['name']}")
-        return
-
-    if getattr(args, "list_chrome_profiles", False):
-        from .cookies import list_chrome_profiles
-
-        profiles = list_chrome_profiles()
-        if not profiles:
-            print("No Chrome profiles found.")
-        else:
-            print("Available Chrome profiles:\n")
-            print(f"  {'Display Name':<25} {'Directory':<20} {'Config Value'}")
-            print(f"  {'-' * 25} {'-' * 20} {'-' * 30}")
-            for dir_name, meta in profiles.items():
-                print(f"  {meta['display_name']:<25} {dir_name:<20} {dir_name}")
-            print(f'\nUsage: pidcast <input> --chrome-profile "{list(profiles.keys())[0]}"')
-            print("   Or: Set 'chrome_profile' in ~/.config/pidcast/config.yaml")
-        return
-
-    # Route to library commands if specified
-    if getattr(args, "mode", None) == "lib":
-        lib_commands = {
-            "add": cmd_add,
-            "list": cmd_list,
-            "show": cmd_show,
-            "remove": cmd_remove,
-            "sync": cmd_sync,
-            "digest": cmd_digest,
-            "process": cmd_process,
-        }
-        handler = lib_commands.get(args.lib_command)
-        if handler:
-            handler(args)
-        return
-
-    # Validate that we have either input_source or analyze_existing for transcription workflow
-    if (
-        not args.input_source
-        and not args.analyze_existing
-        and not getattr(args, "diarize_existing", None)
-    ):
-        log_error("No input provided.")
-        logger.info('  Usage: pidcast "https://youtube.com/watch?v=VIDEO_ID"')
-        logger.info("         pidcast /path/to/audio.mp3")
-        logger.info("  First time? Run: pidcast setup")
-        logger.info("  Full help: pidcast --help")
-        return
-
-    # Resolve analysis type with fuzzy matching
-    if args.analysis_type and args.analysis_type != "executive_summary":
-        from .utils import resolve_analysis_type
-
-        try:
-            resolved_type = resolve_analysis_type(args.analysis_type, args.prompts_file)
-            if resolved_type != args.analysis_type and args.verbose:
-                logger.info(f"Matched '{args.analysis_type}' → '{resolved_type}'")
-            args.analysis_type = resolved_type
-        except ValueError as e:
-            log_error(str(e))
-            return
-
-    # Resolve model name with fuzzy matching
-    if args.groq_model:
-        from .utils import resolve_model_name
-
-        try:
-            resolved_model = resolve_model_name(args.groq_model)
-            if resolved_model != args.groq_model and args.verbose:
-                logger.info(f"Matched '{args.groq_model}' → '{resolved_model}'")
-            args.groq_model = resolved_model
-        except ValueError as e:
-            log_error(str(e))
-            return
-
-    # Resolve whisper model name to path (only needed for whisper provider)
-    transcription_provider = getattr(args, "transcription_provider", "whisper")
-    if args.whisper_model and not args.analyze_existing and transcription_provider == "whisper":
-        from .transcription import resolve_whisper_model
-
-        try:
-            resolved = resolve_whisper_model(args.whisper_model)
-            if resolved != args.whisper_model and args.verbose:
-                logger.info(f"Whisper model: '{args.whisper_model}' -> {resolved}")
-            args.whisper_model = resolved
-        except Exception as e:
-            log_error(str(e))
-            return
-
-    # Set defaults for paths
-    output_dir = resolve_output_dir(args)
-    stats_file = Path(args.stats_file) if args.stats_file else RUNS_FILE
-
-    # Determine where analysis files should go
-    analysis_output_dir = Path(OBSIDIAN_PATH) if args.save_to_obsidian else output_dir
-
-    if args.save_to_obsidian and args.verbose:
-        logger.info(f"Analysis will be saved to Obsidian vault: {analysis_output_dir}")
-        logger.info(f"Transcripts will be saved to: {output_dir}")
-
-    # Initialize tracking variables
-    run_uid = str(uuid.uuid4())
-    run_timestamp = datetime.datetime.now().isoformat()
-    start_time = time.time()
-
-    # Validate test-segment options
-    test_segment = getattr(args, "test_segment", None)
-    start_at = getattr(args, "start_at", None)
-
-    if test_segment is not None:
-        if test_segment <= 0:
-            log_error("--test-segment duration must be positive")
-            return
-        if test_segment > 30:
-            log_error("--test-segment maximum is 30 minutes")
-            return
-        if args.analyze_existing:
-            log_error("--test-segment cannot be used with --analyze_existing")
-            return
-
-    if start_at is not None:
-        if test_segment is None:
-            log_error("--start-at requires --test-segment")
-            return
-        if start_at < 0:
-            log_error("--start-at must be non-negative")
-            return
-
-    # Validate --audio flag
-    if getattr(args, "audio", None) and not getattr(args, "diarize_existing", None):
-        log_error("--audio requires --diarize-existing")
-        return
-
-    # Handle diarize-existing mode
-    diarize_existing = getattr(args, "diarize_existing", None)
-    if diarize_existing:
-        from .workflow import run_diarize_existing_mode
-
-        run_diarize_existing_mode(
-            diarize_existing,
-            audio_override=getattr(args, "audio", None),
-            verbose=args.verbose,
-        )
-        return
-
-    # Handle analyze-existing mode
-    if args.analyze_existing:
-        if args.no_analyze:
-            log_error(
-                "--no-analyze cannot be used with --analyze_existing. "
-                "The purpose of --analyze_existing is to analyze a transcript."
-            )
-            return
-
-        run_analyze_existing_mode(
-            args.analyze_existing,
-            args,
-            output_dir,
-            analysis_output_dir,
-            stats_file,
-            run_uid,
-            run_timestamp,
-            start_time,
-        )
-        return
-
-    if args.verbose:
-        log_section("Transcription Tool")
-        logger.info(f"Input: {args.input_source}")
-        logger.info(f"Run ID: {run_uid}")
-        logger.info(f"Timestamp: {run_timestamp}")
-
-    # Check for duplicate transcription (unless --force or --test-segment is used)
-    if not args.force and test_segment is None:
-        prev_transcription = find_existing_transcription(stats_file, args.input_source, output_dir)
-
-        if prev_transcription:
-            # Handle non-interactive mode
-            if not is_interactive():
-                log_error(
-                    f"Duplicate detected: '{prev_transcription.video_title}' "
-                    f"was already transcribed on {prev_transcription.formatted_date}. "
-                    "Use --force to proceed anyway."
-                )
-                return
-
-            # Interactive mode: prompt user for action
-            action = prompt_duplicate_detected(prev_transcription, args.verbose)
-
-            if action == DuplicateAction.CANCEL:
-                logger.info("Operation cancelled.")
-                return
-
-            elif action == DuplicateAction.ANALYZE_EXISTING:
-                run_analyze_existing_mode(
-                    prev_transcription.transcript_path,
-                    args,
-                    output_dir,
-                    analysis_output_dir,
-                    stats_file,
-                    run_uid,
-                    run_timestamp,
-                    start_time,
-                )
-                return
-
-            elif action == DuplicateAction.RE_TRANSCRIBE:
-                logger.info("Re-transcribing video...")
-
-            elif action == DuplicateAction.FORCE_CONTINUE:
-                logger.info("Continuing with transcription...")
-
-    # Run the main transcription workflow under a pause-aware SIGINT handler.
-    _run_with_pause_handler(
-        lambda: process_input_source(
-            args.input_source,
-            args,
-            output_dir,
-            analysis_output_dir,
-            stats_file,
-            run_uid,
-            run_timestamp,
-            start_time,
-        )
-    )
-
-
-def _run_with_pause_handler(run_fn) -> None:
-    """Run ``run_fn`` with Ctrl-C wired to a clean transcription pause.
-
-    First Ctrl-C requests a pause (the whisper stream loop stops at the next
-    segment boundary and the job is checkpointed). A second Ctrl-C restores the
-    default handler and hard-quits.
-    """
-    import signal
-
-    from .workflow import request_pause
-
-    state = {"count": 0}
-    original = signal.getsignal(signal.SIGINT)
-
-    def _handler(signum, frame):
-        state["count"] += 1
-        if state["count"] == 1:
-            logger.info(
-                "\nPausing transcription at the next segment boundary... (Ctrl-C again to force quit)"
-            )
-            request_pause()
-        else:
-            signal.signal(signal.SIGINT, original)
-            raise KeyboardInterrupt
-
-    signal.signal(signal.SIGINT, _handler)
-    try:
-        run_fn()
-    finally:
-        signal.signal(signal.SIGINT, original)
-
-
-def cmd_resume(job_arg: str | None) -> None:
-    """Resume a paused/interrupted transcription job (``pidcast resume [job-id]``)."""
-    from .checkpoint import DONE, JobManifest, find_resumable_jobs
-    from .resume import resume_job
-
-    jobs = find_resumable_jobs()
-    if not jobs:
-        logger.info("No resumable jobs found.")
-        return
-
-    manifest: JobManifest | None = None
-    if job_arg:
-        manifest = next((j for j in jobs if j.job_id.startswith(job_arg)), None)
-        if manifest is None:
-            logger.error(f"No resumable job matching '{job_arg}'.")
-            return
-    elif len(jobs) == 1:
-        manifest = jobs[0]
-    else:
-        logger.info("Multiple resumable jobs - pass a job id to pick one:\n")
-        for j in jobs:
-            phase = "diarization" if j.transcription.status == DONE else "transcription"
-            title = (j.video_info or {}).get("title", j.input_source)
-            logger.info(
-                f"  {j.job_id}  [{phase}]  {title}  "
-                f"({j.transcription.segment_count} segments, updated {j.updated_at})"
-            )
-        return
-
-    resume_job(manifest)
+    args.func(args)
 
 
 if __name__ == "__main__":
