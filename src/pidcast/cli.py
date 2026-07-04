@@ -37,6 +37,7 @@ KNOWN_VERBS = frozenset(
         "doctor",
         "resume",
         "info",
+        "history",
     }
 )
 
@@ -375,6 +376,7 @@ def _build_parser() -> argparse.ArgumentParser:
     """Construct the full verb-first parser (unconditional subparser tree)."""
     from .commands.analyze import cmd_analyze
     from .commands.diarize import cmd_diarize
+    from .commands.history import cmd_history
     from .commands.info import cmd_info
     from .commands.listing import cmd_list
     from .commands.transcribe import cmd_transcribe
@@ -396,6 +398,7 @@ Common workflows:
   pidcast diarize transcript.md                     Retry diarization only
   pidcast list models                               Discover analyses/models/presets/...
   pidcast lib add "Lex Fridman"                     Manage the podcast library
+  pidcast history -n 20                             Show last 20 runs
 """,
     )
     sub = parser.add_subparsers(dest="command", metavar="<command>")
@@ -507,6 +510,14 @@ Common workflows:
         "info", parents=[parents["global"]], help="Show resolved data/config paths"
     )
     inf.set_defaults(func=cmd_info)
+
+    hi = sub.add_parser(
+        "history", parents=[parents["global"]], help="List recent transcription runs"
+    )
+    hi.add_argument(
+        "-n", "--limit", type=int, default=10, help="Number of runs to show (default: 10)"
+    )
+    hi.set_defaults(func=cmd_history)
 
     return parser
 
