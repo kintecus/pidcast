@@ -184,7 +184,31 @@ JSON_VALIDATION_ERROR_PATTERNS = [
     "Expected JSON",
     "json.decoder.JSONDecodeError",
     "json_schema_error",
+    "invalid json schema for response_format",
 ]
+
+
+# Shared output shape for executive_summary/summary/key_points/action_items/
+# comprehensive/synthesis prompts. Used with Groq's strict json_schema mode
+# on models with confirmed support (see ModelConfig.supports_json_schema).
+ANALYSIS_JSON_SCHEMA = {
+    "name": "transcript_analysis",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "analysis": {"type": "string"},
+            "contextual_tags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 3,
+                "maxItems": 3,
+            },
+        },
+        "required": ["analysis", "contextual_tags"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
 
 
 def is_json_validation_error(error: Exception) -> bool:
@@ -411,7 +435,14 @@ def _call_llm_with_fallback(
             "timeout": ANALYSIS_TIMEOUT,
         }
         if use_json_mode:
-            kwargs["response_format"] = {"type": "json_object"}
+            model_config = selector.get_model_config(model_name)
+            if model_config and model_config.supports_json_schema:
+                kwargs["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": ANALYSIS_JSON_SCHEMA,
+                }
+            else:
+                kwargs["response_format"] = {"type": "json_object"}
         return client.chat.completions.create(**kwargs)
 
     current_model = preferred_model
@@ -455,6 +486,8 @@ def _call_llm_with_fallback(
 
                 # Try next model in fallback chain for JSON issues
                 log_warning(f"{selector.get_display_name(current_model)} failed JSON validation")
+                if verbose:
+                    logger.info(f"  Groq error detail: {e}")
                 # Mark this model as tried and get next fallback
                 selector.mark_tried(current_model)
                 next_model = selector.get_next_fallback()
@@ -504,10 +537,21 @@ def _call_llm_with_fallback(
                             f"  3. Check if your transcript is extremely short (models need enough content)"
                         ) from e
             elif is_payload_too_large_error(e):
+                from .utils import log_error_to_file
+
                 log_warning(
                     f"{selector.get_display_name(current_model)} rejected payload as too large"
                 )
-                next_model = selector.handle_rate_limit(current_model)
+                if verbose:
+                    logger.info(f"  Groq error detail: {e}")
+                log_error_to_file(
+                    "payload_too_large_error",
+                    {
+                        "model": current_model,
+                        "error_message": str(e),
+                    },
+                )
+                next_model = selector.handle_rate_limit(current_model, reason="Payload too large")
                 if next_model:
                     current_model = next_model
                     continue

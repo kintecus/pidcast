@@ -9,9 +9,14 @@ default_model: openai/gpt-oss-120b
 
 # Quality-prioritized fallback chain (best to acceptable)
 # When a model hits rate limits, try the next one in the chain
+#
+# groq/compound is deliberately excluded: it's an agentic/tool-use model with
+# its own hidden per-request payload ceiling independent of its advertised
+# context window/TPM, so it reliably 413s on JSON-mode summarization requests
+# that are nowhere near its token limits. Still selectable explicitly via
+# --groq-model compound; just not part of the automatic fallback sequence.
 fallback_chain:
   - openai/gpt-oss-120b
-  - groq/compound
   - openai/gpt-oss-20b
   - llama-3.3-70b-versatile
   - llama-3.1-8b-instant
@@ -22,6 +27,9 @@ models:
     display_name: GPT-OSS 120B
     provider: groq
     context_window: 131072
+    # Confirmed live (2026-07) against Groq's strict json_schema structured
+    # outputs mode - verify live if Groq's supported-model list changes.
+    supports_json_schema: true
     pricing:
       input: 0.15   # per 1M tokens
       output: 0.60
@@ -48,6 +56,9 @@ models:
     display_name: GPT-OSS 20B
     provider: groq
     context_window: 131072
+    # Confirmed live (2026-07) against Groq's strict json_schema structured
+    # outputs mode - verify live if Groq's supported-model list changes.
+    supports_json_schema: true
     pricing:
       input: 0.075
       output: 0.30

@@ -36,6 +36,7 @@ class ModelConfig:
     rpd: int
     tpm: int
     tpd: int
+    supports_json_schema: bool = False
 
     def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
         """Estimate cost for given token counts."""
@@ -106,6 +107,7 @@ def load_models_config(config_path: Path) -> ModelsConfig:
             rpd=limits.get("rpd", 1000),
             tpm=limits.get("tpm", 10000),
             tpd=limits.get("tpd", 0),
+            supports_json_schema=cfg.get("supports_json_schema", False),
         )
 
     default_model = data.get("default_model", "llama-3.3-70b-versatile")
@@ -407,11 +409,18 @@ class ModelSelector:
         )
         return None, False
 
-    def handle_rate_limit(self, current_model: str) -> str | None:
-        """Handle a rate limit error by selecting next fallback.
+    def handle_rate_limit(self, current_model: str, reason: str = "Rate limit") -> str | None:
+        """Advance to the next fallback model after a failure.
+
+        Despite the name (kept for the common rate-limit case), this is used
+        for any error that should advance the fallback chain — callers pass a
+        ``reason`` describing the actual failure (e.g. "Payload too large")
+        so the log reflects what really happened instead of always saying
+        "Rate limit".
 
         Args:
-            current_model: The model that hit the rate limit
+            current_model: The model that failed
+            reason: Short description of why this model was skipped
 
         Returns:
             Next model to try, or None if all exhausted
@@ -420,11 +429,11 @@ class ModelSelector:
         next_model = self.get_next_fallback()
 
         if next_model:
-            logger.info(f"Rate limit on {current_model}, falling back to {next_model}")
+            logger.info(f"{reason} on {current_model}, falling back to {next_model}")
             return next_model
 
         logger.error(
-            f"Rate limit on {current_model} and no more fallback models. "
+            f"{reason} on {current_model} and no more fallback models. "
             f"Tried: {', '.join(sorted(self._tried_models))}"
         )
         return None
