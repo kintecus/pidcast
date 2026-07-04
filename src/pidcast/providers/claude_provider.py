@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 
 # Claude models available via CLI
 CLAUDE_MODELS = {
-    "sonnet": "claude-sonnet-4-6",
-    "opus": "claude-opus-4-6",
+    "sonnet": "claude-sonnet-5",
+    "opus": "claude-opus-4-8",
     "haiku": "claude-haiku-4-5-20251001",
 }
 DEFAULT_CLAUDE_MODEL = "sonnet"

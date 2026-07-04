@@ -287,6 +287,22 @@ class TestModelSelector:
         result = selector.handle_rate_limit("small-model")
         assert result is None
 
+    def test_handle_rate_limit_reason_reflected_in_log(self, sample_models_config, caplog):
+        """A non-rate-limit failure (e.g. 413 payload too large) must not be
+        mislabeled as 'Rate limit' in the log — the caller-supplied reason
+        should appear verbatim."""
+        selector = ModelSelector(sample_models_config)
+        with caplog.at_level("INFO"):
+            selector.handle_rate_limit("large-model", reason="Payload too large")
+        assert "Payload too large on large-model" in caplog.text
+        assert "Rate limit on large-model" not in caplog.text
+
+    def test_handle_rate_limit_default_reason_is_rate_limit(self, sample_models_config, caplog):
+        selector = ModelSelector(sample_models_config)
+        with caplog.at_level("INFO"):
+            selector.handle_rate_limit("large-model")
+        assert "Rate limit on large-model" in caplog.text
+
     def test_reset(self, sample_models_config):
         selector = ModelSelector(sample_models_config)
         selector.mark_tried("large-model")
