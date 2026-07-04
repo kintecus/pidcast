@@ -107,7 +107,7 @@ class TestRunClaudeSubprocess:
             patch("pidcast.providers.claude_provider._find_claude_cli", return_value="/bin/claude"),
             patch("subprocess.run", return_value=self._mock_proc(stdout="  hello  ")),
         ):
-            result = run_claude_subprocess("prompt", "claude-sonnet-4-6")
+            result = run_claude_subprocess("prompt", "claude-sonnet-5")
         assert result == "hello"
 
     def test_raises_on_nonzero_exit(self):
@@ -118,7 +118,7 @@ class TestRunClaudeSubprocess:
             ),
             pytest.raises(AnalysisError, match="exited with code 1"),
         ):
-            run_claude_subprocess("prompt", "claude-sonnet-4-6")
+            run_claude_subprocess("prompt", "claude-sonnet-5")
 
     def test_raises_on_empty_output(self):
         with (
@@ -126,7 +126,7 @@ class TestRunClaudeSubprocess:
             patch("subprocess.run", return_value=self._mock_proc(stdout="")),
             pytest.raises(AnalysisError, match="empty output"),
         ):
-            run_claude_subprocess("prompt", "claude-sonnet-4-6")
+            run_claude_subprocess("prompt", "claude-sonnet-5")
 
     def test_raises_on_timeout(self):
         with (
@@ -136,7 +136,7 @@ class TestRunClaudeSubprocess:
             ),
             pytest.raises(AnalysisError, match="timed out"),
         ):
-            run_claude_subprocess("prompt", "claude-sonnet-4-6")
+            run_claude_subprocess("prompt", "claude-sonnet-5")
 
     def test_raises_on_os_error(self):
         with (
@@ -144,7 +144,7 @@ class TestRunClaudeSubprocess:
             patch("subprocess.run", side_effect=OSError("no such file")),
             pytest.raises(AnalysisError, match="Failed to invoke"),
         ):
-            run_claude_subprocess("prompt", "claude-sonnet-4-6")
+            run_claude_subprocess("prompt", "claude-sonnet-5")
 
 
 # ============================================================================

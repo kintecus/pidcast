@@ -53,7 +53,7 @@ def _make_comparison_result(**kwargs) -> ComparisonResult:
         "score_b": ProviderScore(accuracy=9, completeness=8, clarity=8, conciseness=7),
         "verdict": "B",
         "reasoning": "B was more accurate.",
-        "judge_model": "claude-opus-4-6",
+        "judge_model": "claude-opus-4-8",
         "duration_total": 15.0,
     }
     defaults.update(kwargs)
@@ -132,7 +132,7 @@ class TestJudgeSummaries:
             return_value=self.JUDGE_JSON,
         ):
             score_a, score_b, verdict, reasoning = _judge_summaries(
-                "Summary A", "Summary B", title="Episode", judge_model="claude-opus-4-6"
+                "Summary A", "Summary B", title="Episode", judge_model="claude-opus-4-8"
             )
 
         assert score_a.accuracy == 8
@@ -147,7 +147,7 @@ class TestJudgeSummaries:
             return_value=wrapped,
         ):
             score_a, score_b, verdict, _ = _judge_summaries(
-                "A", "B", title="Ep", judge_model="claude-opus-4-6"
+                "A", "B", title="Ep", judge_model="claude-opus-4-8"
             )
 
         assert score_a.accuracy == 8
@@ -161,7 +161,7 @@ class TestJudgeSummaries:
             ),
             pytest.raises(AnalysisError, match="invalid JSON"),
         ):
-            _judge_summaries("A", "B", title="Ep", judge_model="claude-opus-4-6")
+            _judge_summaries("A", "B", title="Ep", judge_model="claude-opus-4-8")
 
     def test_defaults_verdict_to_tie_when_missing(self):
         data = {
@@ -175,7 +175,7 @@ class TestJudgeSummaries:
             "pidcast.providers.claude_provider.run_claude_subprocess",
             return_value=json.dumps(data),
         ):
-            _, _, verdict, _ = _judge_summaries("A", "B", title="Ep", judge_model="claude-opus-4-6")
+            _, _, verdict, _ = _judge_summaries("A", "B", title="Ep", judge_model="claude-opus-4-8")
 
         assert verdict == "tie"
 
