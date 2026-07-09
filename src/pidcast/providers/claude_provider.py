@@ -46,7 +46,17 @@ def run_claude_subprocess(prompt: str, model: str, timeout: int = 300) -> str:
     claude_bin = _find_claude_cli()
     try:
         proc = subprocess.run(
-            [claude_bin, "-p", prompt, "--model", model, "--output-format", "text"],
+            [
+                claude_bin,
+                "-p",
+                prompt,
+                "--model",
+                model,
+                "--output-format",
+                "text",
+                "--permission-mode",
+                "dontAsk",
+            ],
             capture_output=True,
             text=True,
             timeout=timeout,
