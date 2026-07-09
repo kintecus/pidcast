@@ -36,7 +36,5 @@
       "Bash(bash:*)"
     ]
   },
-  "enabledPlugins": {
-    "superpowers@claude-plugins-official": true
-  }
+  "enabledPlugins": {}
 }
