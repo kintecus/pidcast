@@ -69,7 +69,7 @@ def test_empty_argv_is_unchanged():
         (["info"], "info"),
         (["list", "models"], "list"),
         (["lib", "list"], "lib"),
-        (["history"], "history"),
+        (["log"], "log"),
     ],
 )
 def test_verb_sets_command_and_func(argv, command):

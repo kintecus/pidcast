@@ -1,4 +1,4 @@
-"""Unit tests for ``pidcast history`` rendering.
+"""Unit tests for ``pidcast log`` rendering.
 
 Run dicts in the unified store are not uniformly shaped (legacy/pre-migration
 entries can be as sparse as 5 keys), so these tests assert the command
@@ -9,7 +9,7 @@ import argparse
 
 import pytest
 
-from pidcast.commands.history import _format_date, _format_status, _row, cmd_history
+from pidcast.commands.log import _format_date, _format_status, _row, cmd_log
 
 FULL_ENTRY = {
     "run_uid": "uid-1",
@@ -91,11 +91,11 @@ def runs_file(tmp_path):
     return path
 
 
-def test_cmd_history_handles_mixed_shapes_without_raising(runs_file, monkeypatch, capsys):
+def test_cmd_log_handles_mixed_shapes_without_raising(runs_file, monkeypatch, capsys):
     monkeypatch.setattr("pidcast.config.RUNS_FILE", runs_file)
     args = argparse.Namespace(limit=10)
 
-    cmd_history(args)
+    cmd_log(args)
 
     # Rich wraps long titles across lines, so assert on unwrapped substrings.
     out = capsys.readouterr().out.replace("\n", "")
@@ -104,11 +104,11 @@ def test_cmd_history_handles_mixed_shapes_without_raising(runs_file, monkeypatch
     assert "Broken" in out
 
 
-def test_cmd_history_respects_limit_and_orders_newest_first(runs_file, monkeypatch, capsys):
+def test_cmd_log_respects_limit_and_orders_newest_first(runs_file, monkeypatch, capsys):
     monkeypatch.setattr("pidcast.config.RUNS_FILE", runs_file)
     args = argparse.Namespace(limit=1)
 
-    cmd_history(args)
+    cmd_log(args)
 
     out = capsys.readouterr().out.replace("\n", "")
     assert "Broken" in out
@@ -116,12 +116,12 @@ def test_cmd_history_respects_limit_and_orders_newest_first(runs_file, monkeypat
     assert "Legacy" not in out
 
 
-def test_cmd_history_empty_store(tmp_path, monkeypatch, capsys):
+def test_cmd_log_empty_store(tmp_path, monkeypatch, capsys):
     empty_path = tmp_path / "empty_runs.json"
     monkeypatch.setattr("pidcast.config.RUNS_FILE", empty_path)
     args = argparse.Namespace(limit=10)
 
-    cmd_history(args)
+    cmd_log(args)
 
     out = capsys.readouterr().out
     assert "No run history yet" in out

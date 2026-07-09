@@ -41,7 +41,7 @@ Key architectural consideration: The processing history tracker must be efficien
 - **FR-2.9**: System must skip episodes already marked as "success" in processing history
 - **FR-2.10**: System must support `--force` flag to reprocess episodes even if already in history
 - **FR-2.11**: System must mark failed episodes in history so they can be retried on next sync without being skipped
-- **FR-2.12**: System must support `pidcast history` command to view processing history with filters (by show, by date range, by status)
+- **FR-2.12**: System must support `pidcast log` command to view processing history with filters (by show, by date range, by status)
 
 ### Automated Pipeline
 

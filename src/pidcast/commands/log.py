@@ -1,4 +1,4 @@
-"""Handler for ``pidcast history`` — list the last N recorded runs.
+"""Handler for ``pidcast log`` — list the last N recorded runs.
 
 Run dicts in the unified store are not uniformly shaped: legacy/pre-migration
 entries can be as sparse as 5 keys. Every field below is read defensively;
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 _TITLE_WIDTH = 50
 
 
-def cmd_history(args: argparse.Namespace) -> None:
+def cmd_log(args: argparse.Namespace) -> None:
     """Print the last ``args.limit`` recorded runs, newest first."""
     from ..config import RUNS_FILE
     from ..history import RunHistory
