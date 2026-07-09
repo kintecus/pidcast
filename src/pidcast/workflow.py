@@ -14,6 +14,7 @@ from typing import Any
 from .analysis import (
     load_analysis_prompts,
     render_analysis_to_terminal,
+    split_into_discord_chunks,
 )
 from .apple_podcasts import is_apple_podcasts_url, resolve_apple_podcasts_url
 from .config import (
@@ -348,6 +349,33 @@ def render_analysis_to_terminal_direct(
     console.print(md)
 
 
+def _print_discord_chunks(chunks: list[str]) -> None:
+    """Print Discord-ready chunks to terminal with copy markers.
+
+    Uses Rich panels if available, falls back to plain text markers.
+    """
+    try:
+        from rich.console import Console
+        from rich.panel import Panel
+
+        console = Console()
+        for i, chunk in enumerate(chunks, 1):
+            console.print(
+                Panel(
+                    chunk,
+                    title=f"[bold yellow]Discord Chunk {i}/{len(chunks)}[/bold yellow]",
+                    subtitle=f"[dim]{len(chunk)} chars — copy text above for Discord[/dim]",
+                    border_style="yellow",
+                )
+            )
+            console.print()
+    except ImportError:
+        for i, chunk in enumerate(chunks, 1):
+            print(f"\n--- Discord Chunk {i}/{len(chunks)} ({len(chunk)} chars) ---")
+            print(chunk)
+            print("--- End Chunk ---")
+
+
 def run_analysis(
     markdown_file: Path | None,
     video_info: VideoInfo,
@@ -430,6 +458,11 @@ def run_analysis(
 
     analysis_file: Path | None = None
 
+    # Split discord_tldr output into Discord-ready chunks
+    discord_chunks: list[str] | None = None
+    if args.analysis_type == "discord_tldr":
+        discord_chunks = split_into_discord_chunks(result.analysis_text)
+
     # Create analysis markdown file only if saving
     if save_to_file:
         # If markdown_file is None, create a placeholder filename from video title
@@ -462,6 +495,7 @@ def run_analysis(
             args.verbose,
             is_local_file=is_local_file,
             custom_tags=custom_tags,
+            discord_chunks=discord_chunks,
         )
 
         if not analysis_file:
@@ -470,14 +504,25 @@ def run_analysis(
         logger.info(f"\n✓ Analysis completed in {format_duration(analysis_duration)}")
         logger.info(f"✓ Analysis file: file://{analysis_file.absolute()}")
 
-        # Render analysis to terminal from file
-        print()
-        render_analysis_to_terminal(analysis_file, verbose=args.verbose)
+        # For discord_tldr, skip standard rendering — just show the chunks
+        if discord_chunks:
+            print()
+            _print_discord_chunks(discord_chunks)
+        else:
+            # Render analysis to terminal from file
+            print()
+            render_analysis_to_terminal(analysis_file, verbose=args.verbose)
     else:
-        # Terminal-only output - render directly without saving
+        # Terminal-only output
         logger.info(f"\n✓ Analysis completed in {format_duration(analysis_duration)}")
-        print()
-        render_analysis_to_terminal_direct(result, video_info, args.verbose)
+
+        # For discord_tldr, skip standard rendering — just show the chunks
+        if discord_chunks:
+            print()
+            _print_discord_chunks(discord_chunks)
+        else:
+            print()
+            render_analysis_to_terminal_direct(result, video_info, args.verbose)
 
     if result.estimated_cost:
         logger.info(f"\n✓ Cost: ${result.estimated_cost:.4f}")

@@ -145,6 +145,7 @@ def create_analysis_markdown_file(
     verbose: bool = False,
     is_local_file: bool = False,
     custom_tags: list[str] | None = None,
+    discord_chunks: list[str] | None = None,
 ) -> Path | None:
     """Create markdown file for LLM analysis results.
 
@@ -217,6 +218,17 @@ def create_analysis_markdown_file(
             f.write(front_matter_str)
             f.write("\n\n")
             f.write(analysis_results["analysis_text"])
+
+            # Append Discord copy-paste section if chunks provided
+            if discord_chunks and len(discord_chunks) > 0:
+                f.write("\n\n")
+                f.write("---\n\n")
+                f.write("## Discord Copy-Paste\n\n")
+                for i, chunk in enumerate(discord_chunks, 1):
+                    marker = f"📋 {i}/{len(discord_chunks)}"
+                    f.write(f"### Chunk {i}/{len(discord_chunks)}\n\n")
+                    f.write(f"{chunk}\n\n")
+                    f.write(f"{marker}\n\n")
 
         if verbose:
             log_success(f"Analysis file created: {analysis_file}")

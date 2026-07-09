@@ -266,6 +266,87 @@ prompts:
 
       REMEMBER: Respond with JSON only!
 
+  discord_tldr:
+    name: Discord TL;DR
+    description: "Fun Ukrainian-language TL;DR for sharing on Discord (2 chunks, <2k chars each)"
+    max_output_tokens: 4000
+    system_prompt: |
+      Ти пишеш українською TL;DR подкасту для Discord. Стиль — Лесь Подеревянський:
+      гостро, смішно, з матами де доречно, з фактами а не водою.
+
+      ЗАБОРОНЕНО:
+      - "Все це вже досить цікаво, але далі..." — ніколи так не пиши
+      - "Автор підкреслює..." / "Він розповідає..." — це пасивна вода
+      - Повторення одних і тих самих думок у обох частинах
+      - Загальні фрази без конкретики
+      - Марні слова: "досить", "цікаво", "серйозно", "важливо"
+
+      СТИЛЬ (дивись приклад):
+      - Короткі речення. Абсурдні порівняння. Прямота.
+      - Мати: нахуй, блять, їбе, пиздець, лупи, срака — де контекст доречний
+      - Конкретні цифри, імена, факти — не "великі інвестиції", а "$275 млн від Andreessen"
+      - Оцінні судження: "це пиздець", "це геніально", "ніхуй собі"
+
+      ПРИКЛАД СТИЛЮ (з іншого подкасту):
+      "Троє айтішників сіли оплакувати вигадану модель, яку забанив вигаданий уряд.
+      І десь посеред цього скигління один каже єдину правдиву річ за 52 хвилини:
+      жодна програма, якою він користується, не стала кращою. Жодна, нахуй."
+      Бачиш? Конкретика + мат + оцінка + жодної води.
+
+      CRITICAL FORMATTING RULES:
+      1. You MUST respond with ONLY valid JSON - no other text before or after
+      2. Use this EXACT structure with NO modifications:
+      {
+        "analysis": "Your analysis text here... ---CHUNK--- ...continued here...",
+        "contextual_tags": ["tag1", "tag2", "tag3"]
+      }
+      3. The "analysis" field MUST contain exactly TWO chunks separated by "---CHUNK---"
+      4. The separator "---CHUNK---" MUST be on its own line
+      5. Each chunk MUST start with a section header:
+         - Chunk 1: "За 15 секунд, якщо ти зайнятий і тебе їбе"
+         - Chunk 2: "За хвилину, якщо хочеш розібратись"
+      6. Each chunk MUST end with a text marker on its own line:
+         - Chunk 1: "[1/2]"
+         - Chunk 2: "[2/2]"
+      7. The "contextual_tags" field must be an array of exactly 3 strings
+      8. Do NOT include any explanatory text outside the JSON structure
+      9. Do NOT use markdown code fences (no ```json or ```)
+      10. Ensure all quotes and brackets are properly matched
+      11. EACH CHUNK MUST BE 1700-1900 CHARACTERS. This is critical.
+          If under 1500 — you failed. Add more details, quotes, context.
+
+      For contextual_tags:
+      - Generate exactly 3 tags
+      - Use lowercase, hyphenated format (e.g., "ukrainian-humor", "ai-hype", "tech-satire")
+      - Choose specific topics from the content
+    user_prompt: |
+      Напиши TL;DR цього подкасту для Discord. Дві частини по 1700-1900 символів кожна.
+
+      Назва: {title}
+      Канал: {channel}
+      Тривалість: {duration}
+
+      # Транскрипт
+      {transcript}
+
+      # Структура — ЧАСТИНИ МАЮТЬ БУТИ РІЗНИМИ:
+      ЧАСТИНА 1 "За 15 секунд, якщо ти зайнятий і тебе їбе":
+      - Зав'язка: у чому суть, чому це шокує або смішить
+      - Ключовий інсайт або твітuble moment
+      - 1-2 конкретні факти/цифри/цитати
+      - Чому тобі має бути боляче або смішно
+      - Заверши "[1/2]"
+
+      ЧАСТИНА 2 "За хвилину, якщо хочеш розібратись":
+      - Контекст: хто, що, навіщо, як працює
+      - Конкретні цифри, імена, події (не повторюй частину 1)
+      - Наслідки або що далі
+      - Заверши "[2/2]"
+
+      Не повторюй одні й ті самі думки в обох частинах. Кожна частина — унікальний кут зору.
+
+      REMEMBER: Respond with JSON only!
+
   # Chunking prompts for long content
   chunk_analysis:
     name: Chunk Analysis
@@ -340,6 +421,71 @@ prompts:
       3. **Notable Insights** (2-3 standout quotes or data points)
 
       The output should be cohesive and not feel like a collection of separate summaries.
+
+      REMEMBER: Respond with JSON only!
+
+  # Discord TL;DR chunking prompts (used when transcript exceeds model limit)
+  discord_tldr_chunk_analysis:
+    name: Discord TL;DR Chunk Analysis
+    description: Extract entertaining highlights from a transcript chunk for Discord TL;DR
+    max_output_tokens: 1500
+    system_prompt: |
+      Ти аналізуєш частину транскрипту подкасту. Твоя задача — витягти максимально
+      багато цікавих, смішних, спішних моментів для створення детального TL;DR.
+
+      Витягуй ВСЕ цікаве: яскраві цитати, абсурдні ситуації, конфлікти, несподіванки,
+      конкретні цифри, імена, події. Не обмежуйся 3 пунктами — будь рясним.
+
+      ПРАВИЛА:
+      - Фактичність: тільки те, що реально було сказано
+      - Мова: українська (імена власні — латиницею)
+    user_prompt: |
+      Проаналізуй цю частину транскрипту. Витягни максимум деталей.
+
+      Назва: {title}
+      Це частина {chunk_num} з {total_chunks}.
+
+      # Частина транскрипту
+      {transcript}
+
+      # Інструкції
+      1. **Найцікавіші моменти** (5-8 пунктів) — яскраві цитати, абсурдні ситуації, конфлікти, несподіванки
+      2. **Ключові факти** (3-5 пунктів) — конкретні дані, цифри, події, імена
+      3. **Тон та емоції** — які емоції переважають? Що викликає сміх або обурення?
+      4. **Цитати** — видай 2-3 найяскравіші цитати дослівно
+
+      Будь рясним. Ці дані підуть на синтез детального Discord TL;DR на ~4000 символів.
+
+  discord_tldr_synthesis:
+    name: Discord TL;DR Synthesis
+    description: Combine chunk analyses into a fun Ukrainian Discord TL;DR
+    max_output_tokens: 4000
+    system_prompt: |
+      Пиши українською TL;DR для Discord. Стиль — Подеревянський: гостро, мати, факти.
+      ЗАБОРОНЕНО: "Все це досить цікаво", "Автор підкреслює", повтори між частинах.
+      Ціль: 1700-1900 символів на частину.
+
+      JSON FORMAT (only valid JSON, no fences):
+      {"analysis": "текст ---CHUNK--- текст", "contextual_tags": ["tag1","tag2","tag3"]}
+
+      Structure:
+      - Chunk 1: "За 15 секунд..." — зав'язка, ключовий шок/сміх. End: [1/2]
+      - ---CHUNK--- (own line)
+      - Chunk 2: "За хвилину..." — контекст, цифри, наслідки (без повторів з ч.1). End: [2/2]
+      - Each chunk 1700-1900 chars. Tags: exactly 3, lowercase-hyphenated.
+    user_prompt: |
+      Об'єднай аналізи в Discord TL;DR. Дві частини по 1700-1900 символів.
+
+      Назва: {title}
+      Тривалість: {duration}
+
+      # Аналізи частин
+      {chunk_analyses}
+
+      # Структура — ЧАСТИНИ МАЮТЬ БУТИ РІЗНИМИ:
+      ЧАСТИНА 1 "За 15 секунд, якщо ти зайнятий і тебе їбе": зав'язка, шок/сміх, 1-2 факти. End "[1/2]"
+      ЧАСТИНА 2 "За хвилину, якщо хочеш розібратись": контекст, цифри, імена, наслідки. End "[2/2]"
+      Не повторюй. Кожна частина — унікальний кут.
 
       REMEMBER: Respond with JSON only!
 
