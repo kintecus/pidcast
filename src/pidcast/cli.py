@@ -397,7 +397,7 @@ Common workflows:
   pidcast analyze transcript.md -a summary          Re-analyze an existing transcript
   pidcast diarize transcript.md                     Retry diarization only
   pidcast list models                               Discover analyses/models/presets/...
-  pidcast lib add "99% Invisible"                     Manage the podcast library
+  pidcast lib add "99% Invisible"                   Manage the podcast library
   pidcast log -n 20                                Show last 20 runs
 """,
     )
