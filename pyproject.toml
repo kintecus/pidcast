@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pidcast"
-version = "0.18.0"
+version = "0.18.1"
 description = "YouTube transcription tool with Whisper and LLM analysis"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -73,6 +73,9 @@ extend-exclude = [
     ".ruff_cache",
     "data/",
     "config/",
+    # Archival plans/specs. ruff >= 0.16 formats Python blocks inside Markdown,
+    # which would rewrite illustrative snippets in docs that record past designs.
+    "docs/",
 ]
 
 [tool.ruff.lint]
