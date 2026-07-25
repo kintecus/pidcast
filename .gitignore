@@ -180,7 +180,8 @@ poetry.toml
 .ruff_cache/
 
 # uv
-uv.lock
+# uv.lock is tracked on purpose: pidcast is an application, so CI must install
+# the exact versions used locally rather than re-resolving on every run.
 .python-version
 
 # LSP config files
