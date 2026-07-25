@@ -157,6 +157,14 @@ def _build_parent_parsers() -> dict[str, argparse.ArgumentParser]:
         action="store_true",
         help="Save the converted WAV audio file to the output directory",
     )
+    o.add_argument(
+        "--reveal",
+        dest="reveal",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Reveal the finished file in the OS file manager "
+        "(default: reveal_on_success in config.yaml)",
+    )
     parents["output"] = o
 
     # --- analysis ------------------------------------------------------------
@@ -642,6 +650,17 @@ def main() -> None:
         chrome_profile = config.get("chrome_profile")
         if chrome_profile:
             args.chrome_profile = chrome_profile
+
+    # Load reveal_on_success from config when --reveal/--no-reveal wasn't given.
+    # Batch verbs (`lib sync`/`process`) opt out of the config default so a sync
+    # never pops file-manager windows; there, --reveal must be explicit.
+    if hasattr(args, "reveal"):
+        if args.reveal is None and getattr(args, "command", None) != "lib":
+            from .config_manager import ConfigManager
+
+            args.reveal = bool(ConfigManager.load_config().get("reveal_on_success", False))
+        elif args.reveal is None:
+            args.reveal = False
 
     args.func(args)
 

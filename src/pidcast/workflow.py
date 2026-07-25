@@ -73,6 +73,34 @@ def _pause_requested_check() -> bool:
     return _pause_requested
 
 
+# Latched after the first reveal so a batch run (`lib sync --reveal`) opens one
+# file-manager window rather than one per episode.
+_revealed_once = False
+
+
+def _maybe_reveal(args: argparse.Namespace, *candidates: Path | None) -> None:
+    """Reveal the first existing candidate in the OS file manager, at most once.
+
+    No-ops unless ``--reveal`` (or ``reveal_on_success`` in config.yaml) is set,
+    and skips non-interactive runs so scheduled syncs never open windows.
+    """
+    global _revealed_once
+
+    if _revealed_once or not getattr(args, "reveal", False):
+        return
+
+    from .utils import is_interactive, reveal_in_file_manager
+
+    if not is_interactive():
+        logger.debug("Reveal skipped: not an interactive session.")
+        return
+
+    for candidate in candidates:
+        if candidate and Path(candidate).exists():
+            _revealed_once = reveal_in_file_manager(candidate)
+            return
+
+
 # Flags that are NOT persisted into the resume manifest (they are run-local,
 # resolved at runtime, or would prevent a clean resume).
 _NON_RESUMABLE_ARG_KEYS = {
@@ -628,6 +656,8 @@ def run_analyze_existing_mode(
 
         log_section("✓ Analysis completed successfully!")
         logger.info(f"Total duration: {format_duration(duration)}")
+
+        _maybe_reveal(args, analysis_file, Path(transcript_path))
 
         return True
 
@@ -1378,6 +1408,14 @@ def process_input_source(
             cleanup_job_dir(job_manifest.job_id)
         elif job_manifest is not None:
             logger.info(f"Checkpoint kept: {job_manifest.job_dir}")
+
+        # Surface the run's primary artifact: the analysis if one was produced
+        # (it may live in the Obsidian vault), otherwise the transcript itself.
+        _maybe_reveal(
+            args,
+            analysis_file if analysis_performed else None,
+            markdown_file,
+        )
 
         return True
 

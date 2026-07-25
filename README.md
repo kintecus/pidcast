@@ -85,6 +85,9 @@ uv run pidcast "URL" --vad --vad-threshold 0.6   # raise the speech-probability 
 # Test settings on a 2-minute slice before committing to a long run
 uv run pidcast "URL" --test
 
+# Reveal the finished file in Finder when the run completes
+uv run pidcast "URL" --reveal
+
 # Reuse an existing transcript
 uv run pidcast analyze transcript.md          # re-analyze
 uv run pidcast diarize transcript.md          # retry diarization
@@ -100,6 +103,8 @@ uv run pidcast info                  # show where transcripts, audio, logs, and 
 `pidcast` is verb-first: bare `pidcast "URL"` is shorthand for `pidcast transcribe "URL"`. Run `pidcast --help` for the full command list, or `pidcast <command> --help` for a command's flags.
 
 By default, transcripts, kept audio, logs, and the run history live under the XDG data dir (`~/.local/share/pidcast/`, or `$XDG_DATA_HOME/pidcast/`) — not in the repo. Override the whole tree with `PIDCAST_DATA_DIR`, set a fixed transcript directory with `--output-dir` or the `output_dir` key in `~/.config/pidcast/config.yaml`, and run `pidcast info` to see what resolves.
+
+`--reveal` opens the finished file in the OS file manager (selected in Finder on macOS, in Explorer on Windows; Linux opens the containing folder). It picks the analysis file when analysis ran — including the Obsidian vault copy under `-o` — and falls back to the transcript. Make it the default with `reveal_on_success: true` in `~/.config/pidcast/config.yaml`, and suppress it for one run with `--no-reveal`. Non-interactive runs never reveal, and `lib sync`/`lib process` ignore the config default (pass `--reveal` explicitly there; you still get at most one window per run).
 
 Available analysis types: `executive_summary` (default), `summary`, `key_points`, `action_items`, `comprehensive`. Every type ends with a **Shareable Brief** — a punchy headline (≤ 15 words) plus a 3–5 sentence quick-take suitable for sending to a friend.
 

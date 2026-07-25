@@ -586,6 +586,44 @@ def is_interactive() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
+def reveal_in_file_manager(path: str | Path) -> bool:
+    """Open the OS file manager with ``path`` selected.
+
+    macOS selects the file in Finder, Windows in Explorer; Linux desktops have no
+    portable "select this file" verb, so the containing directory is opened
+    instead. Fails soft: a missing path, missing file manager, or a non-zero exit
+    is logged at debug level and reported as ``False``, never raised.
+
+    Returns:
+        True if the file manager was launched successfully.
+    """
+    import subprocess
+    import sys
+
+    target = Path(path)
+    if not target.exists():
+        logger.debug(f"Reveal skipped, path does not exist: {target}")
+        return False
+
+    resolved = target.resolve()
+    # explorer.exe exits non-zero even when it succeeds, so its status is ignored.
+    check_status = True
+    if sys.platform == "darwin":
+        command = ["open", "-R", str(resolved)]
+    elif sys.platform == "win32":
+        command = ["explorer", f"/select,{resolved}"]
+        check_status = False
+    else:
+        command = ["xdg-open", str(resolved.parent)]
+
+    try:
+        subprocess.run(command, check=check_status, capture_output=True, timeout=10)
+        return True
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.debug(f"Reveal failed for {resolved}: {e}")
+        return False
+
+
 # ============================================================================
 # CLEANUP UTILITIES
 # ============================================================================

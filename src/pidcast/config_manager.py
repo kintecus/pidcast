@@ -12,6 +12,7 @@ from .config import (
     DEFAULT_BACKFILL_LIMIT,
     DEFAULT_FEED_CACHE_HOURS,
     OBSIDIAN_PATH,
+    TRANSCRIPTS_DIR,
 )
 
 logger = logging.getLogger(__name__)
@@ -95,8 +96,10 @@ class ConfigManager:
                 f.write("# Pidcast Global Configuration\n\n")
                 f.write("# Number of recent episodes to process when adding a new show\n")
                 f.write(f"backfill_limit: {config['backfill_limit']}\n\n")
-                f.write("# Directory for transcript output\n")
-                f.write(f'output_dir: "{config["output_dir"]}"\n\n')
+                # output_dir is deliberately left commented out - see _default_config().
+                f.write("# Directory for transcript output. Unset means the XDG data dir\n")
+                f.write("# (run 'pidcast info' to see what resolves).\n")
+                f.write(f'# output_dir: "{TRANSCRIPTS_DIR}"\n\n')
                 f.write("# Obsidian vault path (optional)\n")
                 if config["obsidian_vault"]:
                     f.write(f'obsidian_vault: "{config["obsidian_vault"]}"\n\n')
@@ -106,7 +109,12 @@ class ConfigManager:
                 f.write(f"feed_cache_hours: {config['feed_cache_hours']}\n\n")
                 f.write("# Chrome profile for cookie extraction (display name or directory name)\n")
                 f.write("# Run 'pidcast list profiles' to see available profiles\n")
-                f.write("chrome_profile: null\n")
+                f.write("chrome_profile: null\n\n")
+                f.write(
+                    "# Reveal the finished file in the OS file manager after a successful run\n"
+                )
+                f.write("# (Finder on macOS). Override per-run with --reveal / --no-reveal.\n")
+                f.write(f"reveal_on_success: {str(config['reveal_on_success']).lower()}\n")
 
             logger.info(f"Created default config at {CONFIG_FILE}")
             return True
@@ -167,4 +175,5 @@ class ConfigManager:
             "obsidian_vault": OBSIDIAN_PATH,
             "feed_cache_hours": DEFAULT_FEED_CACHE_HOURS,
             "chrome_profile": None,
+            "reveal_on_success": False,
         }
