@@ -1,0 +1,36 @@
+version: 2
+
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      python-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      # torch>=2.3 dropped macOS x86_64 wheels, so pyproject caps these at 2.2.2
+      # behind an Intel-mac marker (see pyproject.toml). uv.lock already resolves
+      # 2.10.x everywhere else, so CI and non-Intel machines stay patched; only
+      # the Intel path is stuck, and no newer wheel exists to move it to. A bump
+      # PR here could only widen the cap and break Intel installs, so ignore it.
+      - dependency-name: "torch"
+      - dependency-name: "torchaudio"
+    commit-message:
+      prefix: "build(deps)"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci(deps)"
