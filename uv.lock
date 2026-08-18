@@ -1909,7 +1909,7 @@ wheels = [
 
 [[package]]
 name = "pidcast"
-version = "0.18.1"
+version = "0.18.4"
 source = { editable = "." }
 dependencies = [
     { name = "feedparser" },

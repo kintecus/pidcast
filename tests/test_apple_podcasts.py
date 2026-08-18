@@ -8,6 +8,8 @@ import pytest
 from pidcast.apple_podcasts import (
     find_episode_in_feed,
     is_apple_podcasts_url,
+    lookup_itunes,
+    parse_apple_podcasts_storefront,
     parse_apple_podcasts_url,
     resolve_apple_podcasts_url,
 )
@@ -71,6 +73,96 @@ class TestParseApplePodcastsUrl:
     def test_no_id_in_path(self):
         with pytest.raises(ApplePodcastsResolutionError, match="Could not extract"):
             parse_apple_podcasts_url("https://podcasts.apple.com/us/podcast/show-name")
+
+
+# ---------------------------------------------------------------------------
+# parse_apple_podcasts_storefront
+# ---------------------------------------------------------------------------
+
+
+class TestParseApplePodcastsStorefront:
+    def test_non_us_storefront(self):
+        url = "https://podcasts.apple.com/pl/podcast/the-daily/id1200361736?i=1000784048757"
+        assert parse_apple_podcasts_storefront(url) == "PL"
+
+    def test_us_storefront(self):
+        assert (
+            parse_apple_podcasts_storefront("https://podcasts.apple.com/us/podcast/x/id111") == "US"
+        )
+
+    def test_no_storefront(self):
+        assert (
+            parse_apple_podcasts_storefront("https://podcasts.apple.com/podcast/id111?i=222")
+            is None
+        )
+
+    def test_storefront_only_path(self):
+        assert parse_apple_podcasts_storefront("https://podcasts.apple.com/pl") == "PL"
+
+
+# ---------------------------------------------------------------------------
+# lookup_itunes storefront handling
+# ---------------------------------------------------------------------------
+
+
+class TestLookupItunesStorefront:
+    COLLECTION = [
+        {
+            "kind": "podcast",
+            "collectionName": "Test Podcast",
+            "artistName": "Test Author",
+            "feedUrl": "https://feed.example.com/rss",
+        }
+    ]
+    EPISODE = {
+        "kind": "podcast-episode",
+        "trackId": 222,
+        "trackName": "Great Episode",
+        "releaseDate": "2024-05-01T00:00:00Z",
+    }
+
+    @patch("pidcast.apple_podcasts._itunes_fetch")
+    def test_storefront_passed_to_api(self, mock_fetch):
+        mock_fetch.side_effect = [self.COLLECTION, [*self.COLLECTION, self.EPISODE]]
+
+        meta = lookup_itunes("111", "222", storefront="PL")
+
+        assert meta["trackName"] == "Great Episode"
+        for call in mock_fetch.call_args_list:
+            assert call.args[0]["country"] == "PL"
+
+    @patch("pidcast.apple_podcasts._itunes_fetch")
+    def test_falls_back_to_default_store_when_episode_missing(self, mock_fetch):
+        # PL store knows the show but not the episode; the default store has it.
+        mock_fetch.side_effect = [
+            self.COLLECTION,
+            self.COLLECTION,
+            [*self.COLLECTION, self.EPISODE],
+        ]
+
+        meta = lookup_itunes("111", "222", storefront="PL")
+
+        assert meta["trackName"] == "Great Episode"
+        assert "country" not in mock_fetch.call_args_list[-1].args[0]
+
+    @patch("pidcast.apple_podcasts._itunes_fetch")
+    def test_no_storefront_queries_default_store_only(self, mock_fetch):
+        mock_fetch.side_effect = [self.COLLECTION, [*self.COLLECTION, self.EPISODE]]
+
+        lookup_itunes("111", "222")
+
+        assert mock_fetch.call_count == 2
+        for call in mock_fetch.call_args_list:
+            assert "country" not in call.args[0]
+
+    @patch("pidcast.apple_podcasts._itunes_fetch")
+    def test_requested_track_id_kept_when_lookup_misses(self, mock_fetch):
+        mock_fetch.side_effect = [self.COLLECTION, self.COLLECTION, self.COLLECTION]
+
+        meta = lookup_itunes("111", "999", storefront="PL")
+
+        assert meta["requestedTrackId"] == "999"
+        assert "trackName" not in meta
 
 
 # ---------------------------------------------------------------------------

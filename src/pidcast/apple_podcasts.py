@@ -55,6 +55,22 @@ def parse_apple_podcasts_url(url: str) -> tuple[str, str | None]:
     return collection_id, track_id
 
 
+def parse_apple_podcasts_storefront(url: str) -> str | None:
+    """Extract the two-letter storefront code from an Apple Podcasts URL.
+
+    Apple Podcasts URLs carry the storefront as the first path segment
+    (``/pl/podcast/...``).  Each storefront has its own episode index, and a
+    freshly published episode can be present in one and missing from another,
+    so the storefront must be carried into the iTunes Lookup call.
+
+    Returns:
+        Upper-case country code, or None for storefront-less URLs.
+    """
+    path = urllib.parse.urlparse(url).path
+    match = re.match(r"^/([a-zA-Z]{2})(?:/|$)", path)
+    return match.group(1).upper() if match else None
+
+
 def _itunes_fetch(params: dict) -> list[dict]:
     """Make a single iTunes Lookup API request and return the results list."""
     qs = urllib.parse.urlencode(params)
@@ -70,7 +86,12 @@ def _itunes_fetch(params: dict) -> list[dict]:
     return data.get("results", [])
 
 
-def lookup_itunes(collection_id: str, track_id: str | None) -> dict:
+def _with_country(params: dict, country: str | None) -> dict:
+    """Return *params* with a storefront ``country`` added when one is known."""
+    return {**params, "country": country} if country else dict(params)
+
+
+def lookup_itunes(collection_id: str, track_id: str | None, storefront: str | None = None) -> dict:
     """Call the iTunes Lookup API and return show + episode metadata.
 
     Always looks up the collection (show) first to get the feedUrl, since the
@@ -79,20 +100,30 @@ def lookup_itunes(collection_id: str, track_id: str | None) -> dict:
     fetch episode-specific metadata (trackName, releaseDate) which is used
     later for matching inside the RSS feed.
 
+    Each storefront keeps its own episode index, so the lookup is tried in the
+    URL's *storefront* first and then in the API default (US); a just-published
+    episode is often visible in one and not yet in the other.
+
     Returns:
         Dict with keys like feedUrl, collectionName, trackName, releaseDate, etc.
 
     Raises:
         ApplePodcastsResolutionError: On API failure or missing data.
     """
+    storefronts: list[str | None] = [storefront, None] if storefront else [None]
+
     # Step 1: always look up the collection to get feedUrl
-    collection_results = _itunes_fetch({"id": collection_id})
-    if not collection_results:
+    collection_info: dict = {}
+    for country in storefronts:
+        collection_results = _itunes_fetch(_with_country({"id": collection_id}, country))
+        if collection_results:
+            collection_info = collection_results[0]
+            break
+
+    if not collection_info:
         raise ApplePodcastsResolutionError(
             "iTunes Lookup API returned no results for this podcast."
         )
-
-    collection_info = collection_results[0]
 
     if not collection_info.get("feedUrl"):
         raise ApplePodcastsResolutionError(
@@ -104,10 +135,14 @@ def lookup_itunes(collection_id: str, track_id: str | None) -> dict:
     # episodes on long-running shows are still discoverable.
     episode_info: dict = {}
     if track_id:
-        ep_results = _itunes_fetch({"id": collection_id, "entity": "podcastEpisode", "limit": 200})
-        for r in ep_results:
-            if r.get("kind") == "podcast-episode" and str(r.get("trackId", "")) == track_id:
-                episode_info = r
+        ep_params = {"id": collection_id, "entity": "podcastEpisode", "limit": 200}
+        for country in storefronts:
+            ep_results = _itunes_fetch(_with_country(ep_params, country))
+            for r in ep_results:
+                if r.get("kind") == "podcast-episode" and str(r.get("trackId", "")) == track_id:
+                    episode_info = r
+                    break
+            if episode_info:
                 break
 
     # Only carry forward the show-level fields we actually need. Merging the
@@ -119,6 +154,9 @@ def lookup_itunes(collection_id: str, track_id: str | None) -> dict:
         "collectionName": collection_info.get("collectionName", ""),
         "artistName": collection_info.get("artistName", ""),
         **episode_info,
+        # Kept separate from ``trackId`` so error messages can name the episode
+        # the user asked for even when the lookup returned nothing for it.
+        "requestedTrackId": track_id or "",
     }
 
     return merged
@@ -180,11 +218,13 @@ def find_episode_in_feed(feed_url: str, itunes_meta: dict, verbose: bool = False
         except (ValueError, AttributeError):
             pass
 
+    identifier = target_title or itunes_meta.get("requestedTrackId") or itunes_meta.get("trackId")
     raise ApplePodcastsResolutionError(
-        f"Could not find episode '{target_title or itunes_meta.get('trackId', '?')}' "
+        f"Could not find episode '{identifier or 'unknown'}' "
         f"in the podcast feed. The feed has {len(episodes)} episodes. "
-        "The iTunes Lookup API may not have returned this episode "
-        "(common for very old episodes on long-running shows)."
+        "The iTunes Lookup API did not return this episode - it may be older "
+        "than the API's per-show window, or too new to be indexed yet. "
+        "Try again shortly, or pass the episode's direct audio URL."
     )
 
 
@@ -204,6 +244,7 @@ def resolve_apple_podcasts_url(url: str, verbose: bool = False) -> tuple[str, Vi
         ApplePodcastsResolutionError: If resolution fails at any step.
     """
     collection_id, track_id = parse_apple_podcasts_url(url)
+    storefront = parse_apple_podcasts_storefront(url)
 
     if not track_id:
         raise ApplePodcastsResolutionError(
@@ -213,9 +254,12 @@ def resolve_apple_podcasts_url(url: str, verbose: bool = False) -> tuple[str, Vi
         )
 
     if verbose:
-        logger.info(f"Parsed Apple Podcasts URL: collection={collection_id}, track={track_id}")
+        logger.info(
+            f"Parsed Apple Podcasts URL: collection={collection_id}, "
+            f"track={track_id}, storefront={storefront or 'default'}"
+        )
 
-    itunes_meta = lookup_itunes(collection_id, track_id)
+    itunes_meta = lookup_itunes(collection_id, track_id, storefront=storefront)
     feed_url = itunes_meta.get("feedUrl", "")
 
     if verbose:
