@@ -175,117 +175,6 @@ def parse_llm_json_response(response_text: str, verbose: bool = False) -> tuple[
     return response_text, []
 
 
-# ============================================================================
-# DISCORD TL;DR CHUNKING
-# ============================================================================
-
-DISCORD_CHUNK_SEPARATOR_PATTERN = re.compile(r"---+\s*CHUNK\s*---+", re.IGNORECASE)
-DISCORD_CHUNK_MAX_CHARS = 1950  # 2000 minus overhead for safety
-DISCORD_MARKER_PATTERN = re.compile(r"\[\d+/\d+\]\s*$")
-
-
-def split_into_discord_chunks(analysis_text: str) -> list[str]:
-    """Split discord_tldr analysis text into Discord-ready chunks.
-
-    If the full text fits under DISCORD_CHUNK_MAX_CHARS, returns it as-is
-    (no splitting needed). Otherwise splits on ---CHUNK--- separator
-    (regex-tolerant) with paragraph-boundary fallback.
-
-    Args:
-        analysis_text: Raw analysis text from LLM (may contain separator)
-
-    Returns:
-        List of chunk strings, each under DISCORD_CHUNK_MAX_CHARS
-    """
-    # If the whole thing fits, no splitting needed
-    if len(analysis_text) <= DISCORD_CHUNK_MAX_CHARS:
-        return [analysis_text.strip()]
-
-    # Strip the [1/2] / [2/2] markers — they'll be re-added with emoji in output
-    cleaned = DISCORD_MARKER_PATTERN.sub("", analysis_text).strip()
-
-    if DISCORD_CHUNK_SEPARATOR_PATTERN.search(cleaned):
-        raw_chunks = DISCORD_CHUNK_SEPARATOR_PATTERN.split(cleaned)
-        chunks = [c.strip() for c in raw_chunks if c.strip()]
-    else:
-        logger.warning(
-            "Discord TL;DR separator '---CHUNK---' not found in LLM output. "
-            "Splitting at paragraph boundaries as fallback."
-        )
-        chunks = _split_text_at_boundaries(cleaned, DISCORD_CHUNK_MAX_CHARS)
-
-    # Validate and warn
-    for i, chunk in enumerate(chunks):
-        if len(chunk) > DISCORD_CHUNK_MAX_CHARS:
-            logger.warning(
-                f"Discord chunk {i + 1} is {len(chunk)} chars "
-                f"(max {DISCORD_CHUNK_MAX_CHARS}). May need manual trimming."
-            )
-
-    if not chunks:
-        logger.warning("Discord TL;DR produced empty output, using raw text")
-        chunks = [analysis_text[:DISCORD_CHUNK_MAX_CHARS]]
-
-    return chunks
-
-
-def _split_text_at_boundaries(text: str, max_chars: int) -> list[str]:
-    """Split text at natural boundaries (double newlines, then sentences).
-
-    Greedily packs paragraphs into chunks under max_chars. Falls back to
-    sentence-level splitting for paragraphs that exceed the limit.
-
-    Args:
-        text: Text to split
-        max_chars: Maximum characters per chunk
-
-    Returns:
-        List of chunk strings
-    """
-    paragraphs = text.split("\n\n")
-    chunks: list[str] = []
-    current = ""
-
-    for para in paragraphs:
-        para = para.strip()
-        if not para:
-            continue
-
-        if len(current) + len(para) + 2 <= max_chars:
-            current = f"{current}\n\n{para}" if current else para
-        elif len(para) <= max_chars:
-            if current:
-                chunks.append(current)
-            current = para
-        else:
-            # Paragraph too long — split at sentence boundaries
-            if current:
-                chunks.append(current)
-                current = ""
-            sentences = _split_into_sentences(para)
-            for sentence in sentences:
-                if len(current) + len(sentence) + 1 <= max_chars:
-                    current = f"{current} {sentence}" if current else sentence
-                else:
-                    if current:
-                        chunks.append(current)
-                    # If single sentence exceeds limit, take it as-is
-                    current = sentence
-
-    if current.strip():
-        chunks.append(current.strip())
-
-    return chunks
-
-
-def _split_into_sentences(text: str) -> list[str]:
-    """Split Ukrainian/English text into sentences.
-
-    Handles Ukrainian sentence-ending punctuation: . ! ? ... !? ?!
-    """
-    return re.split(r"(?<=[.!?…])\s+", text)
-
-
 # JSON validation error patterns from Groq and other providers
 JSON_VALIDATION_ERROR_PATTERNS = [
     "json_validate_failed",
@@ -952,13 +841,8 @@ def _analyze_with_chunking(
     progress_callback: Callable[[ChunkProgress], None] | None = None,
 ) -> AnalysisResult:
     """Analyze long transcript using chunking and synthesis."""
-    # Select chunk analysis and synthesis prompts based on analysis type
-    if analysis_type == "discord_tldr":
-        chunk_template = prompts_config.prompts["discord_tldr_chunk_analysis"]
-        synthesis_template = prompts_config.prompts["discord_tldr_synthesis"]
-    else:
-        chunk_template = prompts_config.prompts["chunk_analysis"]
-        synthesis_template = prompts_config.prompts["synthesis"]
+    chunk_template = prompts_config.prompts["chunk_analysis"]
+    synthesis_template = prompts_config.prompts["synthesis"]
 
     # Determine chunk size based on effective limit (min of context and TPM)
     effective_limit = selector.get_effective_token_limit(preferred_model)
@@ -1266,13 +1150,8 @@ def analyze_transcript_with_llm(
     # Check if chunking is needed (transcript + prompt overhead > effective limit)
     prompt_overhead = 2000  # Estimated tokens for system + user prompt template
     if transcript_tokens + prompt_overhead > effective_limit:
-        # Verify we have chunking prompts for this analysis type
-        if analysis_type == "discord_tldr":
-            chunk_key = "discord_tldr_chunk_analysis"
-            synth_key = "discord_tldr_synthesis"
-        else:
-            chunk_key = "chunk_analysis"
-            synth_key = "synthesis"
+        chunk_key = "chunk_analysis"
+        synth_key = "synthesis"
 
         if chunk_key not in prompts_config.prompts:
             raise AnalysisError(

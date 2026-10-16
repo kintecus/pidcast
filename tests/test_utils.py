@@ -300,3 +300,17 @@ class TestJsonFileIO:
         f = tmp_path / "sub" / "dir" / "data.json"
         assert save_json_file(f, {"ok": True}) is True
         assert f.exists()
+
+
+class TestResolveAnalysisTypeRemovedDiscord:
+    @pytest.mark.parametrize("raw", ["discord_tldr", "discord"])
+    def test_points_removed_discord_type_at_new_verb(self, raw):
+        from pidcast.utils import resolve_analysis_type
+
+        with pytest.raises(ValueError, match="pidcast discord"):
+            resolve_analysis_type(raw)
+
+    def test_regular_types_still_resolve(self):
+        from pidcast.utils import resolve_analysis_type
+
+        assert resolve_analysis_type("summary") == "summary"

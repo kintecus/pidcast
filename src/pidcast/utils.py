@@ -821,6 +821,12 @@ def resolve_analysis_type(user_input: str, prompts_file: Path | None = None) -> 
         if matched:
             return matched
 
+        if "discord" in user_input.lower():
+            raise ValueError(
+                "The discord_tldr analysis type was removed in 0.20.0. "
+                "Use 'pidcast discord <transcript.md>' for Discord recaps."
+            )
+
         # No match - suggest alternatives
         suggestion = suggest_closest_match(user_input, available_keys)
         if suggestion:
