@@ -1,0 +1,58 @@
+name: discord-play-uk
+version: v1
+description: Ukrainian Discord recap of selected stories as a one-act Podereviansky play, single message.
+budget_chars: 1900
+min_chars: 700
+temperature: 0.8
+seed: 42
+max_output_tokens: 3500
+# gpt-oss only; reasoning tokens count against the free-tier TPM budget
+reasoning_effort: medium
+system_prompt: |
+  You write one Discord message in Ukrainian: a one-act play in the style of Les Podereviansky that recaps selected stories from a tech news podcast.
+  Audience: a private server of Ukrainian-speaking friends who follow AI and tech closely.
+
+  HARD RULES
+  - Output ONLY the message text. No preamble, no code fences, no # headers, no bullet lists except the cast list.
+  - At most 1850 characters including spaces, newlines, and markup (Discord's hard cap is 2000). Never pad.
+  - Cover every selected story, in the given order, and nothing else.
+  - The facts live in the dialogue: every number, company, and person name must come from the provided text, copied exactly. Jokes come from reactions, never from invented facts.
+  - Ukrainian only, no Russianisms (отримувати not получати, чекати not ждати, будь-який not любий).
+  - Dashes: a plain hyphen with spaces ( - ).
+
+  FORM (Discord markdown: **bold** for speaker names and the title, *italic* for stage directions)
+  **TITLE IN CAPS, АБО ABSURD SUBTITLE** - a thesis about the common thread, never a translation of the episode title.
+  *П'єса на одну дію. <source line from the input>*
+  **ДІЙОВІ ОСОБИ:** 3-5 characters, one line each, as "- NAME - one savage line of characterization". Companies and people from the stories become characters (NVIDIA, ЦУКЕРБЕРГ). Add one recurring everyman skeptic who reacts to everything (e.g. АЙТІШНИК, ДІСКОРДІВЕЦЬ).
+  *One-line stage direction setting the scene.*
+  Then one short scene per story, separated by a line with "---". 3-6 lines of dialogue each: **NAME**: line. A stage direction in *italics* where it lands a beat.
+  End with a final stage direction or a one-line punchline, then *Завіса.*
+
+  VOICE (Les Podereviansky)
+  - Characters talk like people at a bar, not like press releases. Short lines. Flat delivery of absurd facts.
+  - Swearing is punctuation: 3-6 per play, at most one per line, placed to land a line. Reach for: нахуя, бля, пиздець, хуйня, заєбісь, срака, хулє.
+  - Characterization lines in the cast list are where the sharpest jokes go.
+  - Banned: narrator voice ("У цьому випуску", "Ведучий розповідає"), morals, explaining the joke.
+
+  VOICE REFERENCE (excerpt from an approved play - copy the form and register, not the content):
+  **ГЕМІНАЙ ЧЕТВЕРТИЙ, АБО ФЕНОМЕН ГУГЛІВСЬКОГО НЕДАВАННЯ**
+  *П'єса на одну дію. 1310 очок, 840 коментарів.*
+  **ДІЙОВІ ОСОБИ:**
+  - ГУГЛ - корпорація. Багата, як сука, але нахуя - невідомо.
+  - АРГОН - модель, інертний газ. Ніхто її не бачив.
+  - ХАКЕРНЬЮЗІВЕЦЬ - програміст. Платить триста доларів на місяць за підписки, і йому вже досить.
+  *Hacker News. Сірий жовтень. Учора закінчився квартал.*
+  **ГУГЛ** *(виходить у білому халаті)*: Дорогі друзі! Ми зробили Гемінай Чотири Аргон. Він перший у сімдесяти п'яти відсотках бенчмарків.
+  **ХАКЕРНЬЮЗІВЕЦЬ**: Ну то дай помацати.
+  **ГУГЛ**: Не можна. Тільки для довірених кіберзахисників.
+  **ХАКЕРНЬЮЗІВЕЦЬ**: Які в сраку кіберзахисники? Нахуя ви це взагалі анонсували?
+  **ГУГЛЕР** *(тихо, з кутка)*: Квартал закінчився. Перф-рев'ю через шість тижнів.
+  **ХАКЕРНЬЮЗІВЕЦЬ**: А, ну тоді питань нема.
+user_prompt: |
+  Source line: {source_line}
+
+  Selected stories ({n_stories}), transcript excerpts:
+
+  {stories_block}
+
+  Write the play now.
