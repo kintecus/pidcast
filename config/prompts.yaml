@@ -268,7 +268,7 @@ prompts:
 
   discord_tldr:
     name: Discord TL;DR
-    description: "Fun Ukrainian-language TL;DR for sharing on Discord (2 chunks, <2k chars each)"
+    description: "Fun Ukrainian-language TL;DR for sharing on Discord (2 chunks, <2k chars each). Superseded by `pidcast discord` (story picker, single message)"
     max_output_tokens: 4000
     system_prompt: |
       Ти пишеш українською TL;DR подкасту для Discord. Стиль — Лесь Подеревянський:

@@ -23,6 +23,7 @@ Run with `uv run pidcast <input>`. Useful entry points:
 | `pidcast info` | Print resolved data/config dirs |
 | `pidcast analyze transcript.md` | Re-analyze without re-transcribing |
 | `pidcast diarize transcript.md [--audio file]` | Retry diarization only |
+| `pidcast discord transcript.md [--style {play,digest}] [--pick 1,3] [--model opus]` | Story picker + Ukrainian Discord recap (<= 1900 chars) via the Claude CLI |
 | `pidcast transcribe <input> --test [MIN] [--start-at MIN]` | Dry-run transcription on a slice |
 | `pidcast transcribe <input> --transcription-provider {whisper,elevenlabs}` | Pick transcription backend |
 | `pidcast transcribe <input> --provider {groq,claude}` | Pick LLM analysis backend |
@@ -48,7 +49,9 @@ pre-commit install           # enable pre-commit hooks (ruff, mermaid)
 Source lives under `src/pidcast/`. Hot-path modules (read these first when debugging a workflow):
 
 - `cli.py` — thin argparse surface: builds the verb subparser tree + shared parent parsers, then `args.func(args)`
-- `commands/` — one module per verb (`transcribe`, `analyze`, `diarize`, `listing`, `info`, `lib`); handler bodies live here, not in `cli.py`
+- `commands/` — one module per verb (`transcribe`, `analyze`, `diarize`, `discord`, `listing`, `info`, `lib`); handler bodies live here, not in `cli.py`
+- `discord_recap.py` + `config/discord/*.yaml` — two-pass Discord recap: Haiku lists stories, user picks, Opus/Sonnet writes in a preset style; one auto-shorten retry if over budget
+- `providers/claude_provider.py` — `run_claude()` shells out to the `claude` CLI in isolation (temp cwd, replaced system prompt, no tools/MCP) so the user's CLAUDE.md never reaches analysis prompts
 - `duplicate.py` — duplicate-detection prompt UI (consumed by `commands/transcribe.py`)
 - `workflow.py` — orchestration: download → transcribe → diarize → analyze → write
 - `transcription.py` + `providers/` — provider dispatch for whisper/ElevenLabs

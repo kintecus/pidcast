@@ -1,6 +1,8 @@
 """Tests for pidcast.providers.claude_provider module."""
 
+import json
 import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,9 +11,11 @@ from pidcast.config import VideoInfo
 from pidcast.exceptions import AnalysisError
 from pidcast.providers.claude_provider import (
     CLAUDE_MODELS,
+    HARNESS_CONTEXT_GUARD,
     _find_claude_cli,
     _resolve_claude_model,
     analyze_with_claude_cli,
+    run_claude,
     run_claude_subprocess,
 )
 
@@ -95,20 +99,74 @@ class TestResolveClaudeModel:
 
 
 class TestRunClaudeSubprocess:
-    def _mock_proc(self, returncode=0, stdout="output", stderr=""):
+    def _mock_proc(self, returncode=0, stdout=None, stderr="", result="output"):
         proc = MagicMock()
         proc.returncode = returncode
-        proc.stdout = stdout
+        proc.stdout = stdout if stdout is not None else json.dumps({"result": result})
         proc.stderr = stderr
         return proc
 
-    def test_returns_stdout_on_success(self):
+    def test_returns_result_text_on_success(self):
         with (
             patch("pidcast.providers.claude_provider._find_claude_cli", return_value="/bin/claude"),
-            patch("subprocess.run", return_value=self._mock_proc(stdout="  hello  ")),
+            patch("subprocess.run", return_value=self._mock_proc(result="  hello  ")),
         ):
             result = run_claude_subprocess("prompt", "claude-sonnet-5")
         assert result == "hello"
+
+    def test_runs_isolated_with_system_prompt_and_stdin(self):
+        with (
+            patch("pidcast.providers.claude_provider._find_claude_cli", return_value="/bin/claude"),
+            patch("subprocess.run", return_value=self._mock_proc()) as run,
+        ):
+            run_claude_subprocess("user text", "claude-sonnet-5", system_prompt="Be terse.")
+        argv = run.call_args.args[0]
+        kwargs = run.call_args.kwargs
+        assert kwargs["input"] == "user text"
+        assert "user text" not in argv
+        system = argv[argv.index("--system-prompt") + 1]
+        assert system.startswith("Be terse.")
+        assert HARNESS_CONTEXT_GUARD in system
+        assert argv[argv.index("--tools") + 1] == ""
+        assert "--strict-mcp-config" in argv
+        assert kwargs["cwd"] != str(Path.cwd())
+
+    def test_run_claude_returns_usage_and_cost(self):
+        payload = {
+            "result": "ok",
+            "usage": {"input_tokens": 10, "cache_creation_input_tokens": 90, "output_tokens": 5},
+            "total_cost_usd": 0.01,
+            "modelUsage": {"claude-opus-5-5": {}},
+        }
+        with (
+            patch("pidcast.providers.claude_provider._find_claude_cli", return_value="/bin/claude"),
+            patch("subprocess.run", return_value=self._mock_proc(stdout=json.dumps(payload))),
+        ):
+            run = run_claude("prompt", "opus")
+        assert (run.text, run.model, run.input_tokens, run.output_tokens, run.cost_usd) == (
+            "ok",
+            "claude-opus-5-5",
+            100,
+            5,
+            0.01,
+        )
+
+    def test_raises_on_non_json_output(self):
+        with (
+            patch("pidcast.providers.claude_provider._find_claude_cli", return_value="/bin/claude"),
+            patch("subprocess.run", return_value=self._mock_proc(stdout="plain text")),
+            pytest.raises(AnalysisError, match="non-JSON"),
+        ):
+            run_claude_subprocess("prompt", "claude-sonnet-5")
+
+    def test_raises_when_cli_reports_error(self):
+        stdout = json.dumps({"is_error": True, "result": "Credit balance too low"})
+        with (
+            patch("pidcast.providers.claude_provider._find_claude_cli", return_value="/bin/claude"),
+            patch("subprocess.run", return_value=self._mock_proc(stdout=stdout)),
+            pytest.raises(AnalysisError, match="Credit balance"),
+        ):
+            run_claude_subprocess("prompt", "claude-sonnet-5")
 
     def test_raises_on_nonzero_exit(self):
         with (
@@ -123,7 +181,7 @@ class TestRunClaudeSubprocess:
     def test_raises_on_empty_output(self):
         with (
             patch("pidcast.providers.claude_provider._find_claude_cli", return_value="/bin/claude"),
-            patch("subprocess.run", return_value=self._mock_proc(stdout="")),
+            patch("subprocess.run", return_value=self._mock_proc(result="")),
             pytest.raises(AnalysisError, match="empty output"),
         ):
             run_claude_subprocess("prompt", "claude-sonnet-5")

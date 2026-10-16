@@ -107,40 +107,41 @@ models:
       tpm: 40000
       tpd: 1000000
 
-  # Claude models (used via CLI pipe, not in Groq fallback chain)
-  claude-sonnet-5:
-    display_name: Claude Sonnet 5
+  # Claude models (used via the isolated claude CLI, not in Groq fallback chain).
+  # Pricing per claude-api reference (cached 2026-10-06); the CLI reports real cost per call.
+  claude-sonnet-5-5:
+    display_name: Claude Sonnet 5.5
     provider: claude
     context_window: 1000000
     pricing:
-      input: 3.00
-      output: 15.00
+      input: 2.00
+      output: 10.00
     limits:
       rpm: 0
       rpd: 0
       tpm: 0
       tpd: 0
 
-  claude-opus-4-8:
-    display_name: Claude Opus 4.8
+  claude-opus-5-5:
+    display_name: Claude Opus 5.5
     provider: claude
     context_window: 1000000
     pricing:
-      input: 5.00
-      output: 25.00
+      input: 4.00
+      output: 20.00
     limits:
       rpm: 0
       rpd: 0
       tpm: 0
       tpd: 0
 
-  claude-haiku-4-5-20251001:
-    display_name: Claude Haiku 4.5
+  claude-haiku-5-5:
+    display_name: Claude Haiku 5.5
     provider: claude
-    context_window: 200000
+    context_window: 1000000
     pricing:
-      input: 1.00
-      output: 5.00
+      input: 0.10
+      output: 0.50
     limits:
       rpm: 0
       rpd: 0

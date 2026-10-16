@@ -114,6 +114,7 @@ LOG_FILE = LOGS_DIR / "pidcast.log"
 # installed package first, falling back to the repo for source checkouts.
 PROMPTS_FILE = _resolve_packaged_config("prompts.yaml")
 MODELS_FILE = _resolve_packaged_config("models.yaml")
+DISCORD_PRESETS_DIR = _resolve_packaged_config("discord")
 
 
 def ensure_data_dirs() -> None:

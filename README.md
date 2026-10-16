@@ -92,6 +92,11 @@ uv run pidcast "URL" --reveal
 uv run pidcast analyze transcript.md          # re-analyze
 uv run pidcast diarize transcript.md          # retry diarization
 
+# Ukrainian Discord recap (Claude CLI): lists the episode's stories, you pick, it writes <= 1900 chars
+uv run pidcast discord transcript.md                       # play format, Opus, copies to clipboard
+uv run pidcast discord transcript.md --style digest        # prose digest instead of a play
+uv run pidcast discord transcript.md --pick 3,9 --model sonnet
+
 # Discovery
 uv run pidcast list analyses         # list analysis types
 uv run pidcast list models           # list LLM models

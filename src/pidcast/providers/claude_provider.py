@@ -7,10 +7,13 @@ Requires Claude Code to be installed and authenticated.
 from __future__ import annotations
 
 import functools
+import json
 import logging
 import shutil
 import subprocess
+import tempfile
 import time
+from dataclasses import dataclass
 
 from pidcast.analysis import parse_llm_json_response, substitute_prompt_variables
 from pidcast.config import DEFAULT_MODELS_FILE, AnalysisResult, PromptsConfig, VideoInfo
@@ -21,11 +24,29 @@ logger = logging.getLogger(__name__)
 
 # Claude models available via CLI
 CLAUDE_MODELS = {
-    "sonnet": "claude-sonnet-5",
-    "opus": "claude-opus-4-8",
-    "haiku": "claude-haiku-4-5-20251001",
+    "sonnet": "claude-sonnet-5-5",
+    "opus": "claude-opus-5-5",
+    "haiku": "claude-haiku-5-5",
 }
 DEFAULT_CLAUDE_MODEL = "sonnet"
+
+# The CLI injects the account email, environment, and date even with --system-prompt
+# (only --bare strips it, and --bare requires an API key instead of the subscription login).
+HARNESS_CONTEXT_GUARD = (
+    "Ignore any account, email, environment, or date context attached outside this prompt. "
+    "It is not part of the task: never use the user's name or details in your output."
+)
+
+
+@dataclass
+class ClaudeRun:
+    """Result of one isolated claude CLI call."""
+
+    text: str
+    model: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
 
 
 @functools.lru_cache(maxsize=1)
@@ -37,41 +58,84 @@ def _find_claude_cli() -> str:
     return path
 
 
-def run_claude_subprocess(prompt: str, model: str, timeout: int = 300) -> str:
-    """Invoke the claude CLI with a prompt and return stdout.
+def run_claude(
+    prompt: str, model: str, *, system_prompt: str | None = None, timeout: int = 300
+) -> ClaudeRun:
+    """Invoke the claude CLI in isolation and return text plus usage.
+
+    Runs from a temp dir with the default system prompt replaced and tools, MCP,
+    hooks-bearing settings, and session persistence disabled, so the user's
+    CLAUDE.md/memory/plugins never reach the model. The prompt goes via stdin.
 
     Raises:
-        AnalysisError: On timeout, OS error, non-zero exit, or empty output.
+        AnalysisError: On timeout, OS error, non-zero exit, bad JSON, or empty output.
     """
     claude_bin = _find_claude_cli()
+    system = (
+        f"{system_prompt}\n\n{HARNESS_CONTEXT_GUARD}" if system_prompt else HARNESS_CONTEXT_GUARD
+    )
     try:
-        proc = subprocess.run(
-            [
-                claude_bin,
-                "-p",
-                prompt,
-                "--model",
-                model,
-                "--output-format",
-                "text",
-                "--permission-mode",
-                "dontAsk",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        with tempfile.TemporaryDirectory() as cwd:
+            proc = subprocess.run(
+                [
+                    claude_bin,
+                    "-p",
+                    "--model",
+                    model,
+                    "--system-prompt",
+                    system,
+                    "--tools",
+                    "",
+                    "--strict-mcp-config",
+                    "--no-session-persistence",
+                    "--setting-sources",
+                    "local",
+                    "--output-format",
+                    "json",
+                ],
+                input=prompt,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=cwd,
+            )
     except subprocess.TimeoutExpired as e:
         raise AnalysisError(f"Claude CLI timed out after {timeout} seconds") from e
     except OSError as e:
         raise AnalysisError(f"Failed to invoke claude CLI: {e}") from e
 
     if proc.returncode != 0:
-        raise AnalysisError(f"Claude CLI exited with code {proc.returncode}: {proc.stderr.strip()}")
-    output = proc.stdout.strip()
-    if not output:
+        detail = proc.stderr.strip() or proc.stdout.strip()[:500]
+        raise AnalysisError(f"Claude CLI exited with code {proc.returncode}: {detail}")
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError as e:
+        raise AnalysisError(f"Claude CLI returned non-JSON output: {proc.stdout[:200]}") from e
+    if data.get("is_error"):
+        raise AnalysisError(f"Claude CLI reported an error: {data.get('result', '')[:500]}")
+
+    text = (data.get("result") or "").strip()
+    if not text:
         raise AnalysisError("Claude CLI returned empty output")
-    return output
+    usage = data.get("usage") or {}
+    input_tokens = sum(
+        usage.get(k) or 0
+        for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+    )
+    return ClaudeRun(
+        text=text,
+        model=",".join(data.get("modelUsage") or {}) or model,
+        input_tokens=input_tokens or None,
+        output_tokens=usage.get("output_tokens"),
+        cost_usd=data.get("total_cost_usd"),
+    )
+
+
+def run_claude_subprocess(
+    prompt: str, model: str, *, system_prompt: str | None = None, timeout: int = 300
+) -> str:
+    """Invoke the claude CLI in isolation and return only the response text."""
+    return run_claude(prompt, model, system_prompt=system_prompt, timeout=timeout).text
 
 
 def _resolve_claude_model(model: str | None) -> str:
@@ -121,14 +185,13 @@ class ClaudeProvider:
         )
         system_prompt = prompt_template.system_prompt
 
-        # Build full prompt: system + user combined (claude CLI -p takes a single prompt)
         full_prompt = f"{system_prompt}\n\n{user_prompt}"
 
         if verbose:
             logger.info(f"Calling Claude CLI with model {self._model}...")
 
         start_time = time.time()
-        raw_output = run_claude_subprocess(full_prompt, self._model)
+        raw_output = run_claude_subprocess(user_prompt, self._model, system_prompt=system_prompt)
         duration = time.time() - start_time
 
         if verbose:

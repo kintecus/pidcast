@@ -115,10 +115,7 @@ def _judge_summaries(
         summary_a=summary_a,
         summary_b=summary_b,
     )
-    raw = run_claude_subprocess(
-        f"{JUDGE_SYSTEM_PROMPT}\n\n{user_prompt}",
-        model=judge_model,
-    )
+    raw = run_claude_subprocess(user_prompt, model=judge_model, system_prompt=JUDGE_SYSTEM_PROMPT)
 
     try:
         data = json.loads(raw)

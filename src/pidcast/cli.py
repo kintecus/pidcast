@@ -31,6 +31,7 @@ KNOWN_VERBS = frozenset(
         "transcribe",
         "analyze",
         "diarize",
+        "discord",
         "lib",
         "list",
         "setup",
@@ -384,10 +385,12 @@ def _build_parser() -> argparse.ArgumentParser:
     """Construct the full verb-first parser (unconditional subparser tree)."""
     from .commands.analyze import cmd_analyze
     from .commands.diarize import cmd_diarize
+    from .commands.discord import cmd_discord
     from .commands.info import cmd_info
     from .commands.listing import cmd_list
     from .commands.log import cmd_log
     from .commands.transcribe import cmd_transcribe
+    from .discord_recap import list_styles
     from .resume import run_resume
     from .setup import run_doctor, run_setup
 
@@ -468,6 +471,37 @@ Common workflows:
     )
     an.add_argument("transcript", help="Path to an existing transcript (.md or .txt)")
     an.set_defaults(func=cmd_analyze)
+
+    # --- discord -------------------------------------------------------------
+    dc = sub.add_parser(
+        "discord",
+        parents=[parents["global"]],
+        help="Pick stories from a transcript and write a Ukrainian Discord recap (Claude)",
+    )
+    dc.add_argument("transcript", help="Path to an existing transcript (.md or .txt)")
+    dc.add_argument(
+        "--style", choices=list_styles(), default="play", help="Recap style (default: play)"
+    )
+    dc.add_argument(
+        "--pick", default=None, help="Story numbers in output order, e.g. 1,3 (skips the prompt)"
+    )
+    dc.add_argument(
+        "--model",
+        default="opus",
+        help="Claude model that writes the recap: opus, sonnet, haiku, or a full ID (default: opus)",
+    )
+    dc.add_argument(
+        "--stories-model",
+        default="haiku",
+        help="Claude model that lists the stories (default: haiku)",
+    )
+    dc.add_argument(
+        "--copy",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Copy the recap to the clipboard via pbcopy (default: on)",
+    )
+    dc.set_defaults(func=cmd_discord)
 
     # --- diarize -------------------------------------------------------------
     di = sub.add_parser(

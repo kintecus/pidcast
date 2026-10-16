@@ -63,6 +63,7 @@ def test_empty_argv_is_unchanged():
         (["transcribe", "x.mp3"], "transcribe"),
         (["analyze", "t.md"], "analyze"),
         (["diarize", "t.md"], "diarize"),
+        (["discord", "t.md"], "discord"),
         (["setup"], "setup"),
         (["doctor"], "doctor"),
         (["resume"], "resume"),
@@ -89,6 +90,21 @@ def test_analyze_takes_transcript_positional():
     args = cli.parse_arguments(["analyze", "/path/to/t.md", "-a", "summary"])
     assert args.transcript == "/path/to/t.md"
     assert args.analysis_type == "summary"
+
+
+def test_discord_defaults_and_flags():
+    args = cli.parse_arguments(["discord", "/path/to/t.md"])
+    assert (args.style, args.model, args.stories_model, args.pick, args.copy) == (
+        "play",
+        "opus",
+        "haiku",
+        None,
+        True,
+    )
+    args = cli.parse_arguments(
+        ["discord", "t.md", "--style", "digest", "--pick", "3,1", "--model", "sonnet", "--no-copy"]
+    )
+    assert (args.style, args.pick, args.model, args.copy) == ("digest", "3,1", "sonnet", False)
 
 
 def test_diarize_takes_transcript_and_audio():
