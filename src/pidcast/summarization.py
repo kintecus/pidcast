@@ -12,6 +12,9 @@ from .history import HistoryEntry
 
 logger = logging.getLogger(__name__)
 
+# Llama 3.x is enterprise-only on Groq since 2026; gpt-oss-20b is the fast free-tier option
+SUMMARY_MODEL = "openai/gpt-oss-20b"
+
 
 class Summarizer:
     """LLM-based summarization for digest generation."""
@@ -77,7 +80,6 @@ class Summarizer:
                 response = self._call_groq_api(
                     prompt=prompt,
                     system_prompt=system_prompt,
-                    model="llama-3.1-8b-instant",  # Fast model for simple task
                     json_mode=True,
                 )
 
@@ -124,7 +126,6 @@ class Summarizer:
             response = self._call_groq_api(
                 prompt=prompt,
                 system_prompt=system_prompt,
-                model="llama-3.1-8b-instant",
                 json_mode=False,  # Plain text response
             )
 
@@ -153,7 +154,7 @@ class Summarizer:
             response = self._call_groq_api(
                 prompt=prompt,
                 system_prompt=system_prompt,
-                model="llama-3.1-70b-versatile",  # More powerful model for clustering
+                model="openai/gpt-oss-120b",  # More powerful model for clustering
                 json_mode=True,
             )
 
@@ -195,7 +196,7 @@ class Summarizer:
         self,
         prompt: str,
         system_prompt: str,
-        model: str = "llama-3.1-8b-instant",
+        model: str = SUMMARY_MODEL,
         json_mode: bool = False,
         max_tokens: int = 2000,
     ) -> str | list | dict:
@@ -223,6 +224,9 @@ class Summarizer:
             "temperature": 0.3,
         }
 
+        if "gpt-oss" in model:
+            # Reasoning tokens share max_tokens; low effort keeps them from crowding out the answer
+            kwargs["reasoning_effort"] = "low"
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
 

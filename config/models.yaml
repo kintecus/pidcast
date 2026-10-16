@@ -15,11 +15,12 @@ default_model: openai/gpt-oss-120b
 # context window/TPM, so it reliably 413s on JSON-mode summarization requests
 # that are nowhere near its token limits. Still selectable explicitly via
 # --groq-model compound; just not part of the automatic fallback sequence.
+#
+# Llama 3.x models are enterprise-only on Groq (verified live 2026-10-16: the free
+# key gets "does not exist or you do not have access"), so they're out of the chain.
 fallback_chain:
   - openai/gpt-oss-120b
   - openai/gpt-oss-20b
-  - llama-3.3-70b-versatile
-  - llama-3.1-8b-instant
 
 # Model configurations
 models:
