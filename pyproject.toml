@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pidcast"
-version = "0.21.0"
+version = "0.22.0"
 description = "YouTube transcription tool with Whisper and LLM analysis"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -54,6 +54,7 @@ packages = ["src/pidcast"]
 "config/prompts.yaml" = "pidcast/config/prompts.yaml"
 "config/models.yaml" = "pidcast/config/models.yaml"
 "config/discord" = "pidcast/config/discord"
+"config/notes" = "pidcast/config/notes"
 "src/pidcast/evals/data" = "pidcast/evals/data"
 
 [dependency-groups]

@@ -97,6 +97,12 @@ uv run pidcast discord transcript.md                       # play format, Opus, 
 uv run pidcast discord transcript.md --style digest        # prose digest instead of a play
 uv run pidcast discord transcript.md --pick 3,9 --model sonnet
 
+# Knowledge notes for long episodes (Claude CLI): maps the themes, you check the ones to go deep on,
+# it writes an executive summary + a detailed section per checked theme (the rest get one line)
+uv run pidcast notes transcript.md                         # saved next to the transcript, Opus
+uv run pidcast notes transcript.md -o --focus "eval infra"  # into the Obsidian vault, with a steer
+uv run pidcast notes transcript.md --pick 4,2 --model sonnet
+
 # Discovery
 uv run pidcast list analyses         # list analysis types
 uv run pidcast list models           # list LLM models

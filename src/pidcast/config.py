@@ -115,6 +115,7 @@ LOG_FILE = LOGS_DIR / "pidcast.log"
 PROMPTS_FILE = _resolve_packaged_config("prompts.yaml")
 MODELS_FILE = _resolve_packaged_config("models.yaml")
 DISCORD_PRESETS_DIR = _resolve_packaged_config("discord")
+NOTES_PRESETS_DIR = _resolve_packaged_config("notes")
 
 
 def ensure_data_dirs() -> None:

@@ -32,6 +32,7 @@ KNOWN_VERBS = frozenset(
         "analyze",
         "diarize",
         "discord",
+        "notes",
         "lib",
         "list",
         "setup",
@@ -389,8 +390,10 @@ def _build_parser() -> argparse.ArgumentParser:
     from .commands.info import cmd_info
     from .commands.listing import cmd_list
     from .commands.log import cmd_log
+    from .commands.notes import cmd_notes
     from .commands.transcribe import cmd_transcribe
     from .discord_recap import list_styles
+    from .knowledge_notes import list_styles as list_notes_styles
     from .resume import run_resume
     from .setup import run_doctor, run_setup
 
@@ -407,6 +410,7 @@ Common workflows:
   pidcast transcribe FILE.mp3 --test 5 --start-at 10  Dry-run a 5-min slice from 10:00
   pidcast analyze transcript.md -a summary          Re-analyze an existing transcript
   pidcast diarize transcript.md                     Retry diarization only
+  pidcast notes transcript.md -o                    Knowledge notes for a long episode
   pidcast list models                               Discover analyses/models/presets/...
   pidcast lib add "99% Invisible"                   Manage the podcast library
   pidcast log -n 20                                Show last 20 runs
@@ -502,6 +506,50 @@ Common workflows:
         help="Copy the recap to the clipboard via pbcopy (default: on)",
     )
     dc.set_defaults(func=cmd_discord)
+
+    # --- notes ---------------------------------------------------------------
+    nt = sub.add_parser(
+        "notes",
+        parents=[parents["global"]],
+        help="Pick focus themes and write long-form knowledge notes from a transcript (Claude)",
+    )
+    nt.add_argument("transcript", help="Path to an existing transcript (.md or .txt)")
+    nt.add_argument(
+        "--style",
+        choices=list_notes_styles(),
+        default="deepdive",
+        help="Notes preset (default: deepdive)",
+    )
+    nt.add_argument(
+        "--pick",
+        default=None,
+        help="Focus theme numbers in section order, e.g. 2,5 (skips the prompt)",
+    )
+    nt.add_argument(
+        "--focus",
+        default=None,
+        metavar="TEXT",
+        help='Free-text steer for the writer, e.g. "eval infra and rollout lessons"',
+    )
+    nt.add_argument(
+        "--model",
+        default="opus",
+        help="Claude model that writes the notes: opus, sonnet, haiku, or a full ID (default: opus)",
+    )
+    nt.add_argument(
+        "--topics-model",
+        default="haiku",
+        help="Claude model that maps the themes (default: haiku)",
+    )
+    nt.add_argument(
+        "-o",
+        "--save-to-obsidian",
+        dest="save_to_obsidian",
+        action="store_true",
+        help="Save to the Obsidian vault (OBSIDIAN_VAULT_PATH) instead of next to the transcript",
+    )
+    nt.add_argument("--tags", default=None, help="Comma-separated extra tags for front matter")
+    nt.set_defaults(func=cmd_notes)
 
     # --- diarize -------------------------------------------------------------
     di = sub.add_parser(
