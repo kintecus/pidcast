@@ -131,3 +131,46 @@ def test_build_transcribe_namespace_yields_transcribe_defaults():
     # A dest read as a bare attribute downstream must be present.
     assert hasattr(ns, "no_analyze")
     assert hasattr(ns, "save")
+
+
+# ---------------------------------------------------------------------------
+# transcribe skips analysis unless asked
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("argv", [["x.mp3"], ["transcribe", "x.mp3"], ["x.mp3", "--no-analyze"]])
+def test_transcribe_skips_analysis_by_default(argv):
+    assert cli.parse_arguments(argv).no_analyze is True
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--analyze"],
+        ["-a", "key_points"],
+        ["--provider", "claude"],
+        ["--claude-model", "opus"],
+        ["-m", "some-model"],
+        ["-o"],
+        ["--save"],
+    ],
+)
+def test_transcribe_analysis_opt_in(extra):
+    assert cli.parse_arguments(["x.mp3", *extra]).no_analyze is False
+
+
+def test_explicit_no_analyze_beats_implied_opt_in():
+    assert cli.parse_arguments(["x.mp3", "-a", "key_points", "--no-analyze"]).no_analyze is True
+
+
+def test_explicit_analyze_survives_preset():
+    # Shares the no_analyze dest, so apply_preset treats it as explicitly set
+    assert "no_analyze" in cli._explicitly_set_dests(["x.mp3", "--analyze"])
+
+
+def test_lib_sync_still_analyzes_by_default():
+    assert cli.parse_arguments(["lib", "sync"]).no_analyze is False
+
+
+def test_resume_namespace_defaults_to_no_analysis():
+    assert cli.build_transcribe_namespace("/job/source.wav").no_analyze is True

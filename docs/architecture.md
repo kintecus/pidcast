@@ -44,7 +44,7 @@ flowchart TD
     BuiltinSpk --> Merge
     Plain --> Merge
 
-    Merge --> AnalyzeQ{--no-analyze?}
+    Merge --> AnalyzeQ{analysis requested?}
     AnalyzeQ -->|analyze| ChunkCheck{> 120k chars?}
     AnalyzeQ -->|skip| Markdown(markdown.py)
     ChunkCheck -->|yes| Chunking(chunking.py)

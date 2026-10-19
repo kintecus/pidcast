@@ -16,8 +16,8 @@ Run with `uv run pidcast <input>`. Useful entry points:
 
 | Command | Purpose |
 |---------|---------|
-| `pidcast <URL_OR_PATH>` | Transcribe + analyze (bare = `transcribe`) |
-| `pidcast transcribe <URL_OR_PATH>` | Transcribe + analyze (explicit verb) |
+| `pidcast <URL_OR_PATH>` | Transcribe only (bare = `transcribe`) |
+| `pidcast transcribe <URL_OR_PATH> [--analyze]` | Transcribe; analysis is opt-in via `--analyze` or any analysis flag (`-a`, `--provider`, `-o`, ...) |
 | `pidcast setup` | Interactive setup wizard (env, deps, API keys) |
 | `pidcast doctor` | Diagnose tooling/env configuration |
 | `pidcast info` | Print resolved data/config dirs |

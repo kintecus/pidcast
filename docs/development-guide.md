@@ -28,7 +28,7 @@ Set in `.env`. See `.env.example` for the up-to-date list.
 
 | Variable | Purpose | Required? |
 |----------|---------|-----------|
-| `GROQ_API_KEY` | Default LLM provider for analysis | Required unless `--no-analyze` or `--provider claude` |
+| `GROQ_API_KEY` | Default LLM provider for analysis | Required for `transcribe --analyze` (unless `--provider claude`) and `lib sync`/`process` analysis |
 | `ELEVENLABS_API_KEY` | ElevenLabs Scribe v2 transcription provider | Required if `--transcription-provider elevenlabs` |
 | `HUGGINGFACE_TOKEN` | Downloads pyannote diarization model on first use | Required for `--diarize` on the whisper path |
 | `WHISPER_CPP_PATH` | Path to `whisper-cli` binary | Required for local whisper transcription |

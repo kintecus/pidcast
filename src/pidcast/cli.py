@@ -43,6 +43,19 @@ KNOWN_VERBS = frozenset(
     }
 )
 
+# Passing any of these to `transcribe` opts into analysis without --analyze.
+ANALYSIS_OPT_IN_DESTS = frozenset(
+    {
+        "analysis_type",
+        "provider",
+        "claude_model",
+        "groq_model",
+        "prompts_file",
+        "save",
+        "save_to_obsidian",
+    }
+)
+
 
 # ============================================================================
 # PRESET APPLICATION
@@ -175,7 +188,7 @@ def _build_parent_parsers() -> dict[str, argparse.ArgumentParser]:
         "--no-analyze",
         action="store_true",
         dest="no_analyze",
-        help="Skip LLM analysis (default: analyze is enabled)",
+        help="Skip LLM analysis",
     )
     a.add_argument(
         "-a",
@@ -405,7 +418,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Common workflows:
-  pidcast "https://youtube.com/watch?v=ID"          Transcribe + analyze (bare = transcribe)
+  pidcast "https://youtube.com/watch?v=ID"          Transcribe only (bare = transcribe)
   pidcast transcribe FILE.mp3 -o -a exec            Save to Obsidian, executive summary
   pidcast transcribe FILE.mp3 --test 5 --start-at 10  Dry-run a 5-min slice from 10:00
   pidcast analyze transcript.md -a summary          Re-analyze an existing transcript
@@ -428,9 +441,19 @@ Common workflows:
             parents["output"],
             parents["download"],
         ],
-        help="Transcribe a URL or audio file (and analyze)",
+        help="Transcribe a URL or audio file (analysis is opt-in)",
     )
     t.add_argument("input", help="YouTube/podcast URL or path to a local audio file")
+    # Shares the --no-analyze dest so presets can't clobber an explicit --analyze.
+    # SUPPRESS keeps the parent's default; parse_arguments resolves the real one.
+    t.add_argument(
+        "--analyze",
+        dest="no_analyze",
+        action="store_false",
+        default=argparse.SUPPRESS,
+        help="Run LLM analysis after transcribing (off by default; implied by -a, "
+        "--provider, --claude-model, -m, --prompts-file, --save, -o)",
+    )
     t.add_argument(
         "--test",
         nargs="?",
@@ -627,7 +650,21 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         argv = sys.argv[1:]
 
     parser = _build_parser()
-    return parser.parse_args(_inject_default_verb(argv))
+    args = parser.parse_args(_inject_default_verb(argv))
+    if args.command == "transcribe":
+        _default_transcribe_to_no_analysis(args, _explicitly_set_dests(argv))
+    return args
+
+
+def _default_transcribe_to_no_analysis(args: argparse.Namespace, explicitly_set: set[str]) -> None:
+    """Skip analysis on `transcribe` unless the user asked for it.
+
+    The shared analysis parent defaults to analyzing (``lib process``/``sync``
+    rely on that), so the transcribe default is applied here. A preset can still
+    turn analysis on or off afterwards.
+    """
+    if "no_analyze" not in explicitly_set and not explicitly_set & ANALYSIS_OPT_IN_DESTS:
+        args.no_analyze = True
 
 
 def _suppress_all_defaults(parser: argparse.ArgumentParser) -> None:

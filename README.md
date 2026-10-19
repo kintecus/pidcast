@@ -68,12 +68,11 @@ uv run pidcast "/path/to/audio.mp3"
 # Pick a transcription provider
 uv run pidcast "URL" --transcription-provider elevenlabs
 
-# Pick an LLM provider for analysis
-uv run pidcast "URL" --provider claude --claude-model opus
-
-# Pick an analysis type (or skip analysis entirely)
+# Transcription only by default. Opt into LLM analysis with --analyze,
+# or by passing any analysis flag (-a, --provider, --claude-model, -m, --save, -o)
+uv run pidcast "URL" --analyze
 uv run pidcast "URL" -a key_points
-uv run pidcast "URL" --no-analyze
+uv run pidcast "URL" --provider claude --claude-model opus
 
 # Custom front matter tags (overrides auto-inferred source tags)
 uv run pidcast "/path/to/meeting.mp3" --tags meeting,standup,weekly
