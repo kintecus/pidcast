@@ -44,7 +44,8 @@ Draft:
 
 @dataclass
 class Story:
-    id: int
+    # Numbered 1..n across pickable stories only; ads/intro/outro carry None
+    id: int | None
     kind: str
     headline: str
     gist: str
@@ -106,19 +107,23 @@ def _extract_json(text: str) -> dict[str, Any]:
 
 
 def parse_stories(raw: str, n_segments: int) -> list[Story]:
-    """Parse the story-pass JSON, renumbering ids 1..n and clamping ranges to the transcript."""
+    """Parse the story-pass JSON, numbering pickable stories 1..n and clamping ranges."""
     items = _extract_json(raw).get("stories") or []
     if not items:
         raise AnalysisError("Story pass found no stories")
     last = n_segments - 1
     stories = []
-    for i, item in enumerate(items, 1):
+    next_id = 1
+    for item in items:
         start = min(max(int(item.get("start", 0)), 0), last)
         end = min(max(int(item.get("end", start)), start), last)
         kind = item.get("kind") if item.get("kind") in STORY_KINDS else "story"
+        story_id = None
+        if kind == "story":
+            story_id, next_id = next_id, next_id + 1
         stories.append(
             Story(
-                id=i,
+                id=story_id,
                 kind=kind,
                 headline=str(item.get("headline", "")).strip(),
                 gist=str(item.get("gist", "")).strip(),
@@ -161,7 +166,7 @@ def build_recap_prompt(
     The episode title is deliberately left out: it names every story, so including
     it lets skipped stories leak back into the recap.
     """
-    by_id = {s.id: s for s in stories}
+    by_id = {s.id: s for s in stories if s.pickable}
     blocks = []
     for n, pid in enumerate(picks, 1):
         story = by_id[pid]
@@ -195,3 +200,12 @@ def source_line(channel: str | None, transcript_path: Path) -> str:
     date = re.match(r"\d{4}-\d{2}-\d{2}", transcript_path.stem)
     parts = [p for p in (channel if channel != "Unknown" else None, date and date.group(0)) if p]
     return " | ".join(parts) or transcript_path.stem
+
+
+def skipped_summary(stories: list[Story]) -> str:
+    """'3 ads, intro, outro' for the non-story segments, in order of first appearance."""
+    counts: dict[str, int] = {}
+    for s in stories:
+        if not s.pickable:
+            counts[s.kind] = counts.get(s.kind, 0) + 1
+    return ", ".join(kind if n == 1 else f"{n} {kind}s" for kind, n in counts.items())

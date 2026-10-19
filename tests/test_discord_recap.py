@@ -14,6 +14,7 @@ from pidcast.discord_recap import (
     parse_pick,
     parse_stories,
     segment,
+    skipped_summary,
     source_line,
     write_recap,
 )
@@ -23,10 +24,10 @@ from pidcast.providers.claude_provider import ClaudeRun
 
 def _stories() -> list[Story]:
     return [
-        Story(1, "intro", "Welcome", "Host says hi.", 0, 0),
-        Story(2, "story", "Nvidia B400", "3x faster.", 1, 2),
-        Story(3, "ad", "VPN promo", "Code BREW.", 3, 3),
-        Story(4, "story", "Meta layoffs", "1,200 cut.", 4, 5),
+        Story(None, "intro", "Welcome", "Host says hi.", 0, 0),
+        Story(1, "story", "Nvidia B400", "3x faster.", 1, 2),
+        Story(None, "ad", "VPN promo", "Code BREW.", 3, 3),
+        Story(2, "story", "Meta layoffs", "1,200 cut.", 4, 5),
     ]
 
 
@@ -61,6 +62,14 @@ class TestParseStories:
             (2, "story", 3, 4),
         ]
 
+    def test_numbers_only_pickable_stories(self):
+        kinds = ["ad", "intro", "story", "ad", "story", "outro"]
+        raw = json.dumps(
+            {"stories": [{"kind": k, "start": i, "end": i} for i, k in enumerate(kinds)]}
+        )
+        stories = parse_stories(raw, n_segments=6)
+        assert [s.id for s in stories] == [None, None, 1, None, 2, None]
+
     def test_raises_on_missing_json(self):
         with pytest.raises(AnalysisError, match="no JSON"):
             parse_stories("I could not find any stories.", n_segments=5)
@@ -72,12 +81,12 @@ class TestParseStories:
 
 class TestParsePick:
     def test_keeps_given_order_and_dedupes(self):
-        assert parse_pick("4, 2 4", _stories()) == [4, 2]
+        assert parse_pick("2, 1 2", _stories()) == [2, 1]
 
     def test_empty_means_all_pickable(self):
-        assert parse_pick("  ", _stories()) == [2, 4]
+        assert parse_pick("  ", _stories()) == [1, 2]
 
-    @pytest.mark.parametrize("raw", ["3", "1", "9", "x"])
+    @pytest.mark.parametrize("raw", ["0", "3", "9", "x"])
     def test_rejects_ads_intros_and_unknown_ids(self, raw):
         with pytest.raises(ValueError, match="not a story number"):
             parse_pick(raw, _stories())
@@ -97,7 +106,7 @@ class TestBuildRecapPrompt:
             "system_prompt": "SYS",
             "user_prompt": "Source line: {source_line}\n{n_stories} stories:\n{stories_block}",
         }
-        system, user = build_recap_prompt(_stories(), [4, 2], segments, "Show | 2026-10-16", preset)
+        system, user = build_recap_prompt(_stories(), [2, 1], segments, "Show | 2026-10-16", preset)
         assert system == "SYS"
         assert user.index("Meta cuts. 1,200.") < user.index("B400 is out. Ships March.")
         assert "Story 1: Meta layoffs" in user
@@ -109,7 +118,7 @@ class TestBuildRecapPrompt:
         for style in list_styles():
             preset = load_preset(style)
             assert "{title}" not in preset["user_prompt"]
-            _, user = build_recap_prompt(_stories(), [2], ["a", "b", "c"], "Show", preset)
+            _, user = build_recap_prompt(_stories(), [1], ["a", "b", "c"], "Show", preset)
             assert "Show" in user
 
 
@@ -156,3 +165,11 @@ class TestPresetsAndSourceLine:
         assert source_line("Tech Brew Ride Home", path) == "Tech Brew Ride Home | 2026-10-16"
         assert source_line("Unknown", path) == "2026-10-16"
         assert source_line(None, Path("/x/episode.md")) == "episode"
+
+    def test_skipped_summary_counts_kinds_in_order(self):
+        stories = _stories() + [
+            Story(None, "ad", "Promo", "", 6, 6),
+            Story(None, "outro", "Bye", "", 7, 7),
+        ]
+        assert skipped_summary(stories) == "intro, 2 ads, outro"
+        assert skipped_summary([s for s in stories if s.pickable]) == ""

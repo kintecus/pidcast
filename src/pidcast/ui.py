@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -265,3 +267,184 @@ def select_key(prompt: str, choices: list[tuple[str, str]], *, default: str) -> 
         resolved = _resolve(line[0])
         if resolved is not None:
             return resolved
+
+
+# ---------------------------------------------------------------------------
+# Spinner
+# ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def spinner(label: str):
+    """Transient spinner with elapsed time for a blocking call; a log line off-TTY."""
+    if not _stdout_is_tty():
+        logger.info(f"{label}...")
+        yield
+        return
+    from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        TimeElapsedColumn(),
+        transient=True,
+    ) as progress:
+        progress.add_task(label, total=None)
+        yield
+
+
+# ---------------------------------------------------------------------------
+# Multi-select checklist
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ChecklistItem:
+    label: str
+    detail: str = ""
+    aside: str = ""
+
+
+_KEY_ALIASES = {
+    "\x1b[A": "up",
+    "\x1bOA": "up",
+    "k": "up",
+    "\x1b[B": "down",
+    "\x1bOB": "down",
+    "j": "down",
+    " ": "space",
+    "\r": "enter",
+    "\n": "enter",
+    "\x1b": "quit",
+    "\x03": "quit",
+    "\x04": "quit",
+    "q": "quit",
+    "a": "all",
+}
+
+
+def _split_keys(raw: str) -> list[str]:
+    """Turn one read into keys: an escape sequence is one key, anything else is per char."""
+    if raw.startswith("\x1b") and len(raw) > 1:
+        return [raw]
+    return list(raw)
+
+
+@dataclass
+class Checklist:
+    """Cursor + selection state behind ``select_many``, kept IO-free for tests."""
+
+    selected: list[bool]
+    cursor: int = 0
+    hint: str = ""
+
+    def press(self, key: str) -> str | None:
+        """Apply one key. Returns "done" or "quit" to finish, None to keep reading."""
+        n = len(self.selected)
+        action = _KEY_ALIASES.get(key, _KEY_ALIASES.get(key.lower(), key))
+        self.hint = ""
+        if action == "up":
+            self.cursor = (self.cursor - 1) % n
+        elif action == "down":
+            self.cursor = (self.cursor + 1) % n
+        elif action == "space":
+            self.selected[self.cursor] = not self.selected[self.cursor]
+        elif action == "all":
+            target = not all(self.selected)
+            self.selected = [target] * n
+        elif action.isdigit() and 1 <= int(action) <= n:
+            self.cursor = int(action) - 1
+            self.selected[self.cursor] = not self.selected[self.cursor]
+        elif action == "enter":
+            if any(self.selected):
+                return "done"
+            self.hint = "Pick at least one"
+        elif action == "quit":
+            return "quit"
+        return None
+
+    @property
+    def picked(self) -> list[int]:
+        return [i for i, on in enumerate(self.selected) if on]
+
+
+def checklist_view(
+    items: list[ChecklistItem],
+    state: Checklist | None = None,
+    notes: list[str] | None = None,
+    help_line: str = "",
+):
+    """Render items as a numbered list; with ``state``, add checkboxes and a cursor."""
+    from rich.console import Group
+    from rich.table import Table
+    from rich.text import Text
+
+    grid = Table.grid(padding=(0, 1))
+    grid.add_column(width=1)
+    grid.add_column(no_wrap=True)
+    grid.add_column(ratio=1)
+    grid.add_column(justify="right", style="dim", no_wrap=True)
+    for i, item in enumerate(items):
+        on = state.selected[i] if state else True
+        pointer = Text("❯", style="cyan") if state and state.cursor == i else Text("")
+        box = f"[{'x' if on else ' '}] " if state else ""
+        num = Text(f"{box}{i + 1}", style="cyan" if on else "dim")
+        grid.add_row(pointer, num, Text(item.label, style="bold" if on else "dim"), item.aside)
+        if item.detail:
+            grid.add_row("", "", Text(item.detail, style="dim"), "")
+    parts: list[Any] = ["", grid, ""]
+    parts.extend(Text(n, style="dim") for n in notes or [])
+    if state and state.hint:
+        parts.append(Text(state.hint, style="yellow"))
+    if help_line:
+        parts.append(Text(help_line, style="dim"))
+    return Group(*parts)
+
+
+def _read_raw_bytes(fd: int) -> str:
+    """One read from a cbreak stdin: a whole arrow-key escape sequence arrives together."""
+    import os
+
+    return os.read(fd, 16).decode(errors="ignore")
+
+
+def select_many(items: list[ChecklistItem], notes: list[str] | None = None) -> list[int] | None:
+    """Interactive checklist on a TTY, all items preselected.
+
+    Returns the picked 0-based indices in list order, or None if the user quit.
+    The caller handles the non-TTY case.
+    """
+    import sys
+    import termios
+    import tty
+
+    from rich.console import Console
+    from rich.live import Live
+
+    state = Checklist(selected=[True] * len(items))
+    help_line = "↑↓/jk move  space/1-9 toggle  a all  enter confirm  esc quit"
+    console = Console()
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    result: str | None = None
+    with Live(
+        checklist_view(items, state, notes, help_line), console=console, auto_refresh=False
+    ) as live:
+        try:
+            tty.setcbreak(fd)
+            while result is None:
+                raw = _read_raw_bytes(fd)
+                if raw == "":
+                    result = "quit"
+                for key in _split_keys(raw):
+                    result = state.press(key)
+                    if result:
+                        break
+                live.update(checklist_view(items, state, notes, help_line), refresh=True)
+        except KeyboardInterrupt:
+            result = "quit"
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        final = Checklist(selected=state.selected, cursor=-1)
+        live.update(checklist_view(items, final, notes), refresh=True)
+    return state.picked if result == "done" else None

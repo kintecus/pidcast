@@ -7,6 +7,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from rich.console import Console
+
+from .. import ui
 from ..discord_recap import (
     Story,
     build_recap_prompt,
@@ -14,6 +17,7 @@ from ..discord_recap import (
     load_preset,
     parse_pick,
     segment,
+    skipped_summary,
     source_line,
     write_recap,
 )
@@ -24,30 +28,30 @@ from ..workflow import parse_transcript_file
 logger = logging.getLogger(__name__)
 
 
-def _print_stories(stories: list[Story]) -> None:
-    for s in stories:
-        if s.pickable:
-            print(f"  {s.id:>2}. {s.headline}\n      {s.gist}")
-        else:
-            print(f"   -  {s.headline}  [{s.kind}, skipped]")
-    # Status lines go to stderr via logging; flush so the menu always precedes them
-    sys.stdout.flush()
+def _share(story: Story, n_segments: int) -> str:
+    pct = (story.end - story.start + 1) * 100 / n_segments
+    return "<1%" if pct < 1 else f"~{pct:.0f}%"
 
 
-def _choose_picks(args: argparse.Namespace, stories: list[Story]) -> list[int]:
+def _choose_picks(args: argparse.Namespace, stories: list[Story], n_segments: int) -> list[int]:
+    """Show the stories and return picked ids; an empty list means the user quit."""
     pickable = [s for s in stories if s.pickable]
+    items = [ui.ChecklistItem(s.headline, s.gist, _share(s, n_segments)) for s in pickable]
+    skipped = skipped_summary(stories)
+    notes = [f"Skipped: {skipped}"] if skipped else []
+
+    if args.pick is None and len(pickable) > 1 and sys.stdin.isatty():
+        picked = ui.select_many(items, notes)
+        return [pickable[i].id for i in picked] if picked is not None else []
+
+    Console().print(ui.checklist_view(items, notes=notes))
+    sys.stdout.flush()
     if args.pick is not None:
         return parse_pick(args.pick, stories)
     if len(pickable) <= 1:
         return [s.id for s in pickable]
-    if not sys.stdin.isatty():
-        log_warning("Not a TTY and no --pick given: using every story")
-        return parse_pick("", stories)
-    while True:
-        try:
-            return parse_pick(input("Stories to include (e.g. 1,3) [Enter = all]: "), stories)
-        except ValueError as e:
-            print(e)
+    log_warning("Not a TTY and no --pick given: using every story")
+    return parse_pick("", stories)
 
 
 def _copy_to_clipboard(text: str) -> bool:
@@ -66,19 +70,25 @@ def cmd_discord(args: argparse.Namespace) -> None:
         body, video_info = parse_transcript_file(str(transcript_path))
         segments = segment(body)
 
-        logger.info(f"Finding stories (claude {args.stories_model})...")
-        stories, stories_cost = find_stories(segments, video_info.title, args.stories_model)
+        with ui.spinner(f"Finding stories ({args.stories_model})"):
+            stories, stories_cost = find_stories(segments, video_info.title, args.stories_model)
         if not any(s.pickable for s in stories):
             log_error("No stories found in this transcript (only ads/intro/outro)")
             return
-        _print_stories(stories)
-        picks = _choose_picks(args, stories)
+        channel = video_info.channel if video_info.channel != "Unknown" else ""
+        header = " · ".join(p for p in (video_info.title, channel) if p)
+        Console().print(header, style="bold", markup=False, highlight=False)
+        picks = _choose_picks(args, stories, len(segments))
+        if not picks:
+            logger.info("Cancelled")
+            return
 
         system, user = build_recap_prompt(
             stories, picks, segments, source_line(video_info.channel, transcript_path), preset
         )
-        logger.info(f"Writing {args.style} for stories {picks} (claude {args.model})...")
-        recap = write_recap(system, user, args.model, preset["budget_chars"])
+        noun = "story" if len(picks) == 1 else "stories"
+        with ui.spinner(f"Writing {args.style} from {len(picks)} {noun} ({args.model})"):
+            recap = write_recap(system, user, args.model, preset["budget_chars"])
     except (PidcastError, ValueError) as e:
         log_error(str(e))
         return
