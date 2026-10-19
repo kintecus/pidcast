@@ -23,7 +23,7 @@ dependencies = [
 diarize = [
     "pyannote.audio>=3.3.0",
     "numpy<2",
-    "huggingface-hub<1.0",
+    "huggingface-hub<2.0",
     # torch>=2.3 dropped macOS x86_64 (Intel) wheels; 2.2.2 is the last build
     # with one. Cap torch on Intel macs only so Linux/CI still resolve a modern
     # torch. Without this, uv picks the newest torch and fails with "no wheel
