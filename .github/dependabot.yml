@@ -20,6 +20,11 @@ updates:
       # PR here could only widen the cap and break Intel installs, so ignore it.
       - dependency-name: "torch"
       - dependency-name: "torchaudio"
+      # pyannote.audio 3.4 passes use_auth_token to hf_hub_download(), which
+      # huggingface-hub 1.0 removed; the diarize extra pins <1.0 until pyannote
+      # moves. Revisit when pyannote ships a hub-1.x compatible release.
+      - dependency-name: "huggingface-hub"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "build(deps)"
 
