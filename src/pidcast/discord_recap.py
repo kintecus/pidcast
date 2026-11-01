@@ -15,6 +15,7 @@ from typing import Any
 
 import yaml
 
+from .classifier_cache import classify_cached
 from .config import DISCORD_PRESETS_DIR
 from .exceptions import AnalysisError
 from .providers.claude_provider import run_claude
@@ -134,10 +135,17 @@ def parse_stories(raw: str, n_segments: int) -> list[Story]:
     return stories
 
 
-def find_stories(segments: list[str], title: str, model: str) -> tuple[list[Story], float | None]:
+def find_stories(
+    segments: list[str], title: str, model: str, refresh: bool = False
+) -> tuple[list[Story], float | None]:
     numbered = "\n".join(f"[{i}] {s}" for i, s in enumerate(segments))
-    run = run_claude(f"Title: {title}\n\n{numbered}", model, system_prompt=STORIES_SYSTEM)
-    return parse_stories(run.text, len(segments)), run.cost_usd
+    return classify_cached(
+        f"Title: {title}\n\n{numbered}",
+        model,
+        STORIES_SYSTEM,
+        lambda raw: parse_stories(raw, len(segments)),
+        refresh,
+    )
 
 
 def parse_pick(raw: str, stories: list[Story]) -> list[int]:

@@ -16,6 +16,7 @@ from typing import Any
 
 import yaml
 
+from .classifier_cache import classify_cached
 from .config import NOTES_PRESETS_DIR, VideoInfo
 from .discord_recap import Story, parse_stories, segment
 from .markdown import format_yaml_front_matter
@@ -62,10 +63,17 @@ def topic_segments(body: str) -> list[str]:
     return segment(body, TOPIC_SEGMENT_CHARS)
 
 
-def find_topics(segments: list[str], title: str, model: str) -> tuple[list[Story], float | None]:
+def find_topics(
+    segments: list[str], title: str, model: str, refresh: bool = False
+) -> tuple[list[Story], float | None]:
     numbered = "\n".join(f"[{i}] {s}" for i, s in enumerate(segments))
-    run = run_claude(f"Title: {title}\n\n{numbered}", model, system_prompt=TOPICS_SYSTEM)
-    return parse_stories(run.text, len(segments)), run.cost_usd
+    return classify_cached(
+        f"Title: {title}\n\n{numbered}",
+        model,
+        TOPICS_SYSTEM,
+        lambda raw: parse_stories(raw, len(segments)),
+        refresh,
+    )
 
 
 def build_notes_prompt(

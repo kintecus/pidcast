@@ -55,7 +55,8 @@ class TestPresets:
 
 
 class TestFindTopics:
-    def test_topic_kind_becomes_pickable(self):
+    def test_topic_kind_becomes_pickable(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("pidcast.classifier_cache.CACHE_DIR", tmp_path)
         raw = json.dumps(
             {
                 "stories": [
@@ -67,7 +68,7 @@ class TestFindTopics:
             }
         )
         run = ClaudeRun(text=raw, model="haiku", cost_usd=0.002)
-        with patch("pidcast.knowledge_notes.run_claude", return_value=run) as mock:
+        with patch("pidcast.classifier_cache.run_claude", return_value=run) as mock:
             topics, cost = find_topics([f"s{i}" for i in range(6)], "Ep", "haiku")
         assert [t.id for t in topics] == [None, 1, None, 2]
         assert [t.pickable for t in topics] == [False, True, False, True]
