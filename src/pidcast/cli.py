@@ -505,7 +505,19 @@ Common workflows:
         parents=[parents["global"]],
         help="Pick stories from a transcript and write a Ukrainian Discord recap (Claude)",
     )
-    dc.add_argument("transcript", help="Path to an existing transcript (.md or .txt)")
+    dc.add_argument(
+        "transcript",
+        nargs="?",
+        help="Path to an existing transcript (.md or .txt); omit to pick from recent ones",
+    )
+    dc.add_argument(
+        "-n",
+        "--recent",
+        type=int,
+        default=8,
+        metavar="N",
+        help="How many recent transcripts to offer when no path is given (default: 8)",
+    )
     dc.add_argument(
         "--style", choices=list_styles(), default="play", help="Recap style (default: play)"
     )
@@ -528,6 +540,11 @@ Common workflows:
         default=True,
         help="Copy the recap to the clipboard via pbcopy (default: on)",
     )
+    dc.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Ignore the cached story list and ask the model again",
+    )
     dc.set_defaults(func=cmd_discord)
 
     # --- notes ---------------------------------------------------------------
@@ -536,7 +553,19 @@ Common workflows:
         parents=[parents["global"]],
         help="Pick focus themes and write long-form knowledge notes from a transcript (Claude)",
     )
-    nt.add_argument("transcript", help="Path to an existing transcript (.md or .txt)")
+    nt.add_argument(
+        "transcript",
+        nargs="?",
+        help="Path to an existing transcript (.md or .txt); omit to pick from recent ones",
+    )
+    nt.add_argument(
+        "-n",
+        "--recent",
+        type=int,
+        default=8,
+        metavar="N",
+        help="How many recent transcripts to offer when no path is given (default: 8)",
+    )
     nt.add_argument(
         "--style",
         choices=list_notes_styles(),
@@ -572,6 +601,11 @@ Common workflows:
         help="Save to the Obsidian vault (OBSIDIAN_VAULT_PATH) instead of next to the transcript",
     )
     nt.add_argument("--tags", default=None, help="Comma-separated extra tags for front matter")
+    nt.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Ignore the cached theme list and ask the model again",
+    )
     nt.set_defaults(func=cmd_notes)
 
     # --- diarize -------------------------------------------------------------

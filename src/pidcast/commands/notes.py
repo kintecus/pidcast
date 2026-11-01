@@ -19,6 +19,7 @@ from ..knowledge_notes import (
     topic_segments,
     write_notes,
 )
+from ..recent import pick_transcript
 from ..utils import get_unique_filename, log_error, log_success, log_warning
 from ..workflow import parse_transcript_file
 
@@ -63,15 +64,23 @@ def _output_dir(args: argparse.Namespace, transcript_path: Path) -> Path:
 
 def cmd_notes(args: argparse.Namespace) -> None:
     """Map the transcript's themes, let the user pick the focus, and write knowledge notes."""
-    transcript_path = Path(args.transcript).expanduser().resolve()
     try:
+        if args.transcript:
+            transcript_path = Path(args.transcript).expanduser().resolve()
+        elif picked := pick_transcript(args, args.recent):
+            transcript_path = picked.resolve()
+        else:
+            logger.info("Cancelled")
+            return
         preset = load_preset(args.style)
         out_dir = _output_dir(args, transcript_path)
         body, video_info = parse_transcript_file(str(transcript_path))
         segments = topic_segments(body)
 
         with ui.spinner(f"Mapping themes ({args.topics_model})"):
-            topics, topics_cost = find_topics(segments, video_info.title, args.topics_model)
+            topics, topics_cost = find_topics(
+                segments, video_info.title, args.topics_model, args.refresh
+            )
         if not any(t.pickable for t in topics):
             log_error("No themes found in this transcript (only ads/intro/outro)")
             return

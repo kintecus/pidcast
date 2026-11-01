@@ -448,3 +448,73 @@ def select_many(items: list[ChecklistItem], notes: list[str] | None = None) -> l
         final = Checklist(selected=state.selected, cursor=-1)
         live.update(checklist_view(items, final, notes), refresh=True)
     return state.picked if result == "done" else None
+
+
+@dataclass
+class Chooser:
+    """Cursor state behind ``select_one``, kept IO-free for tests."""
+
+    size: int
+    cursor: int = 0
+
+    def press(self, key: str) -> str | None:
+        """Apply one key. Returns "done" or "quit" to finish, None to keep reading."""
+        action = _KEY_ALIASES.get(key, _KEY_ALIASES.get(key.lower(), key))
+        if action == "up":
+            self.cursor = (self.cursor - 1) % self.size
+        elif action == "down":
+            self.cursor = (self.cursor + 1) % self.size
+        elif action.isdigit() and 1 <= int(action) <= self.size:
+            self.cursor = int(action) - 1
+            return "done"
+        elif action in ("enter", "space"):
+            return "done"
+        elif action == "quit":
+            return "quit"
+        return None
+
+
+def select_one(items: list[ChecklistItem], notes: list[str] | None = None) -> int | None:
+    """Interactive single-choice list on a TTY; the first item is under the cursor.
+
+    Returns the chosen 0-based index, or None if the user quit.
+    The caller handles the non-TTY case.
+    """
+    import sys
+    import termios
+    import tty
+
+    from rich.console import Console
+    from rich.live import Live
+
+    state = Chooser(size=len(items))
+    help_line = "↑↓/jk move  enter/1-9 choose  esc quit"
+
+    def view(final: bool = False):
+        checks = Checklist(
+            selected=[i == state.cursor for i in range(len(items))],
+            cursor=-1 if final else state.cursor,
+        )
+        return checklist_view(items, checks, notes, "" if final else help_line)
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    result: str | None = None
+    with Live(view(), console=Console(), auto_refresh=False) as live:
+        try:
+            tty.setcbreak(fd)
+            while result is None:
+                raw = _read_raw_bytes(fd)
+                if raw == "":
+                    result = "quit"
+                for key in _split_keys(raw):
+                    result = state.press(key)
+                    if result:
+                        break
+                live.update(view(), refresh=True)
+        except KeyboardInterrupt:
+            result = "quit"
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        live.update(view(final=True), refresh=True)
+    return state.cursor if result == "done" else None

@@ -22,6 +22,7 @@ from ..discord_recap import (
     write_recap,
 )
 from ..exceptions import PidcastError
+from ..recent import pick_transcript
 from ..utils import log_error, log_success, log_warning
 from ..workflow import parse_transcript_file
 
@@ -64,14 +65,22 @@ def _copy_to_clipboard(text: str) -> bool:
 
 def cmd_discord(args: argparse.Namespace) -> None:
     """List the transcript's stories, let the user pick, and write a Discord recap."""
-    transcript_path = Path(args.transcript).expanduser()
     try:
+        if args.transcript:
+            transcript_path = Path(args.transcript).expanduser()
+        elif picked := pick_transcript(args, args.recent):
+            transcript_path = picked
+        else:
+            logger.info("Cancelled")
+            return
         preset = load_preset(args.style)
         body, video_info = parse_transcript_file(str(transcript_path))
         segments = segment(body)
 
         with ui.spinner(f"Finding stories ({args.stories_model})"):
-            stories, stories_cost = find_stories(segments, video_info.title, args.stories_model)
+            stories, stories_cost = find_stories(
+                segments, video_info.title, args.stories_model, args.refresh
+            )
         if not any(s.pickable for s in stories):
             log_error("No stories found in this transcript (only ads/intro/outro)")
             return
