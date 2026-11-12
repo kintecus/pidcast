@@ -56,7 +56,7 @@ def build_download_strategy(
     name: str,
     config_key: str,
     format_str: str,
-    player_clients: list[str],
+    player_clients: list[str] | None,
     output_template: str,
     verbose: bool,
     po_token: str | None = None,
@@ -69,7 +69,7 @@ def build_download_strategy(
         name: Human-readable strategy name
         config_key: Key in DOWNLOAD_STRATEGY_CONFIGS
         format_str: yt-dlp format string
-        player_clients: List of player clients to use
+        player_clients: Player clients to force; None lets yt-dlp choose
         output_template: Output file template
         verbose: Enable verbose output
         po_token: Optional PO token for restricted videos
@@ -80,22 +80,26 @@ def build_download_strategy(
         Strategy configuration dict
     """
     config = DOWNLOAD_STRATEGY_CONFIGS[config_key]
-    extractor_args = {"youtube": {"player_client": player_clients}}
+    youtube_args: dict[str, Any] = {}
+    if player_clients:
+        youtube_args["player_client"] = player_clients
     if po_token:
-        extractor_args["youtube"]["po_token"] = po_token
+        youtube_args["po_token"] = po_token
 
     opts = {
         "format": format_str,
         "outtmpl": output_template,
-        "extractor_args": extractor_args,
         **build_ytdlp_audio_postprocessor_config(),
         "socket_timeout": config["socket_timeout"],
         "retries": config["retries"],
         "fragment_retries": config["fragment_retries"],
-        "http_chunk_size": config["http_chunk_size"],
         "quiet": not verbose,
         "no_warnings": not verbose,
     }
+    if youtube_args:
+        opts["extractor_args"] = {"youtube": youtube_args}
+    if config["http_chunk_size"]:
+        opts["http_chunk_size"] = config["http_chunk_size"]
 
     if cookies_from_browser:
         opts["cookiesfrombrowser"] = (cookies_from_browser,)
@@ -150,6 +154,18 @@ def build_download_strategies(
             )
         )
 
+    strategies.append(
+        build_download_strategy(
+            "yt-dlp default clients",
+            "default",
+            "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
+            None,
+            output_template,
+            verbose,
+            **cookie_kwargs,
+        )
+    )
+
     if has_cookies:
         # When cookies are provided, prioritize web client since
         # android/ios clients don't support cookies
@@ -178,7 +194,7 @@ def build_download_strategies(
         strategies.extend(
             [
                 build_download_strategy(
-                    "Android client (recommended)",
+                    "Android client",
                     "android",
                     "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
                     ["android"],

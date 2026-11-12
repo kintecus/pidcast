@@ -253,6 +253,13 @@ RETRY_SLEEP_SECONDS = 10
 
 # Download strategy configurations
 DOWNLOAD_STRATEGY_CONFIGS = {
+    # yt-dlp picks player clients itself; no forced chunking.
+    "default": {
+        "socket_timeout": 60,
+        "retries": 10,
+        "fragment_retries": 10,
+        "http_chunk_size": None,
+    },
     "android": {
         "socket_timeout": 45,
         "retries": 15,
